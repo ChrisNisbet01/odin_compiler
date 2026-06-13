@@ -4,6 +4,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+typedef struct TypeDescriptor TypeDescriptor;
+typedef struct symbol symbol_t;
+
 typedef struct odin_grammar_node_t odin_grammar_node_t;
 
 typedef enum
@@ -143,6 +146,10 @@ typedef struct odin_grammar_node_t
     ast_node_list_t list;
 
     char const * text;
+
+    // Semantic analysis annotations
+    TypeDescriptor * resolved_type;
+    symbol_t * resolved_symbol;
 
     union
     {

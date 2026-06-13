@@ -18,6 +18,8 @@ add_executable(${app}
     scope.c
     scope_lists.c
     generator_lists.c
+    sem_error.c
+    semantic_analyser.c
 )
 
 target_compile_options(${app} PRIVATE -O3 -g -std=gnu11 -Wall -Wextra -Wswitch-enum -pedantic)
