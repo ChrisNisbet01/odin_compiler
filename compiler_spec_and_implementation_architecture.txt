@@ -1,0 +1,268 @@
+================================================================================
+          ODIN COMPILER SPECIFICATION & IMPLEMENTATION ARCHITECTURE
+================================================================================
+Target Frontend Language: Odin
+Compiler Implementation Language: C
+Backend Code Generator: LLVM (via llvm-c API)
+Spelling Convention: British / New Zealand
+
+This document serves as a comprehensive technical guide for mapping the 
+syntactic and semantic components of the Odin programming language directly 
+into LLVM IR using a C-hosted frontend toolchain.
+
+--------------------------------------------------------------------------------
+1. GRAMMAR & PARSING RESOLUTION
+--------------------------------------------------------------------------------
+Odin avoids the lexical and semantic parsing ambiguities inherent in C by 
+enforcing a clean, context-free grammar.
+
+- The Lexer Hack / Typedef Name Status Problem:
+  In C, the expression `AA * bb;` cannot be parsed into an Abstract Syntax Tree 
+  (AST) without querying a symbol table mid-parse to check if `AA` is a Type 
+  Name or a Variable Name. 
+  Odin eliminates this entirely by utilizing an explicit colon-based sentinel 
+  syntax for declarations:
+      bb: ^AA      // Unambiguously a declaration.
+      bb = AA * cc // Unambiguously an expression.
+
+- Type Casting Ambiguity:
+  C's expression `(foo) - bar;` requires semantic type context to distinguish 
+  between a cast of a negative number or a grouping subtraction. Odin restricts 
+  parentheses strictly to expression grouping and enforces explicit built-in 
+  casting or function-style conversion:
+      new_val := cast(i32)bar
+      new_val := i32(bar)
+
+- Declaration Syntax Layout:
+  Odin types read strictly from left to right, eliminating C's "Clockwise/Spiral 
+  Rule" for complex pointer layouts:
+      f: proc(int, int) -> int // A procedure variable
+      p: ^[4]int               // A pointer to an array of 4 integers
+
+- Control Flow Parsing:
+  Odin completely drops parentheses around conditions for `if`, `while`, and 
+  `for`, but mandates the use of block braces `{}` or the `do` keyword. This 
+  removes the "dangling else" ambiguity natively at the parser level.
+
+--------------------------------------------------------------------------------
+2. PARADIGM & STRUCTURAL LOOKUPS
+--------------------------------------------------------------------------------
+Odin is explicitly data-oriented and completely rejects traditional object-
+oriented class hierarchies.
+
+- Separation of Data and Logic:
+  Structs strictly hold data fields. Procedures are defined externally and must 
+  accept pointers to instances explicitly.
+  
+- Composition & Field Shadowing:
+  Inheritance is achieved through struct embedding via the `using` keyword. 
+  When name collisions occur between nested structures, the compiler executes 
+  a strict lookup hierarchy:
+
+  Example Odin Source:
+      Inner :: struct { target: i32 }
+      Outer :: struct { target: string, using nested: Inner }
+
+  Frontend Resolution Logic:
+  When evaluating `foo.target`, the type-checker performs a breadth-first 
+  lookup. Because `target` exists at the highest level (`Outer`), the compiler 
+  stops searching and resolves the type to `string`. The field `Inner.target` 
+  is shadowed (hidden), but remains accessible via explicit path resolution 
+  (`foo.nested.target`).
+
+  If two sibling structs embedded at the same depth share an identical identifier 
+  (e.g., embedding both `A` and `B` containing `value`), the compiler must emit 
+  a compile-time ambiguity error unless explicitly qualified.
+
+--------------------------------------------------------------------------------
+3. SEMANTIC INFRASTRUCTURE IN C
+--------------------------------------------------------------------------------
+Because C lacks built-in generic collections, your frontend type-checker must 
+track types and definitions explicitly using pure C layouts.
+
+- Type System Tagged Union Representation:
+  Every AST expression node must point to a unified structural type description:
+
+  typedef enum {
+      TYPE_KIND_BASIC,
+      TYPE_KIND_POINTER,
+      TYPE_KIND_STRUCT,
+      TYPE_KIND_SLICE,
+      TYPE_KIND_PROC
+  } TypeKind;
+
+  typedef struct Type Type;
+
+  struct Type {
+      TypeKind kind;
+      union {
+          struct { const char* name; int size_in_bytes; bool is_float; } basic;
+          Type* pointer_to;
+          struct { struct Field* fields; int field_count; } structure;
+      } as;
+  };
+
+- Symbol Table Mapping:
+  Implement a linear-chaining or open-addressing Hash Map mapping a `const char*` 
+  identifier key to a unified `Symbol` record.
+
+  typedef enum { SYMBOL_CONSTANT, SYMBOL_VARIABLE, SYMBOL_PROCEDURE } SymbolKind;
+  typedef struct {
+      SymbolKind kind;
+      const char* name;
+      Type* type;
+      void* llvm_value_pointer; // Points to the LLVMValueRef artifact
+  } Symbol;
+
+--------------------------------------------------------------------------------
+4. LOWERING EXTRACTIONS TO LLVM IR
+--------------------------------------------------------------------------------
+This section defines how your backend code generator must map native Odin 
+types and systems constraints into concrete LLVM C API operations.
+
+A. Built-in Core Structural Types
+   Odin's advanced structures are lowered as literal LLVM struct configurations:
+
+   - Strings (`string`): A 2-tuple mapping an immutable data pointer and length.
+     LLVM IR Layout:
+     %string = type { i8*, i64 }
+
+   - Slices (`[]T`): Matches string structure, but elements pointer points to T.
+     LLVM IR Layout (for a slice of i32):
+     %slice.i32 = type { i32*, i64 }
+
+   - Dynamic Arrays (`[dynamic]T`): A 4-tuple tracking capacity and state.
+     LLVM IR Layout:
+     %dynamic_array.T = type { T*, i64, i64, %Runtime_Allocator }
+
+B. The Implicit Runtime Context
+   The standard library (`core:fmt`, `core:os`) relies entirely on an implicit, 
+   thread-local context state tracking system. 
+
+
+
+   - Backend Constraint: Almost every Odin procedure signature must be lowered 
+     with an appended, hidden first parameter pointing to the `Runtime_Context`.
+     
+   Odin Signature:
+       MyProc :: proc(x: i32)
+   LLVM IR Output:
+       define void @MyProc(%Runtime_Context* %ctx, i32 %x)
+
+   - Call Site Forwarding: When emitting calls via `LLVMBuildCall2`, look up the 
+     active context pointer value from the current scope and pass it explicitly 
+     as argument index 0:
+       call void @OtherProc(%Runtime_Context* %ctx, i32 %x)
+
+C. Multiple Return Values
+   Odin handles multi-value procedure responses by mapping them straight to 
+   first-class anonymous structural returns within LLVM IR.
+
+   Odin Signature:
+       lookup_env :: proc(key: string) -> (string, bool)
+   LLVM IR Output:
+       define { %string, i1 } @lookup_env(%Runtime_Context* %ctx, %string %key)
+
+   Construction in Backend via C API:
+       LLVMValueRef ret_struct = LLVMGetUndef(LLVMStructType(ret_fields, 2, false));
+       ret_struct = LLVMBuildInsertValue(builder, ret_struct, val_str, 0, "r0");
+       ret_struct = LLVMBuildInsertValue(builder, ret_struct, ok_bool, 1, "r1");
+       LLVMBuildRet(builder, ret_struct);
+
+D. The Universal 'any' Type & RTTI
+   Odin's `any` type allows runtime introspection of variables by packing data 
+   alongside structural metadata indices.
+
+   LLVM IR Layout:
+   %any = type { i8*, i64 } // { data_pointer, type_id }
+
+   - Compilation Logic: The frontend compiler must assign a completely unique, 
+     stable `i64` numerical identifier to every single type declared across the 
+     entire workspace compilation loop.
+   - When passing an element into an `any` parameter, emit local stack allocations 
+     (`LLVMBuildAlloca`) to mirror the value, bitcast the resultant address pointer 
+     to `i8*`, and bundle it with the fixed unique `i64` type identifier constant.
+
+--------------------------------------------------------------------------------
+5. RUNTIME DECISION MECHANICS
+--------------------------------------------------------------------------------
+Odin offers two major workflows to execute code paths predicated on runtime type 
+states.
+
+A. Tagged Unions (`switch type`)
+   Unlike a standard raw C union, an Odin union explicitly embeds its current type 
+   state internally using a trailing integer layout variant flag.
+
+   LLVM Structure Packing (Assuming a union of i32, f32, and string):
+   %Payload = type { [16 x i8], i32 } // [Data payload array size, Type Tag Flag]
+
+   Lowering a Type Switch Expression:
+   1. Extract index element 1 via `LLVMBuildExtractValue` to capture the internal tag.
+   2. Emit an LLVM `switch` instruction mapping the integer flags straight to targeted 
+      basic blocks.
+   3. Within each isolated case basic block, safely cast (`LLVMBuildBitCast`) the base 
+      `[16 x i8]` memory pointer to the exact type pointer matching that block's target.
+
+B. 'any' Dynamic Inspection
+   To match dynamic condition branching statements (`if val.id == i32`):
+   1. Extract index element 1 (`type_id`) directly out of the incoming `%any` structure instance.
+   2. Execute an LLVM integer comparison instruction (`LLVMBuildICmp` with `LLVMIntEQ`) 
+      evaluating the extracted id against the global compiler-defined integer ID for `i32`.
+   3. Branch cleanly using the output conditional boolean.
+
+--------------------------------------------------------------------------------
+6. MEMORY REINTERPRETATION & TYPE PUNNING
+--------------------------------------------------------------------------------
+Because Odin's standard union acts as a strictly guarded tagged variant system, 
+raw bit level type punning must be explicitly realised through designated vectors.
+
+A. The `transmute` Built-in Keyword
+   - Frontend validation rule: Your type-checker must calculate `size_of()` on 
+     both source and destination signatures. If lengths do not perfectly align, 
+     reject compiling immediately.
+   - Backend IR compilation: Map the operation cleanly to an LLVM `bitcast` 
+     instruction whenever you are working with primitive scalar variables or pointers.
+     LLVM Example:
+         %i = bitcast f32 %f to i32
+
+B. Raw Pointer Cast Reinterpretation
+   When handling explicit type casting conversions via a raw address pointer 
+   (`(^f32)(address)`), you can safely bypass LLVM's language restriction barriers 
+   by emitting inline pointer transformations.
+
+
+
+   LLVM IR Sequence for Pointer Punning:
+       ; Reinterpret a raw byte allocation pointer to an explicit float pointer
+       %float_ptr = bitcast i8* %address to f32*
+       store f32 1.000000e+00, f32* %float_ptr
+
+       ; Reinterpret that exact same layout pointer to a typed integer pointer
+       %int_ptr = bitcast i8* %address to i32*
+       %int_val = load i32, i32* %int_ptr
+
+--------------------------------------------------------------------------------
+7. COMPILATION PIPELINE & LINKAGE STRATEGY
+--------------------------------------------------------------------------------
+- Directory Scan Rule: When a user references `import "core:fmt"`, evaluate your 
+  environment variable `ODIN_ROOT` to map the system directory path. Collect 
+  **every single** `.odin` source file located in that folder. Parse all statements 
+  together into a unified AST module block representing the package scope.
+  
+- Top-Level Pass Execution: Prior to traversing function blocks, scan the entire 
+  package AST to pre-populate your symbol table with procedure signatures and global 
+  definitions. This guarantees that items within a package can call each other 
+  seamlessly regardless of structural location or literal file processing sequence.
+
+- Monomorphisation Layer: For polymorphic procedure templates utilizing explicit 
+  compile-time parameters (e.g., `proc(x: $T)`), your type-checker must 
+  intercept the calls, copy the abstract template code, substitute concrete type parameters, 
+  and emit uniquely appended distinct symbols (e.g., `@core_fmt_println_i32`) 
+  directly into your active LLVM module definitions.
+
+- External System Linking: For code configurations inside standard library modules 
+  referencing `foreign` blocks, capture the target name metadata overrides specified 
+  by `@(link_name="...")` attributes. Pass these strings to `LLVMAddFunction` to 
+  ensure the generated object files bind seamlessly with `libc` or your native 
+  host platform linkers (`lld`, `ld`, or `link.exe`).
+================================================================================
