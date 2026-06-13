@@ -36,51 +36,6 @@ read_file(char const * path, long * out_len)
     return buf;
 }
 
-static char *
-strip_odin_comments(char const * src, long src_len, long * out_len)
-{
-    // Estimate max output size
-    char * out = malloc((size_t)src_len + 1);
-    if (out == NULL) return NULL;
-
-    long out_pos = 0;
-    long i = 0;
-
-    while (i < src_len)
-    {
-        if (src[i] == '/' && i + 1 < src_len && src[i + 1] == '/')
-        {
-            // Line comment: skip to end of line
-            i += 2;
-            while (i < src_len && src[i] != '\n')
-            {
-                i++;
-            }
-        }
-        else if (src[i] == '/' && i + 1 < src_len && src[i + 1] == '*')
-        {
-            // Block comment: skip to */
-            i += 2;
-            while (i + 1 < src_len && !(src[i] == '*' && src[i + 1] == '/'))
-            {
-                i++;
-            }
-            if (i + 1 < src_len)
-            {
-                i += 2; // skip */
-            }
-        }
-        else
-        {
-            out[out_pos++] = src[i++];
-        }
-    }
-
-    out[out_pos] = '\0';
-    *out_len = out_pos;
-    return out;
-}
-
 int
 main(int argc, char * argv[])
 {
@@ -109,21 +64,11 @@ main(int argc, char * argv[])
         return EXIT_FAILURE;
     }
 
-    long cleaned_len;
-    char * cleaned = strip_odin_comments(src, src_len, &cleaned_len);
-    free(src);
-
-    if (cleaned == NULL)
-    {
-        fprintf(stderr, "Error: Failed to allocate memory for cleaned source.\n");
-        return EXIT_FAILURE;
-    }
-
     epc_parser_list * list = epc_parser_list_create();
     if (list == NULL)
     {
         fprintf(stderr, "Error: Failed to create parser list.\n");
-        free(cleaned);
+        free(src);
         return EXIT_FAILURE;
     }
 
@@ -132,11 +77,11 @@ main(int argc, char * argv[])
     {
         fprintf(stderr, "Error: Failed to create Odin parser.\n");
         epc_parser_list_free(list);
-        free(cleaned);
+        free(src);
         return EXIT_FAILURE;
     }
 
-    epc_parse_session_t session = epc_parse_str(parser, cleaned, NULL);
+    epc_parse_session_t session = epc_parse_str(parser, src, NULL);
 
     if (session.result.is_error)
     {
@@ -147,7 +92,7 @@ main(int argc, char * argv[])
         fprintf(stderr, "Found: %s\n", err->found);
         epc_parse_session_destroy(&session);
         epc_parser_list_free(list);
-        free(cleaned);
+        free(src);
         return EXIT_FAILURE;
     }
 
@@ -193,7 +138,7 @@ main(int argc, char * argv[])
 
     epc_parse_session_destroy(&session);
     epc_parser_list_free(list);
-    free(cleaned);
+    free(src);
 
     return EXIT_SUCCESS;
 }
