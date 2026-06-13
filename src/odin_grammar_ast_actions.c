@@ -10,7 +10,7 @@
 static void
 make_node(epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node,
           void ** children, int child_count,
-          odin_grammar_node_type_t node_type)
+          odin_grammar_node_type_t node_type, bool capture_text)
 {
     odin_grammar_node_t * result = calloc(1, sizeof(odin_grammar_node_t));
     result->type = node_type;
@@ -22,11 +22,14 @@ make_node(epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node,
         result->list.children[i] = (odin_grammar_node_t *)children[i];
     }
 
-    char const * sem = epc_cpt_node_get_semantic_content(node);
-    size_t sem_len = epc_cpt_node_get_semantic_len(node);
-    if (sem != NULL && sem_len > 0)
+    if (capture_text)
     {
-        result->text = strndup(sem, sem_len);
+        char const * sem = epc_cpt_node_get_semantic_content(node);
+        size_t sem_len = epc_cpt_node_get_semantic_len(node);
+        if (sem != NULL && sem_len > 0)
+        {
+            result->text = strndup(sem, sem_len);
+        }
     }
 
     epc_ast_push(ctx, result);
@@ -38,17 +41,24 @@ make_node(epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node,
          void ** children, int count, void * user_data)           \
     {                                                              \
         (void)user_data;                                           \
-        make_node(ctx, node, children, count, node_type);          \
+        make_node(ctx, node, children, count, node_type, false);   \
     }
 
+#define DEFINE_TERMINAL_ACTION(name, node_type)                   \
+    static void                                                   \
+    name(epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node,      \
+         void ** children, int count, void * user_data)           \
+    {                                                              \
+        (void)user_data;                                           \
+        make_node(ctx, node, children, count, node_type, true);    \
+    }
+
+// --- Structural nodes (no text captured) ---
 DEFINE_ACTION(ast_action_program_action, AST_NODE_PROGRAM)
 DEFINE_ACTION(ast_action_external_declarations_action, AST_NODE_EXTERNAL_DECLARATIONS)
 DEFINE_ACTION(ast_action_package_clause_action, AST_NODE_PACKAGE_CLAUSE)
 DEFINE_ACTION(ast_action_import_action, AST_NODE_IMPORT)
 DEFINE_ACTION(ast_action_import_named_action, AST_NODE_IMPORT_NAMED)
-DEFINE_ACTION(ast_action_identifier_action, AST_NODE_IDENTIFIER)
-DEFINE_ACTION(ast_action_poly_ident_action, AST_NODE_POLY_IDENT)
-DEFINE_ACTION(ast_action_basic_type_action, AST_NODE_BASIC_TYPE)
 DEFINE_ACTION(ast_action_pointer_type_action, AST_NODE_POINTER_TYPE)
 DEFINE_ACTION(ast_action_array_type_action, AST_NODE_ARRAY_TYPE)
 DEFINE_ACTION(ast_action_dynamic_array_type_action, AST_NODE_DYNAMIC_ARRAY_TYPE)
@@ -62,7 +72,6 @@ DEFINE_ACTION(ast_action_bit_field_type_action, AST_NODE_BIT_FIELD_TYPE)
 DEFINE_ACTION(ast_action_bit_set_type_action, AST_NODE_BIT_SET_TYPE)
 DEFINE_ACTION(ast_action_struct_type_action, AST_NODE_STRUCT_TYPE)
 DEFINE_ACTION(ast_action_struct_type_ref_action, AST_NODE_STRUCT_TYPE_REF)
-DEFINE_ACTION(ast_action_type_name_action, AST_NODE_TYPE_NAME)
 DEFINE_ACTION(ast_action_distinct_type_action, AST_NODE_DISTINCT_TYPE)
 DEFINE_ACTION(ast_action_procedure_signature_action, AST_NODE_PROCEDURE_SIGNATURE)
 DEFINE_ACTION(ast_action_parameter_action, AST_NODE_PARAMETER)
@@ -132,20 +141,6 @@ DEFINE_ACTION(ast_action_foreign_import_action, AST_NODE_FOREIGN_IMPORT)
 DEFINE_ACTION(ast_action_foreign_block_action, AST_NODE_FOREIGN_BLOCK)
 DEFINE_ACTION(ast_action_when_decl_action, AST_NODE_WHEN_DECL)
 DEFINE_ACTION(ast_action_using_decl_action, AST_NODE_USING_DECL)
-DEFINE_ACTION(ast_action_directive_action, AST_NODE_DIRECTIVE)
-DEFINE_ACTION(ast_action_directive_with_args_action, AST_NODE_DIRECTIVE_WITH_ARGS)
-DEFINE_ACTION(ast_action_integer_base_action, AST_NODE_INTEGER_BASE)
-DEFINE_ACTION(ast_action_integer_value_action, AST_NODE_INTEGER_VALUE)
-DEFINE_ACTION(ast_action_float_base_action, AST_NODE_FLOAT_BASE)
-DEFINE_ACTION(ast_action_float_value_action, AST_NODE_FLOAT_VALUE)
-DEFINE_ACTION(ast_action_string_literal_action, AST_NODE_STRING_LITERAL)
-DEFINE_ACTION(ast_action_raw_string_literal_action, AST_NODE_RAW_STRING_LITERAL)
-DEFINE_ACTION(ast_action_rune_literal_action, AST_NODE_RUNE_LITERAL)
-DEFINE_ACTION(ast_action_bool_true_action, AST_NODE_BOOL_TRUE)
-DEFINE_ACTION(ast_action_bool_false_action, AST_NODE_BOOL_FALSE)
-DEFINE_ACTION(ast_action_nil_action, AST_NODE_NIL)
-DEFINE_ACTION(ast_action_none_action, AST_NODE_NONE)
-DEFINE_ACTION(ast_action_ellipsis_action, AST_NODE_ELLIPSIS)
 DEFINE_ACTION(ast_action_enumerator_action, AST_NODE_ENUMERATOR)
 DEFINE_ACTION(ast_action_enumerator_list_action, AST_NODE_ENUMERATOR_LIST)
 DEFINE_ACTION(ast_action_union_field_action, AST_NODE_UNION_FIELD)
@@ -155,7 +150,28 @@ DEFINE_ACTION(ast_action_bit_field_field_list_action, AST_NODE_BIT_FIELD_FIELD_L
 DEFINE_ACTION(ast_action_struct_field_action, AST_NODE_STRUCT_FIELD)
 DEFINE_ACTION(ast_action_struct_field_list_action, AST_NODE_STRUCT_FIELD_LIST)
 
+// --- Terminal nodes (text captured for semantic use) ---
+DEFINE_TERMINAL_ACTION(ast_action_identifier_action, AST_NODE_IDENTIFIER)
+DEFINE_TERMINAL_ACTION(ast_action_poly_ident_action, AST_NODE_POLY_IDENT)
+DEFINE_TERMINAL_ACTION(ast_action_basic_type_action, AST_NODE_BASIC_TYPE)
+DEFINE_TERMINAL_ACTION(ast_action_type_name_action, AST_NODE_TYPE_NAME)
+DEFINE_TERMINAL_ACTION(ast_action_integer_base_action, AST_NODE_INTEGER_BASE)
+DEFINE_TERMINAL_ACTION(ast_action_integer_value_action, AST_NODE_INTEGER_VALUE)
+DEFINE_TERMINAL_ACTION(ast_action_float_base_action, AST_NODE_FLOAT_BASE)
+DEFINE_TERMINAL_ACTION(ast_action_float_value_action, AST_NODE_FLOAT_VALUE)
+DEFINE_TERMINAL_ACTION(ast_action_string_literal_action, AST_NODE_STRING_LITERAL)
+DEFINE_TERMINAL_ACTION(ast_action_raw_string_literal_action, AST_NODE_RAW_STRING_LITERAL)
+DEFINE_TERMINAL_ACTION(ast_action_rune_literal_action, AST_NODE_RUNE_LITERAL)
+DEFINE_TERMINAL_ACTION(ast_action_bool_true_action, AST_NODE_BOOL_TRUE)
+DEFINE_TERMINAL_ACTION(ast_action_bool_false_action, AST_NODE_BOOL_FALSE)
+DEFINE_TERMINAL_ACTION(ast_action_nil_action, AST_NODE_NIL)
+DEFINE_TERMINAL_ACTION(ast_action_none_action, AST_NODE_NONE)
+DEFINE_TERMINAL_ACTION(ast_action_ellipsis_action, AST_NODE_ELLIPSIS)
+DEFINE_TERMINAL_ACTION(ast_action_directive_action, AST_NODE_DIRECTIVE)
+DEFINE_TERMINAL_ACTION(ast_action_directive_with_args_action, AST_NODE_DIRECTIVE_WITH_ARGS)
+
 #undef DEFINE_ACTION
+#undef DEFINE_TERMINAL_ACTION
 
 void
 odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
