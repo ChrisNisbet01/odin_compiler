@@ -13,6 +13,8 @@ add_executable(${app}
     generic_hash_table.c
     debug.c
     ast_node_name.c
+    type_descriptors.c
+    typed_value.c
 )
 
 target_compile_options(${app} PRIVATE -O3 -g -std=gnu11 -Wall -Wextra -Wswitch-enum -pedantic)
