@@ -1,5 +1,6 @@
 #include "semantic_analyser.h"
 
+#include "ast_utils.h"
 #include "scope.h"
 #include "symbols.h"
 #include "typed_value.h"
@@ -88,7 +89,6 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
     switch (node->type)
     {
         case AST_NODE_INTEGER_VALUE:
-        case AST_NODE_FLOAT_VALUE:
         {
             TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
             if (int_type)
@@ -96,6 +96,16 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 node->resolved_type = (TypeDescriptor *)int_type;
             }
             return int_type;
+        }
+
+        case AST_NODE_FLOAT_VALUE:
+        {
+            TypeDescriptor const * f64_type = get_basic_type_by_name(ctx->type_registry, "f64");
+            if (f64_type)
+            {
+                node->resolved_type = (TypeDescriptor *)f64_type;
+            }
+            return f64_type;
         }
 
         case AST_NODE_STRING_LITERAL:
@@ -316,15 +326,22 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
     if (node == NULL || node->list.count < 2) return;
 
     odin_grammar_node_t * name_node = node->list.children[0];
-    odin_grammar_node_t * value_node = node->list.children[1];
-
     if (name_node->type != AST_NODE_IDENTIFIER) return;
 
-    if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
-    {
-        TypedValue tv = create_typed_value(NULL, NULL, false);
-        scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
-    }
+    TypedValue tv = create_typed_value(NULL, NULL, false);
+    scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+}
+
+static void
+sem_register_top_level_variable(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node == NULL || node->list.count < 1) return;
+
+    odin_grammar_node_t * name_node = node->list.children[0];
+    if (name_node->type != AST_NODE_IDENTIFIER) return;
+
+    TypedValue tv = create_typed_value(NULL, NULL, true);
+    scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
 }
 
 static void
@@ -348,6 +365,10 @@ sem_pass1_register_top_level(SemContext * ctx)
                 if (top_decl->type == AST_NODE_CONSTANT_DECL)
                 {
                     sem_register_top_level_declaration(ctx, top_decl);
+                }
+                else if (top_decl->type == AST_NODE_VARIABLE_DECL)
+                {
+                    sem_register_top_level_variable(ctx, top_decl);
                 }
             }
         }
@@ -385,6 +406,80 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             }
             break;
 
+        case AST_NODE_VARIABLE_DECL:
+        {
+            if (node->list.count < 1) break;
+            odin_grammar_node_t * name_node = node->list.children[0];
+            if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER) break;
+
+            TypeDescriptor const * var_type = NULL;
+
+            if (node->list.count >= 3)
+            {
+                // x: type = expr
+                odin_grammar_node_t * type_node = node->list.children[1];
+                var_type = sem_resolve_type_expr(ctx, type_node);
+                if (type_node) type_node->resolved_type = (TypeDescriptor *)var_type;
+                odin_grammar_node_t * init_node = node->list.children[2];
+                if (init_node) sem_evaluate_expr(ctx, init_node);
+            }
+            else if (node->list.count == 2)
+            {
+                odin_grammar_node_t * second = node->list.children[1];
+                if (is_type_node(second))
+                {
+                    // x: type
+                    var_type = sem_resolve_type_expr(ctx, second);
+                    if (second) second->resolved_type = (TypeDescriptor *)var_type;
+                }
+                else
+                {
+                    // x := expr
+                    var_type = sem_evaluate_expr(ctx, second);
+                }
+            }
+
+            if (var_type && name_node)
+            {
+                TypedValue tv = create_typed_value(NULL, var_type, true);
+                scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+            }
+            break;
+        }
+
+        case AST_NODE_IF_STATEMENT:
+        {
+            // children[0] = condition, children[1] = then-body, children[2] = else-body (optional)
+            for (size_t i = 0; i < node->list.count; i++)
+            {
+                odin_grammar_node_t * child = node->list.children[i];
+                if (child == NULL) continue;
+                if (child->type == AST_NODE_COMPOUND_STATEMENT)
+                {
+                    sem_analyse_compound_statement(ctx, child, expected_return_type);
+                }
+                else if (child->type == AST_NODE_IF_STATEMENT)
+                {
+                    sem_pass2_node(ctx, child, expected_return_type);
+                }
+                else
+                {
+                    sem_evaluate_expr(ctx, child);
+                }
+            }
+            break;
+        }
+
+        case AST_NODE_FOR_STATEMENT:
+        {
+            odin_grammar_node_t * body = node_find_child(node, AST_NODE_COMPOUND_STATEMENT);
+            if (body)
+            {
+                sem_analyse_compound_statement(ctx, body, expected_return_type);
+            }
+            break;
+        }
+
         default:
             break;
     }
@@ -404,13 +499,24 @@ sem_pass2_analyse_bodies(SemContext * ctx)
         for (size_t j = 0; j < ext_decl->list.count; j++)
         {
             odin_grammar_node_t * top_decl = ext_decl->list.children[j];
-            if (top_decl == NULL || top_decl->type != AST_NODE_CONSTANT_DECL) continue;
-            if (top_decl->list.count < 2) continue;
+            if (top_decl == NULL) continue;
 
-            odin_grammar_node_t * value_node = top_decl->list.children[1];
-            if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
+            if (top_decl->type == AST_NODE_CONSTANT_DECL)
             {
-                sem_analyse_procedure_literal(ctx, value_node);
+                if (top_decl->list.count < 2) continue;
+                odin_grammar_node_t * value_node = top_decl->list.children[1];
+                if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
+                {
+                    sem_analyse_procedure_literal(ctx, value_node);
+                }
+                else
+                {
+                    sem_evaluate_expr(ctx, value_node);
+                }
+            }
+            else if (top_decl->type == AST_NODE_VARIABLE_DECL)
+            {
+                sem_pass2_node(ctx, top_decl, NULL);
             }
         }
     }

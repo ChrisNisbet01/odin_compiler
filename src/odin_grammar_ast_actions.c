@@ -2,6 +2,8 @@
 #include "odin_grammar_ast_actions.h"
 #include "odin_grammar_actions.h"
 
+#include "ast_metadata.h"
+
 #include <easy_pc/easy_pc.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +36,158 @@ make_node(epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node,
 
     epc_ast_push(ctx, result);
 }
+
+static odin_grammar_node_t *
+make_node_base(epc_cpt_node_t * node, void ** children, int count)
+{
+    odin_grammar_node_t * result = calloc(1, sizeof(odin_grammar_node_t));
+    result->list.count = (size_t)count;
+    result->list.children = calloc((size_t)count, sizeof(odin_grammar_node_t *));
+    for (int i = 0; i < count; i++)
+    {
+        result->list.children[i] = (odin_grammar_node_t *)children[i];
+    }
+    return result;
+}
+
+static OperatorKind
+determine_operator_kind(odin_grammar_node_type_t node_type, char const * sem, size_t sem_len)
+{
+    if (sem == NULL || sem_len == 0) return OP_INVALID;
+
+    switch (node_type)
+    {
+        case AST_NODE_ADD_OP:
+            if (sem_len == 1)
+            {
+                if (sem[0] == '+') return OP_ADD;
+                if (sem[0] == '-') return OP_SUB;
+            }
+            return OP_INVALID;
+
+        case AST_NODE_MUL_OP:
+            if (sem_len == 1)
+            {
+                if (sem[0] == '*') return OP_MUL;
+                if (sem[0] == '/') return OP_DIV;
+                if (sem[0] == '%') return OP_MOD;
+            }
+            if (sem_len == 3 && strncmp(sem, "mod", 3) == 0) return OP_MOD;
+            return OP_INVALID;
+
+        case AST_NODE_SHIFT_OP:
+            if (sem_len == 2)
+            {
+                if (sem[0] == '<' && sem[1] == '<') return OP_SHL;
+                if (sem[0] == '>' && sem[1] == '>') return OP_SHR;
+            }
+            return OP_INVALID;
+
+        case AST_NODE_BIT_AND_OP:
+            if (sem_len == 1 && sem[0] == '&') return OP_BIT_AND;
+            return OP_INVALID;
+
+        case AST_NODE_BIT_XOR_OP:
+            if (sem_len == 1 && sem[0] == '~') return OP_BIT_XOR;
+            return OP_INVALID;
+
+        case AST_NODE_BIT_OR_OP:
+            if (sem_len == 1 && sem[0] == '|') return OP_BIT_OR;
+            return OP_INVALID;
+
+        case AST_NODE_COMP_OP:
+        {
+            if (sem_len == 2)
+            {
+                if (sem[0] == '=' && sem[1] == '=') return OP_EQ;
+                if (sem[0] == '!' && sem[1] == '=') return OP_NE;
+                if (sem[0] == '<' && sem[1] == '=') return OP_LE;
+                if (sem[0] == '>' && sem[1] == '=') return OP_GE;
+            }
+            if (sem_len == 1)
+            {
+                if (sem[0] == '<') return OP_LT;
+                if (sem[0] == '>') return OP_GT;
+            }
+            if (sem_len == 2 && strncmp(sem, "in", 2) == 0) return OP_IN;
+            if (sem_len == 6 && strncmp(sem, "not_in", 6) == 0) return OP_NOT_IN;
+            return OP_INVALID;
+        }
+
+        case AST_NODE_LOG_AND_OP:
+            if ((sem_len == 2 && sem[0] == '&' && sem[1] == '&')
+                || (sem_len == 3 && strncmp(sem, "and", 3) == 0))
+                return OP_LOG_AND;
+            return OP_INVALID;
+
+        case AST_NODE_LOG_OR_OP:
+            if ((sem_len == 2 && sem[0] == '|' && sem[1] == '|')
+                || (sem_len == 2 && strncmp(sem, "or", 2) == 0))
+                return OP_LOG_OR;
+            return OP_INVALID;
+
+        case AST_NODE_RANGE_OP:
+            if (sem_len == 2 && sem[0] == '.' && sem[1] == '.') return OP_RANGE;
+            if (sem_len == 3 && sem[0] == '.' && sem[1] == '.' && sem[2] == '<') return OP_RANGE_HALF;
+            return OP_INVALID;
+
+        case AST_NODE_ASSIGN_OP:
+        {
+            if (sem_len == 1 && sem[0] == '=') return OP_ASSIGN;
+            if (sem_len == 2)
+            {
+                if (sem[0] == '+') return OP_ADD_ASSIGN;
+                if (sem[0] == '-') return OP_SUB_ASSIGN;
+                if (sem[0] == '*') return OP_MUL_ASSIGN;
+                if (sem[0] == '/') return OP_DIV_ASSIGN;
+                if (sem[0] == '%') return OP_MOD_ASSIGN;
+                if (sem[0] == '&') return OP_AND_ASSIGN;
+                if (sem[0] == '|') return OP_OR_ASSIGN;
+                if (sem[0] == '~') return OP_XOR_ASSIGN;
+            }
+            if (sem_len == 3)
+            {
+                if (sem[0] == '<' && sem[1] == '<') return OP_SHL_ASSIGN;
+                if (sem[0] == '>' && sem[1] == '>') return OP_SHR_ASSIGN;
+            }
+            return OP_INVALID;
+        }
+
+        case AST_NODE_UNARY_OP:
+        {
+            if (sem[0] == '!' || (sem_len == 3 && strncmp(sem, "not", 3) == 0))
+                return OP_UNARY_NOT;
+            if (sem_len == 1)
+            {
+                if (sem[0] == '-') return OP_UNARY_NEG;
+                if (sem[0] == '+') return OP_UNARY_POS;
+                if (sem[0] == '~') return OP_UNARY_XOR;
+                if (sem[0] == '&') return OP_UNARY_ADDR;
+                if (sem[0] == '^') return OP_UNARY_DEREF;
+            }
+            return OP_INVALID;
+        }
+
+        default:
+            return OP_INVALID;
+    }
+}
+
+#define DEFINE_OP_ACTION(name, node_type)                         \
+    static void                                                   \
+    name(epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node,      \
+         void ** children, int count, void * user_data)           \
+    {                                                              \
+        (void)user_data;                                           \
+        odin_grammar_node_t * result = make_node_base(node, children, count); \
+        result->type = node_type;                                  \
+        char const * sem = epc_cpt_node_get_semantic_content(node); \
+        size_t sem_len = epc_cpt_node_get_semantic_len(node);      \
+        AstOpMetadata * m = calloc(1, sizeof(AstOpMetadata));      \
+        m->kind = determine_operator_kind(node_type, sem, sem_len); \
+        result->metadata = m;                                      \
+        epc_ast_push(ctx, result);                                 \
+    }
 
 #define DEFINE_ACTION(name, node_type)                            \
     static void                                                   \
@@ -91,32 +245,32 @@ DEFINE_ACTION(ast_action_postfix_deref_action, AST_NODE_POSTFIX_DEREF)
 DEFINE_ACTION(ast_action_postfix_assertion_action, AST_NODE_POSTFIX_ASSERTION)
 DEFINE_ACTION(ast_action_postfix_ops_action, AST_NODE_POSTFIX_OPS)
 DEFINE_ACTION(ast_action_postfix_expression_action, AST_NODE_POSTFIX_EXPRESSION)
-DEFINE_ACTION(ast_action_unary_op_action, AST_NODE_UNARY_OP)
+DEFINE_OP_ACTION(ast_action_unary_op_action, AST_NODE_UNARY_OP)
 DEFINE_ACTION(ast_action_unary_prefix_action, AST_NODE_UNARY_EXPRESSION)
-DEFINE_ACTION(ast_action_mul_op_action, AST_NODE_MUL_OP)
+DEFINE_OP_ACTION(ast_action_mul_op_action, AST_NODE_MUL_OP)
 DEFINE_ACTION(ast_action_mul_expression_action, AST_NODE_MUL_EXPRESSION)
-DEFINE_ACTION(ast_action_add_op_action, AST_NODE_ADD_OP)
+DEFINE_OP_ACTION(ast_action_add_op_action, AST_NODE_ADD_OP)
 DEFINE_ACTION(ast_action_add_expression_action, AST_NODE_ADD_EXPRESSION)
-DEFINE_ACTION(ast_action_shift_op_action, AST_NODE_SHIFT_OP)
+DEFINE_OP_ACTION(ast_action_shift_op_action, AST_NODE_SHIFT_OP)
 DEFINE_ACTION(ast_action_shift_expression_action, AST_NODE_SHIFT_EXPRESSION)
-DEFINE_ACTION(ast_action_bit_and_op_action, AST_NODE_BIT_AND_OP)
+DEFINE_OP_ACTION(ast_action_bit_and_op_action, AST_NODE_BIT_AND_OP)
 DEFINE_ACTION(ast_action_bit_and_expression_action, AST_NODE_BIT_AND_EXPRESSION)
-DEFINE_ACTION(ast_action_bit_xor_op_action, AST_NODE_BIT_XOR_OP)
+DEFINE_OP_ACTION(ast_action_bit_xor_op_action, AST_NODE_BIT_XOR_OP)
 DEFINE_ACTION(ast_action_bit_xor_expression_action, AST_NODE_BIT_XOR_EXPRESSION)
-DEFINE_ACTION(ast_action_bit_or_op_action, AST_NODE_BIT_OR_OP)
+DEFINE_OP_ACTION(ast_action_bit_or_op_action, AST_NODE_BIT_OR_OP)
 DEFINE_ACTION(ast_action_bit_or_expression_action, AST_NODE_BIT_OR_EXPRESSION)
-DEFINE_ACTION(ast_action_comp_op_action, AST_NODE_COMP_OP)
+DEFINE_OP_ACTION(ast_action_comp_op_action, AST_NODE_COMP_OP)
 DEFINE_ACTION(ast_action_comp_expression_action, AST_NODE_COMP_EXPRESSION)
-DEFINE_ACTION(ast_action_log_and_op_action, AST_NODE_LOG_AND_OP)
+DEFINE_OP_ACTION(ast_action_log_and_op_action, AST_NODE_LOG_AND_OP)
 DEFINE_ACTION(ast_action_log_and_expression_action, AST_NODE_LOG_AND_EXPRESSION)
-DEFINE_ACTION(ast_action_log_or_op_action, AST_NODE_LOG_OR_OP)
+DEFINE_OP_ACTION(ast_action_log_or_op_action, AST_NODE_LOG_OR_OP)
 DEFINE_ACTION(ast_action_log_or_expression_action, AST_NODE_LOG_OR_EXPRESSION)
-DEFINE_ACTION(ast_action_range_op_action, AST_NODE_RANGE_OP)
+DEFINE_OP_ACTION(ast_action_range_op_action, AST_NODE_RANGE_OP)
 DEFINE_ACTION(ast_action_range_expression_action, AST_NODE_RANGE_EXPRESSION)
 DEFINE_ACTION(ast_action_ternary_expression_action, AST_NODE_TERNARY_EXPRESSION)
 DEFINE_ACTION(ast_action_or_else_action, AST_NODE_OR_ELSE)
 DEFINE_ACTION(ast_action_or_return_action, AST_NODE_OR_RETURN)
-DEFINE_ACTION(ast_action_assign_op_action, AST_NODE_ASSIGN_OP)
+DEFINE_OP_ACTION(ast_action_assign_op_action, AST_NODE_ASSIGN_OP)
 DEFINE_ACTION(ast_action_assign_expression_action, AST_NODE_ASSIGN_EXPRESSION)
 DEFINE_ACTION(ast_action_expression_action, AST_NODE_EXPRESSION)
 DEFINE_ACTION(ast_action_argument_list_action, AST_NODE_ARGUMENT_LIST)
@@ -310,5 +464,6 @@ odin_grammar_node_free(void * node, void * user_data)
     }
     free(n->list.children);
     free((char *)n->text);
+    free(n->metadata);
     free(n);
 }

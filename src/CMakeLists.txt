@@ -19,6 +19,7 @@ add_executable(${app}
     scope_lists.c
     generator_lists.c
     sem_error.c
+    ast_utils.c
     semantic_analyser.c
     ir_utils.c
     ir_gen_error.c

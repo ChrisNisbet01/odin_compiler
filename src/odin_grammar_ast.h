@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ast_metadata.h"
+
 #include <easy_pc/easy_pc.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -151,10 +153,7 @@ typedef struct odin_grammar_node_t
     TypeDescriptor * resolved_type;
     symbol_t * resolved_symbol;
 
-    union
-    {
-        ast_node_list_t external_declarations;
-    };
+    void * metadata;
 } odin_grammar_node_t;
 
 void odin_grammar_node_free(void * node, void * user_data);
