@@ -10,6 +10,9 @@ epc_generate_grammar(
 add_executable(${app}
     main.c
     odin_grammar_ast_actions.c
+    generic_hash_table.c
+    debug.c
+    ast_node_name.c
 )
 
 target_compile_options(${app} PRIVATE -O3 -g -std=gnu11 -Wall -Wextra -Wswitch-enum -pedantic)
