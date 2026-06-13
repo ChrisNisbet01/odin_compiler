@@ -1,5 +1,5 @@
 package main
 
 main :: proc() -> int {
-    return 42
+    return 0
 }

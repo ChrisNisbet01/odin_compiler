@@ -6,5 +6,5 @@ main :: proc() -> int {
     if x < 10 {
         y = 20
     }
-    return y
+    return y - 20
 }
