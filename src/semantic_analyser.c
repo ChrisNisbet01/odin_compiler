@@ -39,6 +39,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     switch (node->type)
     {
+        case AST_NODE_BASIC_TYPE:
         case AST_NODE_TYPE_NAME:
             return sem_resolve_type_name(ctx, node);
 
@@ -205,8 +206,22 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
 
         case AST_NODE_EXPRESSION:
+        case AST_NODE_ASSIGN_EXPRESSION:
+        case AST_NODE_OR_RETURN:
+        case AST_NODE_OR_ELSE:
+        case AST_NODE_TERNARY_EXPRESSION:
+        case AST_NODE_PRIMARY_EXPRESSION:
         {
             if (node->list.count > 0)
+            {
+                return sem_evaluate_expr(ctx, node->list.children[0]);
+            }
+            return NULL;
+        }
+
+        case AST_NODE_POSTFIX_EXPRESSION:
+        {
+            if (node->list.count >= 1)
             {
                 return sem_evaluate_expr(ctx, node->list.children[0]);
             }
@@ -272,8 +287,9 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
                 odin_grammar_node_t * sig_child = child->list.children[j];
                 if (sig_child->type == AST_NODE_RETURNS && sig_child->list.count > 0)
                 {
-                    TypeDescriptor const * td = sem_resolve_type_expr(ctx, sig_child->list.children[0]);
-                    sig_child->list.children[0]->resolved_type = (TypeDescriptor *)td;
+                    odin_grammar_node_t * type_node = sig_child->list.children[0];
+                    TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+                    type_node->resolved_type = (TypeDescriptor *)td;
                     return_type = td;
                 }
             }
@@ -329,7 +345,7 @@ sem_pass1_register_top_level(SemContext * ctx)
                 odin_grammar_node_t * top_decl = ext_decl->list.children[j];
                 if (top_decl == NULL) continue;
 
-                if (top_decl->type == AST_NODE_TOP_LEVEL_DECLARATION)
+                if (top_decl->type == AST_NODE_CONSTANT_DECL)
                 {
                     sem_register_top_level_declaration(ctx, top_decl);
                 }
@@ -388,7 +404,7 @@ sem_pass2_analyse_bodies(SemContext * ctx)
         for (size_t j = 0; j < ext_decl->list.count; j++)
         {
             odin_grammar_node_t * top_decl = ext_decl->list.children[j];
-            if (top_decl == NULL || top_decl->type != AST_NODE_TOP_LEVEL_DECLARATION) continue;
+            if (top_decl == NULL || top_decl->type != AST_NODE_CONSTANT_DECL) continue;
             if (top_decl->list.count < 2) continue;
 
             odin_grammar_node_t * value_node = top_decl->list.children[1];

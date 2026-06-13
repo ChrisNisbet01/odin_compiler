@@ -212,10 +212,10 @@ PipeInType = lexeme('|' not('|') not('='));
 
 // --- Basic Types ---
 
-BasicType = KwInt | KwI8 | KwI16 | KwI32 | KwI64
+BasicType = (KwInt | KwI8 | KwI16 | KwI32 | KwI64
           | KwU8 | KwU16 | KwU32 | KwU64
           | KwF32 | KwF64 | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring
-          | KwAny | KwType
+          | KwAny | KwType)
           @AST_ACTION_BASIC_TYPE;
 
 // --- Type Expressions ---

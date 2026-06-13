@@ -23,9 +23,10 @@ make_node(epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node,
     }
 
     char const * sem = epc_cpt_node_get_semantic_content(node);
-    if (sem != NULL)
+    size_t sem_len = epc_cpt_node_get_semantic_len(node);
+    if (sem != NULL && sem_len > 0)
     {
-        result->text = strdup(sem);
+        result->text = strndup(sem, sem_len);
     }
 
     epc_ast_push(ctx, result);

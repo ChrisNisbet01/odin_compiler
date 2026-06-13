@@ -99,8 +99,7 @@ ir_gen_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     if (node == NULL) return NULL;
 
-    // If node has a single child with resolved type, recurse
-    if (node->list.count == 1 && node->list.children[0] != NULL)
+    if (node->list.count >= 1 && node->list.children[0] != NULL)
     {
         return ir_gen_node(ctx, node->list.children[0]);
     }
@@ -312,6 +311,24 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             return ir_gen_identifier(ctx, node);
 
         case AST_NODE_EXPRESSION:
+        case AST_NODE_ASSIGN_EXPRESSION:
+        case AST_NODE_OR_RETURN:
+        case AST_NODE_OR_ELSE:
+        case AST_NODE_TERNARY_EXPRESSION:
+        case AST_NODE_RANGE_EXPRESSION:
+        case AST_NODE_LOG_OR_EXPRESSION:
+        case AST_NODE_LOG_AND_EXPRESSION:
+        case AST_NODE_COMP_EXPRESSION:
+        case AST_NODE_BIT_OR_EXPRESSION:
+        case AST_NODE_BIT_XOR_EXPRESSION:
+        case AST_NODE_BIT_AND_EXPRESSION:
+        case AST_NODE_SHIFT_EXPRESSION:
+        case AST_NODE_ADD_EXPRESSION:
+        case AST_NODE_MUL_EXPRESSION:
+            return ir_gen_expression(ctx, node);
+
+        case AST_NODE_PRIMARY_EXPRESSION:
+        case AST_NODE_POSTFIX_EXPRESSION:
             return ir_gen_expression(ctx, node);
 
         case AST_NODE_RETURN_STATEMENT:
@@ -325,7 +342,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
                 return ir_gen_node(ctx, node->list.children[0]);
             return NULL;
 
-        case AST_NODE_TOP_LEVEL_DECLARATION:
+        case AST_NODE_CONSTANT_DECL:
             return ir_gen_top_level_decl(ctx, node);
 
         default:
@@ -350,7 +367,7 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
             odin_grammar_node_t * top_decl = ext_decl->list.children[j];
             if (top_decl == NULL) continue;
 
-            if (top_decl->type == AST_NODE_TOP_LEVEL_DECLARATION)
+            if (top_decl->type == AST_NODE_CONSTANT_DECL)
             {
                 ir_gen_top_level_decl(ctx, top_decl);
             }

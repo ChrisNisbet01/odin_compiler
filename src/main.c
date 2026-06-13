@@ -1,11 +1,18 @@
+#include "generator_lists.h"
+#include "ir_gen_error.h"
+#include "llvm_ir_generator.h"
 #include "odin_grammar.h"
 #include "odin_grammar_ast.h"
 #include "odin_grammar_ast_actions.h"
+#include "semantic_analyser.h"
+#include "type_descriptors.h"
 
 #include <easy_pc/easy_pc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define VERSION "0.1.0"
 
 static char *
 read_file(char const * path, long * out_len)
@@ -36,33 +43,60 @@ read_file(char const * path, long * out_len)
     return buf;
 }
 
+static void
+print_usage(char const * prog)
+{
+    printf("Usage:\n");
+    printf("  %s build <file>              Parse, type-check, and compile\n", prog);
+    printf("  %s check <file>              Parse and type-check only\n", prog);
+    printf("  %s version                   Print version\n", prog);
+    printf("  %s help                      Print this help\n", prog);
+}
+
 int
 main(int argc, char * argv[])
 {
     if (argc < 2)
     {
-        fprintf(stderr, "Usage: %s <input.odin> [--cpt]\n", argv[0]);
-        fprintf(stderr, "  --cpt    Print the Concrete Parse Tree\n");
+        print_usage(argv[0]);
         return EXIT_FAILURE;
     }
 
-    char const * filename = argv[1];
-    bool print_cpt = false;
+    char const * command = argv[1];
 
-    for (int i = 2; i < argc; i++)
+    if (strcmp(command, "version") == 0)
     {
-        if (strcmp(argv[i], "--cpt") == 0)
-        {
-            print_cpt = true;
-        }
+        printf("odinc version %s\n", VERSION);
+        return EXIT_SUCCESS;
     }
+
+    if (strcmp(command, "help") == 0)
+    {
+        print_usage(argv[0]);
+        return EXIT_SUCCESS;
+    }
+
+    if (strcmp(command, "build") != 0 && strcmp(command, "check") != 0)
+    {
+        fprintf(stderr, "Error: Unknown command '%s'\n", command);
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    bool do_codegen = (strcmp(command, "build") == 0);
+
+    if (argc < 3)
+    {
+        fprintf(stderr, "Error: Missing input file\n");
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    char const * filename = argv[2];
 
     long src_len;
     char * src = read_file(filename, &src_len);
-    if (src == NULL)
-    {
-        return EXIT_FAILURE;
-    }
+    if (src == NULL) return EXIT_FAILURE;
 
     epc_parser_list * list = epc_parser_list_create();
     if (list == NULL)
@@ -98,47 +132,132 @@ main(int argc, char * argv[])
 
     printf("Parse successful!\n");
 
-    if (print_cpt)
+    // Build AST
+    epc_ast_hook_registry_t * hook_registry = epc_ast_hook_registry_create(ODIN_GRAMMAR_AST_ACTION_COUNT__);
+    if (hook_registry == NULL)
     {
-        char * cpt_str = epc_cpt_to_string(session.internal_parse_ctx, session.result.data.success);
-        if (cpt_str != NULL)
-        {
-            printf("Concrete Parse Tree:\n%s\n", cpt_str);
-            free(cpt_str);
-        }
+        fprintf(stderr, "Error: Failed to create hook registry.\n");
+        epc_parse_session_destroy(&session);
+        epc_parser_list_free(list);
+        free(src);
+        return EXIT_FAILURE;
     }
 
-    // Build the AST
-    epc_ast_hook_registry_t * registry = epc_ast_hook_registry_create(ODIN_GRAMMAR_AST_ACTION_COUNT__);
-    if (registry != NULL)
+    odin_grammar_ast_hook_registry_init(hook_registry);
+
+    epc_ast_result_t ast_result = epc_ast_build(session.result.data.success, hook_registry, NULL);
+    if (ast_result.has_error)
     {
-        odin_grammar_ast_hook_registry_init(registry);
+        fprintf(stderr, "AST Build Error: %s\n", ast_result.error_message);
+        epc_ast_hook_registry_free(hook_registry);
+        epc_parse_session_destroy(&session);
+        epc_parser_list_free(list);
+        free(src);
+        return EXIT_FAILURE;
+    }
 
-        epc_ast_result_t ast_result = epc_ast_build(session.result.data.success, registry, NULL);
-        if (!ast_result.has_error)
+    printf("AST build successful!\n");
+
+    odin_grammar_node_t * ast_root = (odin_grammar_node_t *)ast_result.ast_root;
+
+    // Semantic analysis
+    LLVMContextRef llvm_ctx = LLVMContextCreate();
+    LLVMBuilderRef builder = LLVMCreateBuilderInContext(llvm_ctx);
+    LLVMTargetDataRef data_layout = NULL; // Will be set by IR gen context
+
+    TypeDescriptors * type_reg = type_descriptors_create_registry(llvm_ctx, data_layout, builder);
+    if (type_reg == NULL)
+    {
+        fprintf(stderr, "Error: Failed to create type registry.\n");
+        odin_grammar_node_free(ast_root, NULL);
+        epc_ast_hook_registry_free(hook_registry);
+        epc_parse_session_destroy(&session);
+        epc_parser_list_free(list);
+        LLVMDisposeBuilder(builder);
+        LLVMContextDispose(llvm_ctx);
+        free(src);
+        return EXIT_FAILURE;
+    }
+
+    GeneratorContext * gen_ctx = generator_context_create(llvm_ctx, builder, type_reg);
+    if (gen_ctx == NULL)
+    {
+        fprintf(stderr, "Error: Failed to create generator context.\n");
+        type_descriptors_destroy_registry(type_reg);
+        odin_grammar_node_free(ast_root, NULL);
+        epc_ast_hook_registry_free(hook_registry);
+        epc_parse_session_destroy(&session);
+        epc_parser_list_free(list);
+        LLVMDisposeBuilder(builder);
+        LLVMContextDispose(llvm_ctx);
+        free(src);
+        return EXIT_FAILURE;
+    }
+
+    SemContext sem_ctx;
+    sem_context_init(&sem_ctx, ast_root, type_reg, gen_ctx);
+
+    bool sem_ok = sem_analyse(&sem_ctx);
+
+    if (sem_error_list_has_errors(&sem_ctx.errors))
+    {
+        fprintf(stderr, "Semantic analysis failed:\n");
+        sem_error_list_print(&sem_ctx.errors);
+        sem_error_list_init(&sem_ctx.errors);
+    }
+
+    if (do_codegen && sem_ok)
+    {
+        IrGenContext * ir_ctx = ir_gen_context_create("main", type_reg, gen_ctx);
+        if (ir_ctx == NULL)
         {
-            printf("AST build successful!\n");
-
-            odin_grammar_node_t * ast_root = (odin_grammar_node_t *)ast_result.ast_root;
-            if (ast_root != NULL)
-            {
-                printf("AST root type: %d, children: %zu\n",
-                       ast_root->type, ast_root->list.count);
-            }
-
+            fprintf(stderr, "Error: Failed to create IR generator context.\n");
+            type_descriptors_destroy_registry(type_reg);
+            generator_context_destroy(gen_ctx);
             odin_grammar_node_free(ast_root, NULL);
+            epc_ast_hook_registry_free(hook_registry);
+            epc_parse_session_destroy(&session);
+            epc_parser_list_free(list);
+            LLVMDisposeBuilder(builder);
+            LLVMContextDispose(llvm_ctx);
+            free(src);
+            return EXIT_FAILURE;
+        }
+
+        bool ir_ok = ir_generate(ir_ctx, ast_root);
+
+        if (ir_ok)
+        {
+            char out_name[256];
+            snprintf(out_name, sizeof(out_name), "%s.ll", filename);
+            if (write_llvm_ir_to_file(ir_ctx->module, out_name) == 0)
+            {
+                printf("Generated IR: %s\n", out_name);
+            }
+            else
+            {
+                fprintf(stderr, "Error: Failed to write IR to '%s'\n", out_name);
+            }
         }
         else
         {
-            fprintf(stderr, "AST Build Error: %s\n", ast_result.error_message);
+            fprintf(stderr, "IR generation failed.\n");
+            ir_gen_error_collection_print(&ir_ctx->errors);
         }
 
-        epc_ast_hook_registry_free(registry);
+        ir_gen_context_destroy(ir_ctx);
     }
 
+    // Cleanup
+    type_descriptors_destroy_registry(type_reg);
+    generator_context_destroy(gen_ctx);
+    odin_grammar_node_free(ast_root, NULL);
+    epc_ast_hook_registry_free(hook_registry);
     epc_parse_session_destroy(&session);
     epc_parser_list_free(list);
+    LLVMDisposeBuilder(builder);
+    LLVMContextDispose(llvm_ctx);
     free(src);
 
-    return EXIT_SUCCESS;
+    return sem_ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
