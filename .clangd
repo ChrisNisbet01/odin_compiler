@@ -1,0 +1,5 @@
+CompileFlags:
+  Add:
+    - "-I/usr/lib/llvm-20/include"
+    - "-I./build/src/generated"
+
