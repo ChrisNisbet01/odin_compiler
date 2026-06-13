@@ -1,0 +1,432 @@
+// GDL definition for a full Odin language parser.
+// Comments (// and /* */) are handled by the custom whitespace skipper
+// registered in main.c, not in this grammar file.
+//
+// The last rule (Program) must be the top-level parser rule.
+
+// --- Boundary Check ---
+IdBoundary = not(alpha | digit | '_') | eoi;
+
+// --- Keywords ---
+
+KwPackage = lexeme("package" IdBoundary);
+KwImport = lexeme("import" IdBoundary);
+KwForeign = lexeme("foreign" IdBoundary);
+KwProc = lexeme("proc" IdBoundary);
+KwReturn = lexeme("return" IdBoundary);
+KwWhere = lexeme("where" IdBoundary);
+KwIf = lexeme("if" IdBoundary);
+KwElse = lexeme("else" IdBoundary);
+KwFor = lexeme("for" IdBoundary);
+KwIn = lexeme("in" IdBoundary);
+KwSwitch = lexeme("switch" IdBoundary);
+KwCase = lexeme("case" IdBoundary);
+KwDefer = lexeme("defer" IdBoundary);
+KwWhen = lexeme("when" IdBoundary);
+KwBreak = lexeme("break" IdBoundary);
+KwContinue = lexeme("continue" IdBoundary);
+KwFallthrough = lexeme("fallthrough" IdBoundary);
+KwUsing = lexeme("using" IdBoundary);
+KwConst = lexeme("const" IdBoundary);
+KwStruct = lexeme("struct" IdBoundary);
+KwUnion = lexeme("union" IdBoundary);
+KwEnum = lexeme("enum" IdBoundary);
+KwMap = lexeme("map" IdBoundary);
+KwDynamic = lexeme("dynamic" IdBoundary);
+KwDistinct = lexeme("distinct" IdBoundary);
+KwTransmute = lexeme("transmute" IdBoundary);
+KwCast = lexeme("cast" IdBoundary);
+KwMake = lexeme("make" IdBoundary);
+KwNew = lexeme("new" IdBoundary);
+KwDelete = lexeme("delete" IdBoundary);
+KwTrue = lexeme("true" IdBoundary);
+KwFalse = lexeme("false" IdBoundary);
+KwNil = lexeme("nil" IdBoundary);
+KwNone = lexeme("none" IdBoundary);
+KwContext = lexeme("context" IdBoundary);
+KwAsm = lexeme("asm" IdBoundary);
+KwAutoCast = lexeme("auto_cast" IdBoundary);
+
+KwOrElse = lexeme("or_else" IdBoundary);
+KwOrReturn = lexeme("or_return" IdBoundary);
+KwNot = lexeme("not" IdBoundary);
+KwAnd = lexeme("and" IdBoundary);
+KwOr = lexeme("or" IdBoundary);
+KwNotIn = lexeme("not_in" IdBoundary);
+
+// Built-in type names
+KwInt = lexeme("int" IdBoundary);
+KwI8 = lexeme("i8" IdBoundary);
+KwI16 = lexeme("i16" IdBoundary);
+KwI32 = lexeme("i32" IdBoundary);
+KwI64 = lexeme("i64" IdBoundary);
+KwU8 = lexeme("u8" IdBoundary);
+KwU16 = lexeme("u16" IdBoundary);
+KwU32 = lexeme("u32" IdBoundary);
+KwU64 = lexeme("u64" IdBoundary);
+KwF32 = lexeme("f32" IdBoundary);
+KwF64 = lexeme("f64" IdBoundary);
+KwBool = lexeme("bool" IdBoundary);
+KwString = lexeme("string" IdBoundary);
+KwRune = lexeme("rune" IdBoundary);
+KwByte = lexeme("byte" IdBoundary);
+KwUintptr = lexeme("uintptr" IdBoundary);
+KwCstring = lexeme("cstring" IdBoundary);
+KwAny = lexeme("any" IdBoundary);
+KwType = lexeme("type" IdBoundary);
+
+KwBitField = lexeme("bit_field" IdBoundary);
+KwBitSet = lexeme("bit_set" IdBoundary);
+KwProcLiteral = KwProc;
+
+// Reserved words set (for identifier boundary checking)
+AllReservedWords = KwPackage | KwImport | KwForeign
+    | KwProc | KwReturn | KwWhere
+    | KwIf | KwElse | KwFor | KwIn
+    | KwSwitch | KwCase
+    | KwDefer | KwWhen
+    | KwBreak | KwContinue | KwFallthrough
+    | KwUsing | KwConst
+    | KwStruct | KwUnion | KwEnum | KwMap | KwDynamic
+    | KwDistinct | KwTransmute | KwCast
+    | KwMake | KwNew | KwDelete
+    | KwTrue | KwFalse | KwNil | KwNone
+    | KwContext | KwAsm | KwAutoCast
+    | KwOrElse | KwOrReturn | KwNot | KwAnd | KwOr | KwNotIn
+    | KwInt | KwI8 | KwI16 | KwI32 | KwI64
+    | KwU8 | KwU16 | KwU32 | KwU64
+    | KwF32 | KwF64 | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring | KwAny | KwType
+    | KwBitField | KwBitSet;
+
+Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
+
+PolyIdent = lexeme("$" identifier) @AST_ACTION_POLY_IDENT;
+
+// --- Directives (#name, #name[...]) ---
+KwPartial = lexeme("partial" IdBoundary);
+KwSoa = lexeme("soa" IdBoundary);
+KwPacked = lexeme("packed" IdBoundary);
+KwRawUnion = lexeme("raw_union" IdBoundary);
+KwForceInline = lexeme("force_inline" IdBoundary);
+KwNoInline = lexeme("no_inline" IdBoundary);
+KwLoad = lexeme("load" IdBoundary);
+KwAssert = lexeme("assert" IdBoundary);
+
+DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert;
+Directive = lexeme("#" DirectiveName) @AST_ACTION_DIRECTIVE;
+DirectiveWithArgs = (lexeme("#" DirectiveName) LBracket Expression RBracket) @AST_ACTION_DIRECTIVE_WITH_ARGS;
+
+// --- Literals ---
+
+HexDigits = hex_digit+;
+HexLiteral = lexeme("0x" HexDigits) @AST_ACTION_INTEGER_BASE;
+OctalLiteral = lexeme("0o" [0-7]+) @AST_ACTION_INTEGER_BASE;
+BinaryLiteral = lexeme("0b" oneof("01")+) @AST_ACTION_INTEGER_BASE;
+DecimalLiteral = ([1-9] digit* | '0') @AST_ACTION_INTEGER_BASE;
+IntegerLiteral = (HexLiteral | OctalLiteral | BinaryLiteral | DecimalLiteral) @AST_ACTION_INTEGER_VALUE;
+
+DigitSeq = digit+;
+Exponent = oneof("eE") oneof("+-")? DigitSeq;
+HexFloatDigits = hex_digit+;
+HexExp = oneof("pP") oneof("+-")? DigitSeq;
+HexFloatLiteral = lexeme("0x" HexFloatDigits '.' HexFloatDigits HexExp?) @AST_ACTION_FLOAT_BASE;
+DecimalFloatLiteral = ((DigitSeq? '.' DigitSeq Exponent?) | (DigitSeq Exponent)) @AST_ACTION_FLOAT_BASE;
+FloatLiteral = (HexFloatLiteral | DecimalFloatLiteral) @AST_ACTION_FLOAT_VALUE;
+
+StringEscapeSeq = '\\' any;
+StringChar = StringEscapeSeq | noneof("\"\\\n\r");
+StringLiteral = lexeme('"' StringChar* '"') @AST_ACTION_STRING_LITERAL;
+
+RawStringChar = noneof("`");
+RawStringLiteral = lexeme('`' RawStringChar* '`') @AST_ACTION_RAW_STRING_LITERAL;
+
+RuneEscapeSeq = '\\' any;
+RuneChar = RuneEscapeSeq | noneof("'\\\n\r");
+RuneLiteral = lexeme('\'' RuneChar '\'') @AST_ACTION_RUNE_LITERAL;
+
+TrueLiteral = KwTrue @AST_ACTION_BOOL_TRUE;
+FalseLiteral = KwFalse @AST_ACTION_BOOL_FALSE;
+BoolLiteral = TrueLiteral | FalseLiteral;
+NilLiteral = KwNil @AST_ACTION_NIL;
+NoneLiteral = KwNone @AST_ACTION_NONE;
+
+// --- Operators and Punctuation ---
+
+LParen = lexeme('(');
+RParen = lexeme(')');
+LBrace = lexeme('{');
+RBrace = lexeme('}');
+LBracket = lexeme('[');
+RBracket = lexeme(']');
+Semicolon = lexeme(';');
+Comma = lexeme(',');
+Dot = lexeme('.');
+Colon = lexeme(':' not(':') not('='));
+DoubleColon = lexeme("::" not(':'));
+ColonAssign = lexeme(":=");
+Assign = lexeme('=' not('='));
+Arrow = lexeme("->");
+At = lexeme('@');
+Question = lexeme('?');
+DotDot = lexeme(".." not('.'));
+DotDotLt = lexeme("..<");
+Ellipsis = lexeme("...") @AST_ACTION_ELLIPSIS;
+
+Plus = lexeme('+' not('+') not('='));
+Minus = lexeme('-' not('-') not('=') not('>'));
+Star = lexeme('*' not('*') not('='));
+Slash = lexeme('/' not('='));
+Percent = lexeme('%' not('='));
+Mod = lexeme("mod" IdBoundary);
+
+Amp = lexeme('&' not('&') not('='));
+Pipe = lexeme('|' not('|') not('='));
+Caret = lexeme('~' not('='));
+Shl = lexeme("<<" not('='));
+Shr = lexeme(">>" not('='));
+PointerCaret = lexeme('^');
+LogicalNot = KwNot | lexeme('!' not('='));
+
+Lt = lexeme('<' not('<') not('='));
+Gt = lexeme('>' not('>') not('='));
+Le = lexeme("<=");
+Ge = lexeme(">=");
+Eq = lexeme("==");
+Ne = lexeme("!=");
+
+AmpAmp = lexeme("&&");
+PipePipe = lexeme("||");
+
+PlusAssign = lexeme("+=");
+MinusAssign = lexeme("-=");
+MulAssign = lexeme("*=");
+DivAssign = lexeme("/=");
+ModAssign = lexeme("%=");
+AndAssign = lexeme("&=");
+OrAssign = lexeme("|=");
+XorAssign = lexeme("~=");
+ShlAssign = lexeme("<<=");
+ShrAssign = lexeme(">>=");
+
+PipeInType = lexeme('|' not('|') not('='));
+
+// --- Basic Types ---
+
+BasicType = KwInt | KwI8 | KwI16 | KwI32 | KwI64
+          | KwU8 | KwU16 | KwU32 | KwU64
+          | KwF32 | KwF64 | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring
+          | KwAny | KwType
+          @AST_ACTION_BASIC_TYPE;
+
+// --- Type Expressions ---
+
+PointerType = PointerCaret TypePrefix @AST_ACTION_POINTER_TYPE;
+ArrayType = LBracket (IntegerLiteral | PolyIdent | Identifier)? RBracket TypePrefix @AST_ACTION_ARRAY_TYPE;
+DynamicArrayType = LBracket KwDynamic RBracket TypePrefix @AST_ACTION_DYNAMIC_ARRAY_TYPE;
+SliceType = LBracket RBracket TypePrefix @AST_ACTION_SLICE_TYPE;
+MapType = KwMap LBracket TypePrefix RBracket TypePrefix @AST_ACTION_MAP_TYPE;
+SoaType = DirectiveWithArgs TypePrefix @AST_ACTION_SOA_TYPE;
+
+Enumerator = Identifier (Assign Expression)? @AST_ACTION_ENUMERATOR;
+EnumeratorList = delimited(Enumerator, Comma) Comma? @AST_ACTION_ENUMERATOR_LIST;
+EnumType = KwEnum Directive? Identifier? LBrace EnumeratorList RBrace @AST_ACTION_ENUM_TYPE;
+EnumTypeRef = KwEnum Identifier @AST_ACTION_ENUM_TYPE_REF;
+
+UnionField = KwUsing? Identifier Colon TypePrefix @AST_ACTION_UNION_FIELD;
+UnionFieldList = delimited(UnionField, Semicolon) Semicolon? @AST_ACTION_UNION_FIELD_LIST;
+UnionType = KwUnion Directive? LBrace UnionFieldList RBrace @AST_ACTION_UNION_TYPE;
+
+BitFieldField = Identifier Colon TypePrefix PipeInType IntegerLiteral @AST_ACTION_BIT_FIELD_FIELD;
+BitFieldFieldList = delimited(BitFieldField, Semicolon) Semicolon? @AST_ACTION_BIT_FIELD_FIELD_LIST;
+BitFieldType = KwBitField Directive? LBrace BitFieldFieldList RBrace @AST_ACTION_BIT_FIELD_TYPE;
+
+BitSetType = KwBitSet LBracket (TypePrefix | DotDot | DotDotLt) RBracket @AST_ACTION_BIT_SET_TYPE;
+
+StructField = KwUsing? Identifier (Comma Identifier)* Colon TypePrefix @AST_ACTION_STRUCT_FIELD;
+StructFieldList = delimited(StructField, Semicolon) Semicolon? @AST_ACTION_STRUCT_FIELD_LIST;
+StructRawBody = LBrace StructFieldList RBrace;
+StructType = KwStruct (SoaType | (Directive? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
+StructTypeRef = KwStruct Identifier @AST_ACTION_STRUCT_TYPE_REF;
+
+Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon TypePrefix @AST_ACTION_PARAMETER;
+Parameters = delimited(Parameter, Comma) (Comma Ellipsis)? @AST_ACTION_PARAMETERS;
+ParameterList = LParen Parameters? RParen @AST_ACTION_PARAMETER_LIST;
+NamedReturn = Identifier Colon TypePrefix @AST_ACTION_NAMED_RETURN;
+ReturnList = delimited(NamedReturn, Comma) Comma? @AST_ACTION_RETURN_LIST;
+Returns = Arrow (ReturnList | TypePrefix) @AST_ACTION_RETURNS;
+WhereClause = KwWhere Expression @AST_ACTION_WHERE_CLAUSE;
+ProcedureSignature = KwProc Directive? ParameterList Returns? WhereClause? @AST_ACTION_PROCEDURE_SIGNATURE;
+
+DistinctType = KwDistinct TypePrefix @AST_ACTION_DISTINCT_TYPE;
+
+// Base types for TypeName (no left recursion)
+TypePrefix = PointerType | DynamicArrayType | SliceType | ArrayType
+           | MapType | SoaType | ProcedureSignature
+           | StructType | UnionType | EnumType | BitFieldType | BitSetType
+           | DistinctType | BasicType | StructTypeRef | EnumTypeRef
+           | Identifier | PolyIdent;
+
+// Full type with optional pipe-separated variants
+TypeName = TypePrefix (PipeInType TypePrefix)* @AST_ACTION_TYPE_NAME;
+
+// --- Expressions (precedence hierarchy, lowest first) ---
+
+PrimaryExpression = StringLiteral | RawStringLiteral | RuneLiteral
+                  | FloatLiteral | IntegerLiteral
+                  | BoolLiteral | NilLiteral | NoneLiteral
+                  | Identifier | PolyIdent
+                  | LParen Expression RParen
+                  | DirectiveWithArgs | Directive
+                  @AST_ACTION_PRIMARY_EXPRESSION;
+
+PostfixOpCall = LParen ArgumentList? RParen @AST_ACTION_POSTFIX_CALL;
+PostfixOpSubscript = LBracket Expression RBracket @AST_ACTION_POSTFIX_SUBSCRIPT;
+PostfixOpSlice = LBracket (Expression? DotDot Expression?) RBracket @AST_ACTION_POSTFIX_SLICE;
+PostfixOpSliceLt = LBracket Expression? DotDotLt Expression? RBracket @AST_ACTION_POSTFIX_SLICE_LT;
+PostfixOpMember = Dot Identifier @AST_ACTION_POSTFIX_MEMBER;
+PostfixOpDeref = PointerCaret @AST_ACTION_POSTFIX_DEREF;
+PostfixOpAssertion = Dot LParen TypeName RParen @AST_ACTION_POSTFIX_ASSERTION;
+
+PostfixOp = PostfixOpCall | PostfixOpSubscript | PostfixOpSlice | PostfixOpSliceLt
+           | PostfixOpMember | PostfixOpDeref | PostfixOpAssertion;
+
+PostfixOps = PostfixOp* @AST_ACTION_POSTFIX_OPS;
+PostfixExpression = PrimaryExpression PostfixOps @AST_ACTION_POSTFIX_EXPRESSION;
+
+UnaryOpNot = LogicalNot @AST_ACTION_UNARY_OP;
+UnaryOpNeg = Minus @AST_ACTION_UNARY_OP;
+UnaryOpPos = Plus @AST_ACTION_UNARY_OP;
+UnaryOpXor = Caret @AST_ACTION_UNARY_OP;
+UnaryOpAddr = Amp @AST_ACTION_UNARY_OP;
+UnaryOp = UnaryOpNot | UnaryOpNeg | UnaryOpPos | UnaryOpXor | UnaryOpAddr;
+UnaryPrefix = (UnaryOp UnaryExpression) @AST_ACTION_UNARY_PREFIX;
+UnaryExpression = UnaryPrefix | PostfixExpression;
+
+MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
+MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;
+
+AddOp = Plus | Minus @AST_ACTION_ADD_OP;
+AddExpression = chainl1(MulExpression, AddOp) @AST_ACTION_ADD_EXPRESSION;
+
+ShiftOp = Shl | Shr @AST_ACTION_SHIFT_OP;
+ShiftExpression = chainl1(AddExpression, ShiftOp) @AST_ACTION_SHIFT_EXPRESSION;
+
+BitAndOp = Amp @AST_ACTION_BIT_AND_OP;
+BitAndExpression = chainl1(ShiftExpression, BitAndOp) @AST_ACTION_BIT_AND_EXPRESSION;
+
+BitXorOp = Caret @AST_ACTION_BIT_XOR_OP;
+BitXorExpression = chainl1(BitAndExpression, BitXorOp) @AST_ACTION_BIT_XOR_EXPRESSION;
+
+BitOrOp = Pipe @AST_ACTION_BIT_OR_OP;
+BitOrExpression = chainl1(BitXorExpression, BitOrOp) @AST_ACTION_BIT_OR_EXPRESSION;
+
+CompOp = Eq | Ne | Lt | Gt | Le | Ge | KwIn | KwNotIn @AST_ACTION_COMP_OP;
+CompExpression = chainl1(BitOrExpression, CompOp) @AST_ACTION_COMP_EXPRESSION;
+
+LogAndOp = KwAnd | AmpAmp @AST_ACTION_LOG_AND_OP;
+LogAndExpression = chainl1(CompExpression, LogAndOp) @AST_ACTION_LOG_AND_EXPRESSION;
+
+LogOrOp = KwOr | PipePipe @AST_ACTION_LOG_OR_OP;
+LogOrExpression = chainl1(LogAndExpression, LogOrOp) @AST_ACTION_LOG_OR_EXPRESSION;
+
+RangeOp = DotDot | DotDotLt @AST_ACTION_RANGE_OP;
+RangeExpression = chainl1(LogOrExpression, RangeOp) @AST_ACTION_RANGE_EXPRESSION;
+
+TernaryExpression = RangeExpression (Question Expression Colon Expression)? @AST_ACTION_TERNARY_EXPRESSION;
+
+OrElseExpr = TernaryExpression (KwOrElse TernaryExpression)? @AST_ACTION_OR_ELSE;
+OrReturnExpr = OrElseExpr KwOrReturn? @AST_ACTION_OR_RETURN;
+
+AssignOp = Assign | PlusAssign | MinusAssign | MulAssign | DivAssign | ModAssign
+          | AndAssign | OrAssign | XorAssign | ShlAssign | ShrAssign @AST_ACTION_ASSIGN_OP;
+AssignExpression = OrReturnExpr (AssignOp OrReturnExpr)? @AST_ACTION_ASSIGN_EXPRESSION;
+
+Expression = chainl1(AssignExpression, Comma) @AST_ACTION_EXPRESSION;
+ArgumentList = Expression? @AST_ACTION_ARGUMENT_LIST;
+
+// --- Statements ---
+
+CompoundStatement = LBrace Statement* RBrace @AST_ACTION_COMPOUND_STATEMENT;
+
+DeferStatement = KwDefer Statement @AST_ACTION_DEFER_STATEMENT;
+
+WhenStatement = KwWhen Expression CompoundStatement
+                (KwElse KwWhen Expression CompoundStatement)*
+                (KwElse CompoundStatement)?
+                @AST_ACTION_WHEN_STATEMENT;
+
+IfStatement = KwIf (Expression | (Identifier ColonAssign Expression Semicolon Expression))
+              CompoundStatement
+              (KwElse IfStatement | KwElse CompoundStatement)?
+              @AST_ACTION_IF_STATEMENT;
+
+ForInitStmt = Identifier ColonAssign Expression | Expression;
+ForRangeClause = Identifier (Comma Identifier)? KwIn Expression;
+ForStatement = KwFor
+               ((ForInitStmt Semicolon Expression? Semicolon Expression?)
+               | ForRangeClause
+               | Expression?)
+               CompoundStatement
+               @AST_ACTION_FOR_STATEMENT;
+
+SwitchCaseClause = KwCase Expression (Comma Expression)* Colon Statement* @AST_ACTION_SWITCH_CASE;
+SwitchDefaultClause = KwCase Colon Statement* @AST_ACTION_SWITCH_DEFAULT;
+SwitchBody = LBrace (SwitchCaseClause | SwitchDefaultClause)* RBrace;
+SwitchStatement = KwSwitch Directive? Expression? SwitchBody @AST_ACTION_SWITCH_STATEMENT;
+
+ReturnStatement = KwReturn Expression? @AST_ACTION_RETURN_STATEMENT;
+BreakStatement = KwBreak @AST_ACTION_BREAK_STATEMENT;
+ContinueStatement = KwContinue @AST_ACTION_CONTINUE_STATEMENT;
+FallthroughStatement = KwFallthrough @AST_ACTION_FALLTHROUGH_STATEMENT;
+
+AssignStatement = Expression (AssignOp | ColonAssign) Expression @AST_ACTION_ASSIGN_STATEMENT;
+ExpressionStatement = Expression @AST_ACTION_EXPRESSION_STATEMENT;
+
+ProcBody = CompoundStatement;
+ProcedureLiteral = ProcedureSignature ProcBody @AST_ACTION_PROCEDURE_LITERAL;
+
+Statement = DeferStatement
+          | IfStatement
+          | ForStatement
+          | SwitchStatement
+          | ReturnStatement
+          | BreakStatement
+          | ContinueStatement
+          | FallthroughStatement
+          | WhenStatement
+          | AssignStatement
+          | ExpressionStatement;
+
+// --- Declarations ---
+
+PackageClause = KwPackage Identifier @AST_ACTION_PACKAGE_CLAUSE;
+
+ImportNamed = KwImport Identifier StringLiteral @AST_ACTION_IMPORT_NAMED;
+ImportSimple = KwImport KwUsing? StringLiteral @AST_ACTION_IMPORT;
+ImportDecl = ImportNamed | ImportSimple;
+
+VariableDecl = Identifier (Colon TypePrefix (Assign Expression)? | ColonAssign Expression) @AST_ACTION_VARIABLE_DECL;
+
+ConstantDecl = Identifier DoubleColon (ProcedureLiteral | Expression) @AST_ACTION_CONSTANT_DECL;
+
+ForeignImportDecl = KwForeign KwImport Identifier StringLiteral @AST_ACTION_FOREIGN_IMPORT;
+ForeignDecl = ForeignImportDecl | ConstantDecl;
+ForeignBlockBody = LBrace ForeignDecl* RBrace;
+ForeignBlock = KwForeign Identifier ForeignBlockBody @AST_ACTION_FOREIGN_BLOCK;
+
+WhenDecl = KwWhen Expression LBrace TopLevelDeclaration* RBrace
+           (KwElse KwWhen Expression LBrace TopLevelDeclaration* RBrace)*
+           (KwElse LBrace TopLevelDeclaration* RBrace)?
+           @AST_ACTION_WHEN_DECL;
+
+UsingDecl = KwUsing (VariableDecl | ConstantDecl) @AST_ACTION_USING_DECL;
+
+TopLevelDeclaration = ForeignBlock
+                    | WhenDecl
+                    | UsingDecl
+                    | ConstantDecl
+                    | VariableDecl
+                    | DirectiveWithArgs;
+
+ExternalDeclarations = (PackageClause | ImportDecl | TopLevelDeclaration)+ @AST_ACTION_EXTERNAL_DECLARATIONS;
+Program = ExternalDeclarations eoi @AST_ACTION_PROGRAM;
