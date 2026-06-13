@@ -20,6 +20,9 @@ add_executable(${app}
     generator_lists.c
     sem_error.c
     semantic_analyser.c
+    ir_utils.c
+    ir_gen_error.c
+    llvm_ir_generator.c
 )
 
 target_compile_options(${app} PRIVATE -O3 -g -std=gnu11 -Wall -Wextra -Wswitch-enum -pedantic)
