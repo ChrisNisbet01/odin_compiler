@@ -15,6 +15,9 @@ add_executable(${app}
     ast_node_name.c
     type_descriptors.c
     typed_value.c
+    scope.c
+    scope_lists.c
+    generator_lists.c
 )
 
 target_compile_options(${app} PRIVATE -O3 -g -std=gnu11 -Wall -Wextra -Wswitch-enum -pedantic)
