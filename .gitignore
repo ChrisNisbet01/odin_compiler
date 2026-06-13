@@ -1,3 +1,7 @@
 /.cache/
 /build/
 *.ll
+*.log
+*.err
+*.out
+*.list

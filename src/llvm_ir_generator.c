@@ -106,8 +106,12 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
     if (sym->value.is_lvalue && sym->value.value != NULL)
     {
         // Load from alloca to get the value
-        LLVMTypeRef ptr_type = LLVMTypeOf(sym->value.value);
-        LLVMTypeRef elem_type = LLVMGetElementType(ptr_type);
+        // Use the type from type_info (not LLVMGetElementType, which breaks with opaque pointers)
+        LLVMTypeRef elem_type = sym->value.type_info ? sym->value.type_info->llvm_type : NULL;
+        if (elem_type == NULL)
+        {
+            return sym->value.value;
+        }
         LLVMValueRef load = LLVMBuildLoad2(ctx->builder, elem_type, sym->value.value, node->text);
         LLVMSetAlignment(load, LLVMABIAlignmentOfType(ctx->data_layout, elem_type));
         return load;
@@ -427,13 +431,66 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
 // --- Assignment codegen ---
 
-static LLVMValueRef
-ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
+// Recursively unwrap expression wrapper nodes to find the identifier child.
+// Wrapper nodes simply delegate to their first child.
+static bool
+is_expression_wrapper_type(odin_grammar_node_type_t type)
 {
-    if (node->list.count < 2) return NULL;
+    switch (type)
+    {
+        case AST_NODE_EXPRESSION:
+        case AST_NODE_OR_RETURN:
+        case AST_NODE_OR_ELSE:
+        case AST_NODE_TERNARY_EXPRESSION:
+        case AST_NODE_RANGE_EXPRESSION:
+        case AST_NODE_LOG_OR_EXPRESSION:
+        case AST_NODE_LOG_AND_EXPRESSION:
+        case AST_NODE_COMP_EXPRESSION:
+        case AST_NODE_BIT_OR_EXPRESSION:
+        case AST_NODE_BIT_XOR_EXPRESSION:
+        case AST_NODE_BIT_AND_EXPRESSION:
+        case AST_NODE_SHIFT_EXPRESSION:
+        case AST_NODE_ADD_EXPRESSION:
+        case AST_NODE_MUL_EXPRESSION:
+        case AST_NODE_UNARY_EXPRESSION:
+        case AST_NODE_POSTFIX_EXPRESSION:
+        case AST_NODE_PRIMARY_EXPRESSION:
+            return true;
+        default:
+            return false;
+    }
+}
 
-    // For `x = expr` or `x := expr`: children[0] = lhs, children[1...] = rhs
-    // Find the operator to determine if it's = or :=
+static odin_grammar_node_t *
+expression_unwrap_to_identifier(odin_grammar_node_t * node)
+{
+    while (node != NULL && is_expression_wrapper_type(node->type))
+    {
+        if (node->list.count > 0)
+            node = node->list.children[0];
+        else
+            return NULL;
+    }
+    if (node != NULL && node->type == AST_NODE_IDENTIFIER)
+        return node;
+    return NULL;
+}
+
+// Handle assignment expressions: AssignExpression = OrReturnExpr (AssignOp OrReturnExpr)?
+// When there's no operator (no assignment), it recurses as a normal expression.
+// When there IS an operator (=, +=, etc.), it stores the RHS into the LHS alloca.
+static LLVMValueRef
+ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    // No operator — just a plain OrReturnExpr wrapper, recurse normally
+    if (node->list.count < 3)
+    {
+        if (node->list.count > 0)
+            return ir_gen_node(ctx, node->list.children[0]);
+        return NULL;
+    }
+
+    // Only handle simple = for now
     odin_grammar_node_t * op_node = node_find_op(node);
     if (op_node)
     {
@@ -442,34 +499,59 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
             && op_md->kind != OP_ADD_ASSIGN
             && op_md->kind != OP_SUB_ASSIGN)
         {
-            // Compound assignment operators not yet supported
             return NULL;
         }
     }
 
-    // Evaluate LHS (identifier) and RHS
-    LLVMValueRef lhs_ref = ir_gen_node(ctx, node->list.children[0]);
-    LLVMValueRef rhs_val = NULL;
+    // Evaluate RHS (children[2])
+    LLVMValueRef rhs_val = ir_gen_node(ctx, node->list.children[2]);
+    if (rhs_val == NULL) return NULL;
 
-    // RHS is typically the last child
+    // Look up LHS symbol directly and store
+    odin_grammar_node_t * lhs_id = expression_unwrap_to_identifier(node->list.children[0]);
+    if (lhs_id == NULL) return rhs_val;
+
+    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), lhs_id->text);
+    if (sym && sym->value.is_lvalue && sym->value.value != NULL)
+    {
+        return LLVMBuildStore(ctx->builder, rhs_val, sym->value.value);
+    }
+
+    return rhs_val;
+}
+
+static LLVMValueRef
+ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2) return NULL;
+
+    odin_grammar_node_t * op_node = node_find_op(node);
+    if (op_node)
+    {
+        AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
+        if (op_md && op_md->kind != OP_ASSIGN
+            && op_md->kind != OP_ADD_ASSIGN
+            && op_md->kind != OP_SUB_ASSIGN)
+        {
+            return NULL;
+        }
+    }
+
+    LLVMValueRef rhs_val = NULL;
     if (node->list.count >= 3)
     {
-        // With operator child in middle: children[0]=lhs, children[1]=op, children[2]=rhs
         rhs_val = ir_gen_node(ctx, node->list.children[2]);
     }
     else if (node->list.count == 2)
     {
         rhs_val = ir_gen_node(ctx, node->list.children[1]);
     }
-
     if (rhs_val == NULL) return NULL;
 
-    // If LHS is an lvalue (alloca), store the RHS into it
-    symbol_t * sym = NULL;
-    if (node->list.children[0]->type == AST_NODE_IDENTIFIER)
-    {
-        sym = node->list.children[0]->resolved_symbol;
-    }
+    odin_grammar_node_t * lhs_id = expression_unwrap_to_identifier(node->list.children[0]);
+    if (lhs_id == NULL) return rhs_val;
+
+    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), lhs_id->text);
     if (sym && sym->value.is_lvalue && sym->value.value != NULL)
     {
         return LLVMBuildStore(ctx->builder, rhs_val, sym->value.value);
@@ -905,9 +987,12 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         case AST_NODE_IDENTIFIER:
             return ir_gen_identifier(ctx, node);
 
+        // Assignment expression — may contain an assignment operator
+        case AST_NODE_ASSIGN_EXPRESSION:
+            return ir_gen_assign_expression(ctx, node);
+
         // Wrapper expression nodes — delegate to first child
         case AST_NODE_EXPRESSION:
-        case AST_NODE_ASSIGN_EXPRESSION:
         case AST_NODE_OR_RETURN:
         case AST_NODE_OR_ELSE:
         case AST_NODE_TERNARY_EXPRESSION:
