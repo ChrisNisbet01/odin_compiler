@@ -14,6 +14,8 @@
 
 // --- Forward declarations ---
 static LLVMValueRef ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node);
+static LLVMValueRef ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node);
+static odin_grammar_node_t * expression_unwrap_to_identifier(odin_grammar_node_t * node);
 
 // --- Context lifecycle ---
 
@@ -62,6 +64,7 @@ ir_gen_context_create(char const * module_name, TypeDescriptors * type_registry,
     ctx->type_registry = type_registry;
     ctx->gen_ctx = gen_ctx;
     ctx->anon_counter = 0;
+    ctx->loop_depth = 0;
     ir_gen_error_collection_init(&ctx->errors);
 
     return ctx;
@@ -105,10 +108,11 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
 
     if (sym->value.is_lvalue && sym->value.value != NULL)
     {
-        // Don't load arrays/slices — the pointer is needed for GEP/subscript
+        // Don't load composite types — the pointer is needed for GEP/subscript/member access
         if (sym->value.type_info
             && (sym->value.type_info->kind == TD_KIND_ARRAY
-                || sym->value.type_info->kind == TD_KIND_SLICE))
+                || sym->value.type_info->kind == TD_KIND_SLICE
+                || sym->value.type_info->kind == TD_KIND_STRUCT))
         {
             return sym->value.value;
         }
@@ -388,26 +392,61 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     }
     if (operand_node == NULL) return NULL;
 
-    LLVMValueRef operand = ir_gen_node(ctx, operand_node);
-    if (operand == NULL) return NULL;
-
-    LLVMTypeRef operand_type = LLVMTypeOf(operand);
-    LLVMTypeKind type_kind = LLVMGetTypeKind(operand_type);
-    bool is_float = (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
-
     switch (op_md->kind)
     {
-        case OP_UNARY_NEG:
-            return is_float ? LLVMBuildFNeg(ctx->builder, operand, "negtmp")
-                           : LLVMBuildNeg(ctx->builder, operand, "negtmp");
-        case OP_UNARY_POS:
-            return operand;
-        case OP_UNARY_NOT:
-            return LLVMBuildNot(ctx->builder, operand, "nottmp");
-        case OP_UNARY_XOR:
-            return LLVMBuildNot(ctx->builder, operand, "xortmp");
+        case OP_UNARY_ADDR:
+        {
+            LLVMValueRef ptr = ir_gen_lvalue(ctx, operand_node);
+            if (ptr == NULL)
+            {
+                odin_grammar_node_t * ident = expression_unwrap_to_identifier(operand_node);
+                if (ident)
+                {
+                    symbol_t * sym = scope_find_symbol_entry(
+                        generator_current_scope(ctx->gen_ctx), ident->text);
+                    if (sym && sym->value.is_lvalue) ptr = sym->value.value;
+                }
+            }
+            return ptr;
+        }
+
+        case OP_UNARY_DEREF:
+        {
+            LLVMValueRef operand = ir_gen_node(ctx, operand_node);
+            if (operand == NULL) return NULL;
+            LLVMTypeRef ptr_type = LLVMTypeOf(operand);
+            TypeDescriptor const * td = operand_node->resolved_type;
+            if (td && td->kind == TD_KIND_POINTER && td->pointee)
+            {
+                return LLVMBuildLoad2(ctx->builder, td->pointee->llvm_type, operand, "deref");
+            }
+            return LLVMBuildLoad2(ctx->builder, LLVMGetElementType(ptr_type), operand, "deref");
+        }
+
         default:
-            return NULL;
+        {
+            LLVMValueRef operand = ir_gen_node(ctx, operand_node);
+            if (operand == NULL) return NULL;
+
+            LLVMTypeRef operand_type = LLVMTypeOf(operand);
+            LLVMTypeKind type_kind = LLVMGetTypeKind(operand_type);
+            bool is_float = (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
+
+            switch (op_md->kind)
+            {
+                case OP_UNARY_NEG:
+                    return is_float ? LLVMBuildFNeg(ctx->builder, operand, "negtmp")
+                                   : LLVMBuildNeg(ctx->builder, operand, "negtmp");
+                case OP_UNARY_POS:
+                    return operand;
+                case OP_UNARY_NOT:
+                    return LLVMBuildNot(ctx->builder, operand, "nottmp");
+                case OP_UNARY_XOR:
+                    return LLVMBuildNot(ctx->builder, operand, "xortmp");
+                default:
+                    return NULL;
+            }
+        }
     }
 }
 
@@ -640,13 +679,68 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 }
 
+static OperatorKind
+compound_assign_to_binary_op(OperatorKind compound_kind)
+{
+    switch (compound_kind)
+    {
+        case OP_ADD_ASSIGN: return OP_ADD;
+        case OP_SUB_ASSIGN: return OP_SUB;
+        case OP_MUL_ASSIGN: return OP_MUL;
+        case OP_DIV_ASSIGN: return OP_DIV;
+        case OP_MOD_ASSIGN: return OP_MOD;
+        case OP_AND_ASSIGN: return OP_BIT_AND;
+        case OP_OR_ASSIGN:  return OP_BIT_OR;
+        case OP_XOR_ASSIGN: return OP_BIT_XOR;
+        case OP_SHL_ASSIGN: return OP_SHL;
+        case OP_SHR_ASSIGN: return OP_SHR;
+        default:            return OP_INVALID;
+    }
+}
+
+static LLVMValueRef
+ir_gen_binary_op_by_kind(IrGenContext * ctx, LLVMValueRef lhs, LLVMValueRef rhs, OperatorKind kind)
+{
+    if (lhs == NULL || rhs == NULL) return NULL;
+
+    LLVMTypeRef lhs_type = LLVMTypeOf(lhs);
+    LLVMTypeKind type_kind = LLVMGetTypeKind(lhs_type);
+    bool is_float = (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
+
+    switch (kind)
+    {
+        case OP_ADD:     return is_float ? LLVMBuildFAdd(ctx->builder, lhs, rhs, "addtmp") : LLVMBuildAdd(ctx->builder, lhs, rhs, "addtmp");
+        case OP_SUB:     return is_float ? LLVMBuildFSub(ctx->builder, lhs, rhs, "subtmp") : LLVMBuildSub(ctx->builder, lhs, rhs, "subtmp");
+        case OP_MUL:     return is_float ? LLVMBuildFMul(ctx->builder, lhs, rhs, "multmp") : LLVMBuildMul(ctx->builder, lhs, rhs, "multmp");
+        case OP_DIV:     return is_float ? LLVMBuildFDiv(ctx->builder, lhs, rhs, "divtmp") : LLVMBuildSDiv(ctx->builder, lhs, rhs, "divtmp");
+        case OP_MOD:     return is_float ? LLVMBuildFRem(ctx->builder, lhs, rhs, "modtmp") : LLVMBuildSRem(ctx->builder, lhs, rhs, "modtmp");
+        case OP_SHL:     return LLVMBuildShl(ctx->builder, lhs, rhs, "shltmp");
+        case OP_SHR:     return LLVMBuildAShr(ctx->builder, lhs, rhs, "shrtmp");
+        case OP_BIT_AND: return LLVMBuildAnd(ctx->builder, lhs, rhs, "andtmp");
+        case OP_BIT_OR:  return LLVMBuildOr(ctx->builder, lhs, rhs, "ortmp");
+        case OP_BIT_XOR: return LLVMBuildXor(ctx->builder, lhs, rhs, "xortmp");
+        default:         return NULL;
+    }
+}
+
+static LLVMValueRef
+ir_gen_lvalue_ptr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    LLVMValueRef lhs_ptr = ir_gen_lvalue(ctx, node);
+    if (lhs_ptr == NULL)
+    {
+        odin_grammar_node_t * lhs_id = expression_unwrap_to_identifier(node);
+        if (lhs_id == NULL) return NULL;
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), lhs_id->text);
+        if (sym && sym->value.is_lvalue) lhs_ptr = sym->value.value;
+    }
+    return lhs_ptr;
+}
+
 // Handle assignment expressions: AssignExpression = OrReturnExpr (AssignOp OrReturnExpr)?
-// When there's no operator (no assignment), it recurses as a normal expression.
-// When there IS an operator (=, +=, etc.), it stores the RHS into the LHS alloca.
 static LLVMValueRef
 ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
-    // No operator — just a plain OrReturnExpr wrapper, recurse normally
     if (node->list.count < 3)
     {
         if (node->list.count > 0)
@@ -654,39 +748,36 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
-    // Only handle simple = for now
     odin_grammar_node_t * op_node = node_find_op(node);
-    if (op_node)
-    {
-        AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
-        if (op_md && op_md->kind != OP_ASSIGN
-            && op_md->kind != OP_ADD_ASSIGN
-            && op_md->kind != OP_SUB_ASSIGN)
-        {
-            return NULL;
-        }
-    }
+    AstOpMetadata * op_md = (op_node) ? (AstOpMetadata *)op_node->metadata : NULL;
+    OperatorKind op_kind = op_md ? op_md->kind : OP_ASSIGN;
 
-    // Evaluate RHS (children[2])
+    if (op_kind != OP_ASSIGN && compound_assign_to_binary_op(op_kind) == OP_INVALID)
+        return NULL;
+
     LLVMValueRef rhs_val = ir_gen_node(ctx, node->list.children[2]);
     if (rhs_val == NULL) return NULL;
 
-    // Get LHS pointer via lvalue evaluation
-    LLVMValueRef lhs_ptr = ir_gen_lvalue(ctx, node->list.children[0]);
-    if (lhs_ptr == NULL)
+    LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
+    if (lhs_ptr == NULL) return rhs_val;
+
+    LLVMValueRef store_val = rhs_val;
+    if (op_kind != OP_ASSIGN)
     {
-        // Fallback to identifier lookup
-        odin_grammar_node_t * lhs_id = expression_unwrap_to_identifier(node->list.children[0]);
-        if (lhs_id == NULL) return rhs_val;
-        symbol_t * sym = scope_find_symbol_entry(
-            generator_current_scope(ctx->gen_ctx), lhs_id->text);
-        if (sym && sym->value.is_lvalue) lhs_ptr = sym->value.value;
+        OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
+        TypeDescriptor const * lhs_type_desc = NULL;
+        odin_grammar_node_t * lhs_expr = node->list.children[0];
+        // Walk wrappers to find resolved_type
+        odin_grammar_node_t * t = lhs_expr;
+        while (t && t->list.count >= 1 && t->list.children[0]) t = t->list.children[0];
+        if (t) lhs_type_desc = t->resolved_type;
+        if (lhs_type_desc == NULL) lhs_type_desc = type_descriptor_get_int64_type(ctx->type_registry);
+
+        LLVMValueRef lhs_val = LLVMBuildLoad2(ctx->builder, lhs_type_desc->llvm_type, lhs_ptr, "loadtmp");
+        store_val = ir_gen_binary_op_by_kind(ctx, lhs_val, rhs_val, bin_op);
     }
 
-    if (lhs_ptr)
-        return LLVMBuildStore(ctx->builder, rhs_val, lhs_ptr);
-
-    return rhs_val;
+    return LLVMBuildStore(ctx->builder, store_val, lhs_ptr);
 }
 
 static LLVMValueRef
@@ -695,42 +786,34 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     if (node->list.count < 2) return NULL;
 
     odin_grammar_node_t * op_node = node_find_op(node);
-    if (op_node)
-    {
-        AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
-        if (op_md && op_md->kind != OP_ASSIGN
-            && op_md->kind != OP_ADD_ASSIGN
-            && op_md->kind != OP_SUB_ASSIGN)
-        {
-            return NULL;
-        }
-    }
+    AstOpMetadata * op_md = (op_node) ? (AstOpMetadata *)op_node->metadata : NULL;
+    OperatorKind op_kind = op_md ? op_md->kind : OP_ASSIGN;
 
-    LLVMValueRef rhs_val = NULL;
-    if (node->list.count >= 3)
-    {
-        rhs_val = ir_gen_node(ctx, node->list.children[2]);
-    }
-    else if (node->list.count == 2)
-    {
-        rhs_val = ir_gen_node(ctx, node->list.children[1]);
-    }
+    if (op_kind != OP_ASSIGN && compound_assign_to_binary_op(op_kind) == OP_INVALID)
+        return NULL;
+
+    LLVMValueRef rhs_val = ir_gen_node(ctx, node->list.children[2]);
     if (rhs_val == NULL) return NULL;
 
-    LLVMValueRef lhs_ptr = ir_gen_lvalue(ctx, node->list.children[0]);
-    if (lhs_ptr == NULL)
+    LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
+    if (lhs_ptr == NULL) return rhs_val;
+
+    LLVMValueRef store_val = rhs_val;
+    if (op_kind != OP_ASSIGN)
     {
-        odin_grammar_node_t * lhs_id = expression_unwrap_to_identifier(node->list.children[0]);
-        if (lhs_id == NULL) return rhs_val;
-        symbol_t * sym = scope_find_symbol_entry(
-            generator_current_scope(ctx->gen_ctx), lhs_id->text);
-        if (sym && sym->value.is_lvalue) lhs_ptr = sym->value.value;
+        OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
+        TypeDescriptor const * lhs_type_desc = NULL;
+        odin_grammar_node_t * lhs_expr = node->list.children[0];
+        odin_grammar_node_t * t = lhs_expr;
+        while (t && t->list.count >= 1 && t->list.children[0]) t = t->list.children[0];
+        if (t) lhs_type_desc = t->resolved_type;
+        if (lhs_type_desc == NULL) lhs_type_desc = type_descriptor_get_int64_type(ctx->type_registry);
+
+        LLVMValueRef lhs_val = LLVMBuildLoad2(ctx->builder, lhs_type_desc->llvm_type, lhs_ptr, "loadtmp");
+        store_val = ir_gen_binary_op_by_kind(ctx, lhs_val, rhs_val, bin_op);
     }
 
-    if (lhs_ptr)
-        return LLVMBuildStore(ctx->builder, rhs_val, lhs_ptr);
-
-    return rhs_val;
+    return LLVMBuildStore(ctx->builder, store_val, lhs_ptr);
 }
 
 // --- Statement codegen ---
@@ -875,6 +958,14 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "forbody");
     LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "forend");
 
+    // Push loop context for break/continue
+    if (ctx->loop_depth < MAX_LOOP_DEPTH)
+    {
+        ctx->loop_stack[ctx->loop_depth].continue_bb = cond_bb;
+        ctx->loop_stack[ctx->loop_depth].break_bb = end_bb;
+        ctx->loop_depth++;
+    }
+
     LLVMBuildBr(ctx->builder, cond_bb);
 
     // Condition block
@@ -920,6 +1011,172 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         LLVMBuildBr(ctx->builder, cond_bb);
     }
+
+    // Pop loop context
+    if (ctx->loop_depth > 0) ctx->loop_depth--;
+
+    LLVMPositionBuilderAtEnd(ctx->builder, end_bb);
+    return NULL;
+}
+
+static LLVMValueRef
+ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    // SwitchStatement = KwSwitch Directive? Expression? SwitchBody
+    // Children: Expression (optional), SwitchCaseClause(s), SwitchDefaultClause (optional)
+    odin_grammar_node_t * switch_expr = NULL;
+    odin_grammar_node_t * default_case = NULL;
+    odin_grammar_node_t * case_clauses[64];
+    int case_count = 0;
+
+    // Separate children into expression, cases, and default
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child == NULL) continue;
+        if (child->type == AST_NODE_SWITCH_CASE)
+        {
+            if (case_count < 64) case_clauses[case_count++] = child;
+        }
+        else if (child->type == AST_NODE_SWITCH_DEFAULT)
+        {
+            default_case = child;
+        }
+        else if (child->type == AST_NODE_DIRECTIVE || child->type == AST_NODE_DIRECTIVE_WITH_ARGS)
+        {
+            // Skip directives
+        }
+        else
+        {
+            switch_expr = child;
+        }
+    }
+
+    if (switch_expr == NULL) return NULL;
+
+    LLVMValueRef switch_val = ir_gen_node(ctx, switch_expr);
+    if (switch_val == NULL) return NULL;
+
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "swend");
+
+    // Push loop context for break in switch
+    if (ctx->loop_depth < MAX_LOOP_DEPTH)
+    {
+        ctx->loop_stack[ctx->loop_depth].continue_bb = NULL;
+        ctx->loop_stack[ctx->loop_depth].break_bb = end_bb;
+        ctx->loop_depth++;
+    }
+
+    // Create a block for each case + a default block
+    LLVMBasicBlockRef case_bbs[64];
+    LLVMBasicBlockRef next_case_bb = NULL;
+    LLVMBasicBlockRef default_bb = NULL;
+
+    for (int i = 0; i < case_count; i++)
+    {
+        case_bbs[i] = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "case");
+    }
+    if (default_case)
+    {
+        default_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "default");
+    }
+
+    // Build compare-and-branch chain (like if-else)
+    // Each case checks its value and branches to its body; next case on mismatch
+    LLVMBasicBlockRef prev_miss_bb = NULL;
+    for (int i = 0; i < case_count; i++)
+    {
+        odin_grammar_node_t * case_clause = case_clauses[i];
+        // First child of SwitchCaseClause is KwCase (terminal, no child),
+        // then Expression(s) (could be multiple comma-separated values),
+        // then Statement*s.
+        // The case clause body is embedded in this node (not a separate compound stmt).
+
+        if (case_clause->list.count < 1) continue;
+
+        odin_grammar_node_t * case_val_node = NULL;
+        // Find the first expression child for the case value
+        for (size_t ci = 0; ci < case_clause->list.count; ci++)
+        {
+            odin_grammar_node_t * child = case_clause->list.children[ci];
+            if (child == NULL) continue;
+            if (child->type != AST_NODE_COMPOUND_STATEMENT
+                && child->type != AST_NODE_RETURN_STATEMENT
+                && child->type != AST_NODE_BREAK_STATEMENT
+                && child->type != AST_NODE_CONTINUE_STATEMENT
+                && child->type != AST_NODE_EXPRESSION_STATEMENT
+                && child->type != AST_NODE_ASSIGN_STATEMENT
+                && child->type != AST_NODE_VARIABLE_DECL
+                && child->type != AST_NODE_IF_STATEMENT
+                && child->type != AST_NODE_FOR_STATEMENT
+                && child->type != AST_NODE_SWITCH_STATEMENT)
+            {
+                case_val_node = child;
+                break;
+            }
+        }
+
+        if (case_val_node == NULL) continue;
+
+        LLVMValueRef case_val = ir_gen_node(ctx, case_val_node);
+        if (case_val == NULL) continue;
+
+        LLVMBasicBlockRef case_bb = case_bbs[i];
+        LLVMBasicBlockRef miss_bb;
+        if (i < case_count - 1)
+            miss_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "swnext");
+        else if (default_bb)
+            miss_bb = default_bb;
+        else
+            miss_bb = end_bb;
+
+        LLVMValueRef cmp = LLVMBuildICmp(ctx->builder, LLVMIntEQ, switch_val, case_val, "swcmp");
+        LLVMBuildCondBr(ctx->builder, cmp, case_bb, miss_bb);
+
+        // Case body
+        LLVMPositionBuilderAtEnd(ctx->builder, case_bb);
+        for (size_t ci = 1; ci < case_clause->list.count; ci++)
+        {
+            odin_grammar_node_t * stmt = case_clause->list.children[ci];
+            if (stmt == NULL) continue;
+            if (stmt == case_val_node) continue;
+            ir_gen_node(ctx, stmt);
+        }
+        LLVMBasicBlockRef case_block_end = LLVMGetInsertBlock(ctx->builder);
+        LLVMValueRef case_term = LLVMGetLastInstruction(case_block_end);
+        if (case_term == NULL || !LLVMIsATerminatorInst(case_term))
+        {
+            LLVMBuildBr(ctx->builder, end_bb);
+        }
+
+        // Position builder at the miss block for next iteration
+        if (i < case_count - 1)
+        {
+            LLVMPositionBuilderAtEnd(ctx->builder, miss_bb);
+            prev_miss_bb = miss_bb;
+        }
+    }
+
+    // Default case — always position at default_bb
+    if (default_bb)
+    {
+        LLVMPositionBuilderAtEnd(ctx->builder, default_bb);
+        for (size_t ci = 0; ci < default_case->list.count; ci++)
+        {
+            odin_grammar_node_t * stmt = default_case->list.children[ci];
+            if (stmt == NULL) continue;
+            ir_gen_node(ctx, stmt);
+        }
+        LLVMBasicBlockRef def_block_end = LLVMGetInsertBlock(ctx->builder);
+        LLVMValueRef def_term = LLVMGetLastInstruction(def_block_end);
+        if (def_term == NULL || !LLVMIsATerminatorInst(def_term))
+        {
+            LLVMBuildBr(ctx->builder, end_bb);
+        }
+    }
+
+    // Pop loop context
+    if (ctx->loop_depth > 0) ctx->loop_depth--;
 
     LLVMPositionBuilderAtEnd(ctx->builder, end_bb);
     return NULL;
@@ -1315,10 +1572,10 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 LLVMValueRef field_ptr = LLVMBuildInBoundsGEP2(
                     ctx->builder, base_type->llvm_type, val, indices, 2,
                     field_name_node->text);
-                TypeDescriptor const * field_type = type_descriptor_get_struct_field(
+                struct_field_t const * field = type_descriptor_get_struct_field(
                     base_type, field_idx);
-                if (field_type == NULL) break;
-                val = LLVMBuildLoad2(ctx->builder, field_type->llvm_type,
+                if (field == NULL) break;
+                val = LLVMBuildLoad2(ctx->builder, field->type_desc->llvm_type,
                                      field_ptr, "loadtmp");
                 break;
             }
@@ -1418,6 +1675,23 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
         case AST_NODE_FOR_STATEMENT:
             return ir_gen_for_statement(ctx, node);
+
+        case AST_NODE_SWITCH_STATEMENT:
+            return ir_gen_switch_statement(ctx, node);
+
+        case AST_NODE_BREAK_STATEMENT:
+            if (ctx->loop_depth > 0)
+            {
+                LLVMBuildBr(ctx->builder, ctx->loop_stack[ctx->loop_depth - 1].break_bb);
+            }
+            return NULL;
+
+        case AST_NODE_CONTINUE_STATEMENT:
+            if (ctx->loop_depth > 0)
+            {
+                LLVMBuildBr(ctx->builder, ctx->loop_stack[ctx->loop_depth - 1].continue_bb);
+            }
+            return NULL;
 
         case AST_NODE_CONSTANT_DECL:
             return ir_gen_top_level_decl(ctx, node);

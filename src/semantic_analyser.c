@@ -355,17 +355,13 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
         case AST_NODE_POSTFIX_MEMBER:
         {
-            TypeDescriptor const * struct_type = sem_evaluate_expr(ctx, node->list.children[0]);
-            if (struct_type && struct_type->kind == TD_KIND_STRUCT && node->list.children[1])
+            // POSTFIX_MEMBER has 1 child: the field identifier (Dot terminal has no AST action)
+            if (node->list.count >= 1 && node->list.children[0] && node->list.children[0]->text)
             {
-                char const * field_name = node->list.children[1]->text;
-                int idx = type_descriptor_find_struct_field_index(struct_type, field_name);
-                if (idx >= 0)
-                {
-                    struct_field_t const * field = type_descriptor_get_struct_field(struct_type, idx);
-                    node->resolved_type = (TypeDescriptor *)field->type_desc;
-                    return field->type_desc;
-                }
+                // The base struct type must come from the parent POSTFIX_EXPRESSION's first child
+                // This case is a fallback; normally handled inside POSTFIX_EXPRESSION's postfix_ops loop
+                char const * field_name = node->list.children[0]->text;
+                (void)field_name;
             }
             return NULL;
         }
@@ -392,9 +388,9 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
             TypeDescriptor const * type = sem_evaluate_expr(ctx, node->list.children[0]);
 
-            if (node->list.count < 2) return type;
+            if (node->list.count < 2) { node->resolved_type = (TypeDescriptor *)type; return type; }
             odin_grammar_node_t * postfix_ops = node->list.children[1];
-            if (postfix_ops == NULL) return type;
+            if (postfix_ops == NULL) { node->resolved_type = (TypeDescriptor *)type; return type; }
 
             for (size_t i = 0; i < postfix_ops->list.count; i++)
             {
@@ -412,9 +408,9 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                         break;
 
                     case AST_NODE_POSTFIX_MEMBER:
-                        if (type && type->kind == TD_KIND_STRUCT && op->list.count >= 2 && op->list.children[1])
+                        if (type && type->kind == TD_KIND_STRUCT && op->list.count >= 1 && op->list.children[0])
                         {
-                            char const * field_name = op->list.children[1]->text;
+                            char const * field_name = op->list.children[0]->text;
                             int idx = type_descriptor_find_struct_field_index(type, field_name);
                             if (idx >= 0)
                             {
@@ -837,6 +833,65 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             }
             break;
         }
+
+        case AST_NODE_SWITCH_STATEMENT:
+        {
+            for (size_t i = 0; i < node->list.count; i++)
+            {
+                odin_grammar_node_t * child = node->list.children[i];
+                if (child == NULL) continue;
+                if (child->type == AST_NODE_SWITCH_CASE)
+                {
+                    // Children: case value expression(s), then body statement(s)
+                    for (size_t j = 0; j < child->list.count; j++)
+                    {
+                        odin_grammar_node_t * case_child = child->list.children[j];
+                        if (case_child == NULL) continue;
+                        if (case_child->type == AST_NODE_COMPOUND_STATEMENT
+                            || case_child->type == AST_NODE_RETURN_STATEMENT
+                            || case_child->type == AST_NODE_BREAK_STATEMENT
+                            || case_child->type == AST_NODE_CONTINUE_STATEMENT
+                            || case_child->type == AST_NODE_FALLTHROUGH_STATEMENT
+                            || case_child->type == AST_NODE_EXPRESSION_STATEMENT
+                            || case_child->type == AST_NODE_ASSIGN_STATEMENT
+                            || case_child->type == AST_NODE_VARIABLE_DECL
+                            || case_child->type == AST_NODE_IF_STATEMENT
+                            || case_child->type == AST_NODE_FOR_STATEMENT
+                            || case_child->type == AST_NODE_SWITCH_STATEMENT
+                            || case_child->type == AST_NODE_DEFER_STATEMENT)
+                        {
+                            sem_pass2_node(ctx, case_child, expected_return_type);
+                        }
+                        else
+                        {
+                            sem_evaluate_expr(ctx, case_child);
+                        }
+                    }
+                }
+                else if (child->type == AST_NODE_SWITCH_DEFAULT)
+                {
+                    for (size_t j = 0; j < child->list.count; j++)
+                    {
+                        odin_grammar_node_t * def_child = child->list.children[j];
+                        if (def_child == NULL) continue;
+                        sem_pass2_node(ctx, def_child, expected_return_type);
+                    }
+                }
+                else if (child->type == AST_NODE_COMPOUND_STATEMENT)
+                {
+                    sem_analyse_compound_statement(ctx, child, expected_return_type);
+                }
+                else
+                {
+                    sem_evaluate_expr(ctx, child);
+                }
+            }
+            break;
+        }
+
+        case AST_NODE_BREAK_STATEMENT:
+        case AST_NODE_CONTINUE_STATEMENT:
+            break;
 
         default:
             break;

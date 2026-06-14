@@ -10,6 +10,14 @@
 #include <llvm-c/TargetMachine.h>
 #include <stdbool.h>
 
+#define MAX_LOOP_DEPTH 64
+
+typedef struct
+{
+    LLVMBasicBlockRef continue_bb;
+    LLVMBasicBlockRef break_bb;
+} LoopContext;
+
 typedef struct
 {
     LLVMContextRef context;
@@ -26,6 +34,9 @@ typedef struct
     IrGenErrorCollection errors;
 
     int anon_counter;
+
+    LoopContext loop_stack[MAX_LOOP_DEPTH];
+    int loop_depth;
 } IrGenContext;
 
 IrGenContext * ir_gen_context_create(char const * module_name, TypeDescriptors * type_registry, GeneratorContext * gen_ctx);
