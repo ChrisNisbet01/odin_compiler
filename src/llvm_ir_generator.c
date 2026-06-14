@@ -105,6 +105,14 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
 
     if (sym->value.is_lvalue && sym->value.value != NULL)
     {
+        // Don't load arrays/slices — the pointer is needed for GEP/subscript
+        if (sym->value.type_info
+            && (sym->value.type_info->kind == TD_KIND_ARRAY
+                || sym->value.type_info->kind == TD_KIND_SLICE))
+        {
+            return sym->value.value;
+        }
+
         // Load from alloca to get the value
         // Use the type from type_info (not LLVMGetElementType, which breaks with opaque pointers)
         LLVMTypeRef elem_type = sym->value.type_info ? sym->value.type_info->llvm_type : NULL;
@@ -157,10 +165,56 @@ ir_gen_bool_value(IrGenContext * ctx, odin_grammar_node_t * node)
 static LLVMValueRef
 ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node)
 {
-    (void)ctx;
-    (void)node;
-    // String literals not yet implemented; return null pointer placeholder
-    return LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+    if (node->text == NULL) return LLVMConstNull(LLVMStructType(NULL, 0, false));
+
+    char const * text = node->text;
+    size_t text_len = strlen(text);
+
+    // Strip surrounding quotes/backticks
+    char const * content = text;
+    size_t content_len = text_len;
+    if (text_len >= 2 && (text[0] == '"' || text[0] == '`'))
+    {
+        content = text + 1;
+        content_len = text_len - 2;
+    }
+
+    // Build [N x i8] constant (with null terminator)
+    size_t arr_len = content_len + 1;
+    LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
+    LLVMValueRef * elements = malloc(arr_len * sizeof(LLVMValueRef));
+    if (elements == NULL) return NULL;
+
+    for (size_t i = 0; i < content_len; i++)
+        elements[i] = LLVMConstInt(i8_type, (unsigned char)content[i], false);
+    elements[content_len] = LLVMConstInt(i8_type, 0, false); // null terminator
+
+    LLVMTypeRef arr_type = LLVMArrayType(i8_type, arr_len);
+    LLVMValueRef arr_const = LLVMConstArray(i8_type, elements, arr_len);
+    free(elements);
+
+    // Private global constant
+    LLVMValueRef global = LLVMAddGlobal(ctx->module, arr_type, ".str");
+    LLVMSetInitializer(global, arr_const);
+    LLVMSetLinkage(global, LLVMPrivateLinkage);
+    LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
+    LLVMSetGlobalConstant(global, true);
+
+    // GEP to i8* pointer to first element (constant expression)
+    LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    LLVMValueRef indices[] = { zero, zero };
+    LLVMTypeRef i8_ptr_type = LLVMPointerType(i8_type, 0);
+    LLVMValueRef ptr = LLVMConstInBoundsGEP2(arr_type, global, indices, 2);
+
+    // Build {i8*, i64} string struct as a constant
+    TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
+    LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : LLVMStructType(NULL, 0, false);
+
+    LLVMValueRef len_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), content_len, false);
+    LLVMValueRef struct_vals[] = { ptr, len_val };
+    LLVMValueRef str_val = LLVMConstNamedStruct(str_type, struct_vals, 2);
+
+    return str_val;
 }
 
 static LLVMValueRef
@@ -439,6 +493,7 @@ is_expression_wrapper_type(odin_grammar_node_type_t type)
     switch (type)
     {
         case AST_NODE_EXPRESSION:
+        case AST_NODE_ASSIGN_EXPRESSION:
         case AST_NODE_OR_RETURN:
         case AST_NODE_OR_ELSE:
         case AST_NODE_TERNARY_EXPRESSION:
@@ -476,6 +531,115 @@ expression_unwrap_to_identifier(odin_grammar_node_t * node)
     return NULL;
 }
 
+// Evaluate a node as an lvalue (return a pointer to the storage location).
+static LLVMValueRef
+ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node == NULL) return NULL;
+
+    switch (node->type)
+    {
+        case AST_NODE_IDENTIFIER:
+        {
+            symbol_t * sym = scope_find_symbol_entry(
+                generator_current_scope(ctx->gen_ctx), node->text);
+            if (sym && sym->value.is_lvalue) return sym->value.value;
+            return NULL;
+        }
+
+        case AST_NODE_POSTFIX_EXPRESSION:
+        {
+            if (node->list.count < 2) return ir_gen_lvalue(ctx, node->list.children[0]);
+            odin_grammar_node_t * base = node->list.children[0];
+            odin_grammar_node_t * postfix_ops = node->list.children[1];
+            if (postfix_ops == NULL) return ir_gen_lvalue(ctx, base);
+
+            LLVMValueRef ptr = ir_gen_lvalue(ctx, base);
+            if (ptr == NULL) return NULL;
+
+            for (size_t i = 0; i < postfix_ops->list.count; i++)
+            {
+                odin_grammar_node_t * op = postfix_ops->list.children[i];
+                if (op == NULL) continue;
+
+                switch (op->type)
+                {
+                    case AST_NODE_POSTFIX_SUBSCRIPT:
+                    {
+                        odin_grammar_node_t * index_expr = NULL;
+                        for (size_t ci = 0; ci < op->list.count; ci++)
+                        {
+                            if (op->list.children[ci] != NULL)
+                            {
+                                index_expr = op->list.children[ci];
+                                break;
+                            }
+                        }
+                        if (index_expr == NULL) return NULL;
+
+                        LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
+                        if (index_val == NULL) return NULL;
+
+                        TypeDescriptor const * base_type = base->resolved_type;
+                        if (base_type == NULL || base_type->kind != TD_KIND_ARRAY) return NULL;
+
+                        LLVMTypeRef arr_type = base_type->llvm_type;
+                        LLVMValueRef indices[] = {
+                            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                            index_val
+                        };
+                        ptr = LLVMBuildInBoundsGEP2(
+                            ctx->builder, arr_type, ptr, indices, 2, "subs");
+                        break;
+                    }
+
+                    case AST_NODE_POSTFIX_MEMBER:
+                    {
+                        odin_grammar_node_t * field_name_node = NULL;
+                        for (size_t ci = 0; ci < op->list.count; ci++)
+                        {
+                            odin_grammar_node_t * child = op->list.children[ci];
+                            if (child != NULL && child->type == AST_NODE_IDENTIFIER)
+                            {
+                                field_name_node = child;
+                                break;
+                            }
+                        }
+                        if (field_name_node == NULL || field_name_node->text == NULL) return NULL;
+
+                        TypeDescriptor const * base_type = base->resolved_type;
+                        if (base_type == NULL || base_type->kind != TD_KIND_STRUCT) return NULL;
+
+                        int field_idx = type_descriptor_find_struct_field_index(
+                            base_type, field_name_node->text);
+                        if (field_idx < 0) return NULL;
+
+                        LLVMValueRef indices[] = {
+                            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (unsigned)field_idx, false)
+                        };
+                        ptr = LLVMBuildInBoundsGEP2(
+                            ctx->builder, base_type->llvm_type, ptr, indices, 2,
+                            field_name_node->text);
+                        break;
+                    }
+
+                    default:
+                        break;
+                }
+            }
+            return ptr;
+        }
+
+        default:
+        {
+            if (is_expression_wrapper_type(node->type) && node->list.count > 0)
+                return ir_gen_lvalue(ctx, node->list.children[0]);
+            return NULL;
+        }
+    }
+}
+
 // Handle assignment expressions: AssignExpression = OrReturnExpr (AssignOp OrReturnExpr)?
 // When there's no operator (no assignment), it recurses as a normal expression.
 // When there IS an operator (=, +=, etc.), it stores the RHS into the LHS alloca.
@@ -507,15 +671,20 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMValueRef rhs_val = ir_gen_node(ctx, node->list.children[2]);
     if (rhs_val == NULL) return NULL;
 
-    // Look up LHS symbol directly and store
-    odin_grammar_node_t * lhs_id = expression_unwrap_to_identifier(node->list.children[0]);
-    if (lhs_id == NULL) return rhs_val;
-
-    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), lhs_id->text);
-    if (sym && sym->value.is_lvalue && sym->value.value != NULL)
+    // Get LHS pointer via lvalue evaluation
+    LLVMValueRef lhs_ptr = ir_gen_lvalue(ctx, node->list.children[0]);
+    if (lhs_ptr == NULL)
     {
-        return LLVMBuildStore(ctx->builder, rhs_val, sym->value.value);
+        // Fallback to identifier lookup
+        odin_grammar_node_t * lhs_id = expression_unwrap_to_identifier(node->list.children[0]);
+        if (lhs_id == NULL) return rhs_val;
+        symbol_t * sym = scope_find_symbol_entry(
+            generator_current_scope(ctx->gen_ctx), lhs_id->text);
+        if (sym && sym->value.is_lvalue) lhs_ptr = sym->value.value;
     }
+
+    if (lhs_ptr)
+        return LLVMBuildStore(ctx->builder, rhs_val, lhs_ptr);
 
     return rhs_val;
 }
@@ -548,14 +717,18 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     }
     if (rhs_val == NULL) return NULL;
 
-    odin_grammar_node_t * lhs_id = expression_unwrap_to_identifier(node->list.children[0]);
-    if (lhs_id == NULL) return rhs_val;
-
-    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), lhs_id->text);
-    if (sym && sym->value.is_lvalue && sym->value.value != NULL)
+    LLVMValueRef lhs_ptr = ir_gen_lvalue(ctx, node->list.children[0]);
+    if (lhs_ptr == NULL)
     {
-        return LLVMBuildStore(ctx->builder, rhs_val, sym->value.value);
+        odin_grammar_node_t * lhs_id = expression_unwrap_to_identifier(node->list.children[0]);
+        if (lhs_id == NULL) return rhs_val;
+        symbol_t * sym = scope_find_symbol_entry(
+            generator_current_scope(ctx->gen_ctx), lhs_id->text);
+        if (sym && sym->value.is_lvalue) lhs_ptr = sym->value.value;
     }
+
+    if (lhs_ptr)
+        return LLVMBuildStore(ctx->builder, rhs_val, lhs_ptr);
 
     return rhs_val;
 }
@@ -752,73 +925,120 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     return NULL;
 }
 
+// --- Procedure parameter registration ---
+
+static void
+ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, LLVMValueRef func)
+{
+    odin_grammar_node_t * sig_node = node_find_child(proc_literal, AST_NODE_PROCEDURE_SIGNATURE);
+    if (sig_node == NULL) return;
+
+    odin_grammar_node_t * param_list_node = NULL;
+    for (size_t i = 0; i < sig_node->list.count; i++)
+    {
+        odin_grammar_node_t * child = sig_node->list.children[i];
+        if (child && child->type == AST_NODE_PARAMETER_LIST)
+        {
+            param_list_node = child;
+            break;
+        }
+    }
+    if (param_list_node == NULL || param_list_node->list.count == 0) return;
+
+    odin_grammar_node_t * params = param_list_node->list.children[0];
+    if (params == NULL || params->type != AST_NODE_PARAMETERS) return;
+
+    unsigned param_index = 0;
+    for (size_t k = 0; k < params->list.count; k++)
+    {
+        odin_grammar_node_t * param = params->list.children[k];
+        if (param == NULL || param->type != AST_NODE_PARAMETER) continue;
+
+        odin_grammar_node_t * param_ident = NULL;
+        odin_grammar_node_t * param_type_node = NULL;
+        for (size_t ci = 0; ci < param->list.count; ci++)
+        {
+            odin_grammar_node_t * child = param->list.children[ci];
+            if (child == NULL) continue;
+            if (child->type == AST_NODE_IDENTIFIER && param_ident == NULL)
+                param_ident = child;
+            else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child))
+                param_type_node = child;
+        }
+        if (param_type_node == NULL)
+        {
+            for (size_t ci = param->list.count; ci > 0; ci--)
+            {
+                odin_grammar_node_t * child = param->list.children[ci - 1];
+                if (child == NULL) continue;
+                if (child->type == AST_NODE_IDENTIFIER && child != param_ident)
+                {
+                    param_type_node = child;
+                    break;
+                }
+            }
+        }
+        if (param_ident == NULL || param_type_node == NULL) continue;
+
+        TypeDescriptor const * param_type = param_type_node->resolved_type;
+        if (param_type == NULL) continue;
+
+        LLVMValueRef param_val = LLVMGetParam(func, param_index);
+        LLVMTypeRef llvm_type = param_type->llvm_type;
+        LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, llvm_type, param_ident->text);
+        LLVMSetAlignment(alloca, LLVMABIAlignmentOfType(ctx->data_layout, llvm_type));
+        LLVMBuildStore(ctx->builder, param_val, alloca);
+
+        TypedValue tv = create_typed_value(alloca, param_type, true);
+        generator_add_symbol(ctx->gen_ctx, param_ident->text, tv);
+
+        param_index++;
+    }
+}
+
 // --- Procedure literal codegen ---
 
 static LLVMValueRef
 ir_gen_procedure_literal(IrGenContext * ctx, odin_grammar_node_t * node)
 {
-    odin_grammar_node_t * sig_node = NULL;
-    odin_grammar_node_t * body_node = NULL;
+    odin_grammar_node_t * body_node = node_find_child(node, AST_NODE_COMPOUND_STATEMENT);
 
-    for (size_t i = 0; i < node->list.count; i++)
-    {
-        odin_grammar_node_t * child = node->list.children[i];
-        if (child->type == AST_NODE_PROCEDURE_SIGNATURE) sig_node = child;
-        if (child->type == AST_NODE_COMPOUND_STATEMENT) body_node = child;
-    }
+    TypeDescriptor const * proc_type = node->resolved_type;
+    if (proc_type == NULL || proc_type->kind != TD_KIND_PROC) return NULL;
 
-    if (sig_node == NULL) return NULL;
-
-    TypeDescriptor const * return_type = NULL;
-    for (size_t i = 0; i < sig_node->list.count; i++)
-    {
-        odin_grammar_node_t * child = sig_node->list.children[i];
-        if (child->type == AST_NODE_RETURNS && child->list.count > 0)
-        {
-            odin_grammar_node_t * type_expr = child->list.children[0];
-            return_type = type_expr->resolved_type;
-        }
-    }
-
-    if (return_type == NULL)
-    {
-        return_type = type_descriptor_get_void_type(ctx->type_registry);
-    }
-
-    LLVMTypeRef ret_llvm = return_type->llvm_type;
-    LLVMTypeRef func_type = LLVMFunctionType(ret_llvm, NULL, 0, false);
-
-    char const * func_name = generate_anon_name(&ctx->anon_counter, "proc");
-    LLVMValueRef func = LLVMAddFunction(ctx->module, func_name, func_type);
+    LLVMValueRef func = LLVMAddFunction(ctx->module,
+        generate_anon_name(&ctx->anon_counter, "proc"),
+        proc_type->llvm_type);
 
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
     LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
     ctx->current_function = func;
-    ctx->current_return_type = return_type;
+    ctx->current_return_type = proc_type->proc_metadata.return_type;
+
+    generator_push_scope(ctx->gen_ctx);
+    ir_gen_register_params(ctx, node, func);
 
     if (body_node)
     {
-        generator_push_scope(ctx->gen_ctx);
         ir_gen_compound_statement(ctx, body_node);
-        generator_pop_scope(ctx->gen_ctx);
     }
 
-    // If the last instruction wasn't a terminator, add a default ret
     LLVMBasicBlockRef current_block = LLVMGetInsertBlock(ctx->builder);
     LLVMValueRef last_inst = LLVMGetLastInstruction(current_block);
     if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
     {
-        if (return_type == type_descriptor_get_void_type(ctx->type_registry))
+        if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
         {
             LLVMBuildRetVoid(ctx->builder);
         }
         else
         {
-            LLVMBuildRet(ctx->builder, LLVMConstNull(ret_llvm));
+            LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
         }
     }
 
+    generator_pop_scope(ctx->gen_ctx);
     ctx->current_function = NULL;
     ctx->current_return_type = NULL;
 
@@ -839,57 +1059,44 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
     if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
     {
-        odin_grammar_node_t * sig_node = node_find_child(value_node, AST_NODE_PROCEDURE_SIGNATURE);
+        TypeDescriptor const * proc_type = value_node->resolved_type;
+        if (proc_type == NULL || proc_type->kind != TD_KIND_PROC) return NULL;
 
-        TypeDescriptor const * return_type = NULL;
-        for (size_t i = 0; i < (sig_node ? sig_node->list.count : 0); i++)
-        {
-            odin_grammar_node_t * child = sig_node->list.children[i];
-            if (child->type == AST_NODE_RETURNS && child->list.count > 0)
-            {
-                return_type = child->list.children[0]->resolved_type;
-            }
-        }
-        if (return_type == NULL)
-        {
-            return_type = type_descriptor_get_void_type(ctx->type_registry);
-        }
-
-        LLVMTypeRef ret_llvm = return_type->llvm_type;
-        LLVMTypeRef func_type = LLVMFunctionType(ret_llvm, NULL, 0, false);
-
-        LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, func_type);
+        LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, proc_type->llvm_type);
 
         LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
         LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
         ctx->current_function = func;
-        ctx->current_return_type = return_type;
+        ctx->current_return_type = proc_type->proc_metadata.return_type;
 
         odin_grammar_node_t * body_node = node_find_child(value_node, AST_NODE_COMPOUND_STATEMENT);
+
+        generator_push_scope(ctx->gen_ctx);
+        ir_gen_register_params(ctx, value_node, func);
+
         if (body_node)
         {
-            generator_push_scope(ctx->gen_ctx);
             ir_gen_compound_statement(ctx, body_node);
-            generator_pop_scope(ctx->gen_ctx);
         }
 
         LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
         LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);
         if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
         {
-            if (return_type == type_descriptor_get_void_type(ctx->type_registry))
+            if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
             {
                 LLVMBuildRetVoid(ctx->builder);
             }
             else
             {
-                LLVMBuildRet(ctx->builder, LLVMConstNull(ret_llvm));
+                LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
             }
         }
 
-        // Update the symbol with the LLVM function value
-        TypedValue tv = create_typed_value(func, return_type, false);
+        generator_pop_scope(ctx->gen_ctx);
+
+        TypedValue tv = create_typed_value(func, proc_type, false);
         generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
 
         ctx->current_function = NULL;
@@ -954,6 +1161,176 @@ ir_gen_top_level_variable(IrGenContext * ctx, odin_grammar_node_t * node)
     return global;
 }
 
+// --- Postfix expression / call codegen ---
+
+// Walk a comma-chained Expression tree to collect individual argument values.
+// Comma is a terminal (lexeme) so it produces no AST node.
+// chainl1(AssignExpression, Comma) produces a left-associative tree:
+//   Expr(Expr(a, b), c)   for a, b, c
+static int
+ir_gen_collect_call_args(IrGenContext * ctx, odin_grammar_node_t * node, LLVMValueRef * args, int max_args)
+{
+    if (node == NULL || max_args <= 0) return 0;
+
+    // Detect comma-chainl1: AST_NODE_EXPRESSION with >=2 children
+    if (node->type == AST_NODE_EXPRESSION && node->list.count >= 2)
+    {
+        // children[0] is the left sub-chain, children[last] is the rightmost operand
+        odin_grammar_node_t * last = node->list.children[node->list.count - 1];
+        int count = ir_gen_collect_call_args(ctx, node->list.children[0], args, max_args);
+        if (count < max_args && last != NULL)
+        {
+            args[count] = ir_gen_node(ctx, last);
+            count++;
+        }
+        return count;
+    }
+
+    // Single expression — evaluate directly
+    args[0] = ir_gen_node(ctx, node);
+    return args[0] ? 1 : 0;
+}
+
+static LLVMValueRef
+ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1) return NULL;
+
+    // Evaluate PrimaryExpression (children[0]) — gets the function pointer
+    LLVMValueRef val = ir_gen_node(ctx, node->list.children[0]);
+
+    // Process PostfixOps if present (children[1])
+    if (node->list.count < 2) return val;
+    odin_grammar_node_t * postfix_ops = node->list.children[1];
+    if (postfix_ops == NULL || postfix_ops->type != AST_NODE_POSTFIX_OPS) return val;
+
+    for (size_t i = 0; i < postfix_ops->list.count; i++)
+    {
+        odin_grammar_node_t * op = postfix_ops->list.children[i];
+        if (op == NULL) continue;
+
+        switch (op->type)
+        {
+            case AST_NODE_POSTFIX_CALL:
+            {
+                // Get the function type from the callee symbol
+                odin_grammar_node_t * ident = expression_unwrap_to_identifier(
+                    node->list.children[0]);
+                TypeDescriptor const * proc_type = NULL;
+                if (ident)
+                {
+                    symbol_t * sym = scope_find_symbol_entry(
+                        generator_current_scope(ctx->gen_ctx), ident->text);
+                    if (sym) proc_type = sym->value.type_info;
+                }
+                if (proc_type == NULL || proc_type->kind != TD_KIND_PROC) return val;
+
+                LLVMTypeRef func_type = proc_type->llvm_type;
+
+                // Collect arguments from ArgumentList (comma-chain expression)
+                LLVMValueRef args[128];
+                int arg_count = 0;
+
+                if (op->list.count > 0 && op->list.children[0] != NULL)
+                {
+                    // Unwrap ArgumentList -> Expression (comma chain)
+                    odin_grammar_node_t * arg_expr = op->list.children[0];
+                    if (arg_expr->type == AST_NODE_ARGUMENT_LIST && arg_expr->list.count > 0)
+                        arg_expr = arg_expr->list.children[0];
+                    arg_count = ir_gen_collect_call_args(
+                        ctx, arg_expr, args, 128);
+                }
+
+                val = LLVMBuildCall2(ctx->builder, func_type, val,
+                                    args, (unsigned)arg_count, "calltmp");
+                break;
+            }
+
+            case AST_NODE_POSTFIX_SUBSCRIPT:
+            {
+                // Find the index expression (skip NULL terminal children)
+                odin_grammar_node_t * index_expr = NULL;
+                for (size_t ci = 0; ci < op->list.count; ci++)
+                {
+                    odin_grammar_node_t * child = op->list.children[ci];
+                    if (child != NULL)
+                    {
+                        index_expr = child;
+                        break;
+                    }
+                }
+                if (index_expr == NULL) break;
+
+                LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
+                if (index_val == NULL) break;
+
+                // Get the type from the base expression's resolved_type
+                odin_grammar_node_t * base = node->list.children[0];
+                TypeDescriptor const * base_type = base ? base->resolved_type : NULL;
+                if (base_type == NULL) break;
+
+                if (base_type->kind == TD_KIND_ARRAY)
+                {
+                    LLVMTypeRef arr_type = base_type->llvm_type;
+                    LLVMValueRef indices[] = {
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                        index_val
+                    };
+                    LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(
+                        ctx->builder, arr_type, val, indices, 2, "subs");
+                    TypeDescriptor const * elem_type = base_type->element_type;
+                    if (elem_type == NULL) break;
+                    val = LLVMBuildLoad2(ctx->builder, elem_type->llvm_type, elem_ptr, "subtmp");
+                }
+                break;
+            }
+
+            case AST_NODE_POSTFIX_MEMBER:
+            {
+                // PostfixOpMember = Dot Identifier
+                odin_grammar_node_t * field_name_node = NULL;
+                for (size_t ci = 0; ci < op->list.count; ci++)
+                {
+                    odin_grammar_node_t * child = op->list.children[ci];
+                    if (child != NULL && child->type == AST_NODE_IDENTIFIER)
+                    {
+                        field_name_node = child;
+                        break;
+                    }
+                }
+                if (field_name_node == NULL || field_name_node->text == NULL) break;
+
+                odin_grammar_node_t * base = node->list.children[0];
+                TypeDescriptor const * base_type = base ? base->resolved_type : NULL;
+                if (base_type == NULL || base_type->kind != TD_KIND_STRUCT) break;
+
+                int field_idx = type_descriptor_find_struct_field_index(
+                    base_type, field_name_node->text);
+                if (field_idx < 0) break;
+
+                LLVMValueRef indices[] = {
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (unsigned)field_idx, false)
+                };
+                LLVMValueRef field_ptr = LLVMBuildInBoundsGEP2(
+                    ctx->builder, base_type->llvm_type, val, indices, 2,
+                    field_name_node->text);
+                TypeDescriptor const * field_type = type_descriptor_get_struct_field(
+                    base_type, field_idx);
+                if (field_type == NULL) break;
+                val = LLVMBuildLoad2(ctx->builder, field_type->llvm_type,
+                                     field_ptr, "loadtmp");
+                break;
+            }
+
+            default:
+                break;
+        }
+    }
+
+    return val;
+}
+
 // --- Main node dispatcher ---
 
 static LLVMValueRef
@@ -991,13 +1368,16 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         case AST_NODE_ASSIGN_EXPRESSION:
             return ir_gen_assign_expression(ctx, node);
 
+        // Postfix expression — handles calls through PostfixOps chain
+        case AST_NODE_POSTFIX_EXPRESSION:
+            return ir_gen_postfix_expression(ctx, node);
+
         // Wrapper expression nodes — delegate to first child
         case AST_NODE_EXPRESSION:
         case AST_NODE_OR_RETURN:
         case AST_NODE_OR_ELSE:
         case AST_NODE_TERNARY_EXPRESSION:
         case AST_NODE_PRIMARY_EXPRESSION:
-        case AST_NODE_POSTFIX_EXPRESSION:
             return ir_gen_expression(ctx, node);
 
         // Binary expression nodes — handle with operator dispatch
