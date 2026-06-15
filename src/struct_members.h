@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -9,6 +10,7 @@ typedef struct
 {
     char const * name;
     TypeDescriptor const * type_desc;
+    bool is_using;
     uint64_t offset;
     unsigned bit_offset;
     unsigned bit_width;

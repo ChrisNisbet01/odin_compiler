@@ -301,7 +301,28 @@ DEFINE_ACTION(ast_action_union_field_action, AST_NODE_UNION_FIELD)
 DEFINE_ACTION(ast_action_union_field_list_action, AST_NODE_UNION_FIELD_LIST)
 DEFINE_ACTION(ast_action_bit_field_field_action, AST_NODE_BIT_FIELD_FIELD)
 DEFINE_ACTION(ast_action_bit_field_field_list_action, AST_NODE_BIT_FIELD_FIELD_LIST)
-DEFINE_ACTION(ast_action_struct_field_action, AST_NODE_STRUCT_FIELD)
+static void
+ast_action_struct_field_action(
+    epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node,
+    void ** children, int count, void * user_data)
+{
+    (void)user_data;
+    odin_grammar_node_t * result = calloc(1, sizeof(odin_grammar_node_t));
+    result->type = AST_NODE_STRUCT_FIELD;
+    result->list.children = calloc((size_t)count, sizeof(odin_grammar_node_t *));
+    result->list.count = (size_t)count;
+    for (int i = 0; i < count; i++)
+    {
+        result->list.children[i] = (odin_grammar_node_t *)children[i];
+    }
+    // Detect "using" keyword from CPT content (stored as text on the struct field node)
+    char const * content = epc_cpt_node_get_content(node);
+    if (content != NULL && content[0] == 'u' && strncmp(content, "using", 5) == 0)
+    {
+        result->text = strdup("using");
+    }
+    epc_ast_push(ctx, result);
+}
 DEFINE_ACTION(ast_action_struct_field_list_action, AST_NODE_STRUCT_FIELD_LIST)
 
 // --- Terminal nodes (text captured for semantic use) ---

@@ -154,11 +154,13 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                 (size_t)field_count * sizeof(TypeDescriptor const *));
             LLVMTypeRef * llvm_field_types = malloc(
                 (size_t)field_count * sizeof(LLVMTypeRef));
-            if (field_names == NULL || field_types == NULL || llvm_field_types == NULL)
+            bool * field_is_using = malloc((size_t)field_count * sizeof(bool));
+            if (field_names == NULL || field_types == NULL || llvm_field_types == NULL || field_is_using == NULL)
             {
                 free((void *)field_names);
                 free((void *)field_types);
                 free(llvm_field_types);
+                free(field_is_using);
                 return NULL;
             }
 
@@ -167,6 +169,9 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             {
                 odin_grammar_node_t * field = field_list->list.children[i];
                 if (field == NULL || field->type != AST_NODE_STRUCT_FIELD) continue;
+
+                // Detect "using" keyword (stored as text by the struct field action)
+                bool is_using = (field->text != NULL && strcmp(field->text, "using") == 0);
 
                 // Find field name (first Identifier child)
                 odin_grammar_node_t * name_node = NULL;
@@ -189,6 +194,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                 field_names[fi] = name_node->text;
                 field_types[fi] = ftype;
                 llvm_field_types[fi] = ftype->llvm_type;
+                field_is_using[fi] = is_using;
                 fi++;
             }
 
@@ -197,6 +203,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                 free((void *)field_names);
                 free((void *)field_types);
                 free(llvm_field_types);
+                free(field_is_using);
                 return NULL;
             }
 
@@ -211,6 +218,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             {
                 members.fields[j].name = field_names[j];
                 members.fields[j].type_desc = field_types[j];
+                members.fields[j].is_using = field_is_using[j];
                 members.fields[j].offset = 0;
                 members.fields[j].bit_offset = 0;
                 members.fields[j].bit_width = 0;
@@ -223,6 +231,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             free((void *)field_names);
             free((void *)field_types);
             free(llvm_field_types);
+            free(field_is_using);
             free(members.fields);
 
             if (struct_td) node->resolved_type = (TypeDescriptor *)struct_td;
@@ -411,11 +420,19 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                         if (type && type->kind == TD_KIND_STRUCT && op->list.count >= 1 && op->list.children[0])
                         {
                             char const * field_name = op->list.children[0]->text;
-                            int idx = type_descriptor_find_struct_field_index(type, field_name);
-                            if (idx >= 0)
+                            field_access_path_t path;
+                            if (type_descriptor_find_struct_field_path(type, field_name, &path))
                             {
-                                struct_field_t const * field = type_descriptor_get_struct_field(type, idx);
-                                type = field->type_desc;
+                                TypeDescriptor const * cur_type = type;
+                                for (int pi = 0; pi < path.count; pi++)
+                                {
+                                    struct_field_t const * f = type_descriptor_get_struct_field(cur_type, path.indices[pi]);
+                                    if (f == NULL) break;
+                                    if (pi == path.count - 1)
+                                        type = f->type_desc;
+                                    else
+                                        cur_type = f->type_desc;
+                                }
                                 op->resolved_type = (TypeDescriptor *)type;
                             }
                         }
@@ -728,7 +745,9 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             break;
 
         case AST_NODE_COMPOUND_STATEMENT:
+            generator_push_scope(ctx->gen_ctx);
             sem_analyse_compound_statement(ctx, node, expected_return_type);
+            generator_pop_scope(ctx->gen_ctx);
             break;
 
         case AST_NODE_EXPRESSION_STATEMENT:
@@ -810,7 +829,9 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 if (child == NULL) continue;
                 if (child->type == AST_NODE_COMPOUND_STATEMENT)
                 {
+                    generator_push_scope(ctx->gen_ctx);
                     sem_analyse_compound_statement(ctx, child, expected_return_type);
+                    generator_pop_scope(ctx->gen_ctx);
                 }
                 else if (child->type == AST_NODE_IF_STATEMENT)
                 {
@@ -829,7 +850,9 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             odin_grammar_node_t * body = node_find_child(node, AST_NODE_COMPOUND_STATEMENT);
             if (body)
             {
+                generator_push_scope(ctx->gen_ctx);
                 sem_analyse_compound_statement(ctx, body, expected_return_type);
+                generator_pop_scope(ctx->gen_ctx);
             }
             break;
         }
@@ -842,6 +865,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 if (child == NULL) continue;
                 if (child->type == AST_NODE_SWITCH_CASE)
                 {
+                    generator_push_scope(ctx->gen_ctx);
                     // Children: case value expression(s), then body statement(s)
                     for (size_t j = 0; j < child->list.count; j++)
                     {
@@ -867,15 +891,18 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                             sem_evaluate_expr(ctx, case_child);
                         }
                     }
+                    generator_pop_scope(ctx->gen_ctx);
                 }
                 else if (child->type == AST_NODE_SWITCH_DEFAULT)
                 {
+                    generator_push_scope(ctx->gen_ctx);
                     for (size_t j = 0; j < child->list.count; j++)
                     {
                         odin_grammar_node_t * def_child = child->list.children[j];
                         if (def_child == NULL) continue;
                         sem_pass2_node(ctx, def_child, expected_return_type);
                     }
+                    generator_pop_scope(ctx->gen_ctx);
                 }
                 else if (child->type == AST_NODE_COMPOUND_STATEMENT)
                 {

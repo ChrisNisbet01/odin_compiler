@@ -502,3 +502,44 @@ type_descriptor_get_struct_field(TypeDescriptor const * desc, int index)
     if (index < 0 || index >= desc->struct_metadata.members.count) return NULL;
     return &desc->struct_metadata.members.fields[index];
 }
+
+bool
+type_descriptor_find_struct_field_path(
+    TypeDescriptor const * desc, char const * name, field_access_path_t * path)
+{
+    if (desc == NULL || desc->kind != TD_KIND_STRUCT) return false;
+
+    for (int i = 0; i < desc->struct_metadata.members.count; i++)
+    {
+        if (strcmp(desc->struct_metadata.members.fields[i].name, name) == 0)
+        {
+            path->indices[0] = i;
+            path->count = 1;
+            return true;
+        }
+    }
+
+    for (int i = 0; i < desc->struct_metadata.members.count; i++)
+    {
+        struct_field_t const * field = &desc->struct_metadata.members.fields[i];
+        if (!field->is_using) continue;
+        if (field->type_desc == NULL || field->type_desc->kind != TD_KIND_STRUCT) continue;
+
+        field_access_path_t sub_path;
+        if (type_descriptor_find_struct_field_path(field->type_desc, name, &sub_path))
+        {
+            path->indices[0] = i;
+            int copy_count = sub_path.count;
+            if (copy_count > MAX_FIELD_ACCESS_DEPTH - 1)
+                copy_count = MAX_FIELD_ACCESS_DEPTH - 1;
+            for (int j = 0; j < copy_count; j++)
+            {
+                path->indices[j + 1] = sub_path.indices[j];
+            }
+            path->count = sub_path.count + 1;
+            return true;
+        }
+    }
+
+    return false;
+}

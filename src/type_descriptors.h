@@ -137,3 +137,14 @@ bool is_floating_kind(TypeDescriptor const * desc);
 int type_descriptor_find_struct_field_index(TypeDescriptor const * desc, char const * name);
 
 struct_field_t const * type_descriptor_get_struct_field(TypeDescriptor const * desc, int index);
+
+#define MAX_FIELD_ACCESS_DEPTH 64
+
+typedef struct
+{
+    int indices[MAX_FIELD_ACCESS_DEPTH];
+    int count;
+} field_access_path_t;
+
+bool type_descriptor_find_struct_field_path(
+    TypeDescriptor const * desc, char const * name, field_access_path_t * path);

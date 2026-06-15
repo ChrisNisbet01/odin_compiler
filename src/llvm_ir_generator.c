@@ -649,16 +649,20 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                         TypeDescriptor const * base_type = base->resolved_type;
                         if (base_type == NULL || base_type->kind != TD_KIND_STRUCT) return NULL;
 
-                        int field_idx = type_descriptor_find_struct_field_index(
-                            base_type, field_name_node->text);
-                        if (field_idx < 0) return NULL;
+                        field_access_path_t path;
+                        if (!type_descriptor_find_struct_field_path(base_type, field_name_node->text, &path))
+                            return NULL;
 
-                        LLVMValueRef indices[] = {
-                            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (unsigned)field_idx, false)
-                        };
+                        int n_indices = path.count + 1;
+                        LLVMValueRef indices[MAX_FIELD_ACCESS_DEPTH + 1];
+                        indices[0] = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                        for (int pi = 0; pi < path.count; pi++)
+                        {
+                            indices[pi + 1] = LLVMConstInt(
+                                LLVMInt32TypeInContext(ctx->context), (unsigned)path.indices[pi], false);
+                        }
                         ptr = LLVMBuildInBoundsGEP2(
-                            ctx->builder, base_type->llvm_type, ptr, indices, 2,
+                            ctx->builder, base_type->llvm_type, ptr, indices, (unsigned)n_indices,
                             field_name_node->text);
                         break;
                     }
@@ -1003,7 +1007,7 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
     if (body_node)
     {
-        ir_gen_compound_statement(ctx, body_node);
+        ir_gen_node(ctx, body_node);
     }
     LLVMBasicBlockRef body_end = LLVMGetInsertBlock(ctx->builder);
     LLVMValueRef body_term = LLVMGetLastInstruction(body_end);
@@ -1135,6 +1139,7 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
 
         // Case body
         LLVMPositionBuilderAtEnd(ctx->builder, case_bb);
+        generator_push_scope(ctx->gen_ctx);
         for (size_t ci = 1; ci < case_clause->list.count; ci++)
         {
             odin_grammar_node_t * stmt = case_clause->list.children[ci];
@@ -1148,6 +1153,7 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             LLVMBuildBr(ctx->builder, end_bb);
         }
+        generator_pop_scope(ctx->gen_ctx);
 
         // Position builder at the miss block for next iteration
         if (i < case_count - 1)
@@ -1161,6 +1167,7 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     if (default_bb)
     {
         LLVMPositionBuilderAtEnd(ctx->builder, default_bb);
+        generator_push_scope(ctx->gen_ctx);
         for (size_t ci = 0; ci < default_case->list.count; ci++)
         {
             odin_grammar_node_t * stmt = default_case->list.children[ci];
@@ -1173,6 +1180,7 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             LLVMBuildBr(ctx->builder, end_bb);
         }
+        generator_pop_scope(ctx->gen_ctx);
     }
 
     // Pop loop context
@@ -1561,20 +1569,33 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 TypeDescriptor const * base_type = base ? base->resolved_type : NULL;
                 if (base_type == NULL || base_type->kind != TD_KIND_STRUCT) break;
 
-                int field_idx = type_descriptor_find_struct_field_index(
-                    base_type, field_name_node->text);
-                if (field_idx < 0) break;
+                field_access_path_t path;
+                if (!type_descriptor_find_struct_field_path(base_type, field_name_node->text, &path))
+                    break;
 
-                LLVMValueRef indices[] = {
-                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (unsigned)field_idx, false)
-                };
-                LLVMValueRef field_ptr = LLVMBuildInBoundsGEP2(
-                    ctx->builder, base_type->llvm_type, val, indices, 2,
-                    field_name_node->text);
+                int n_indices = path.count + 1;
+                LLVMValueRef indices[MAX_FIELD_ACCESS_DEPTH + 1];
+                indices[0] = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                TypeDescriptor const * cur_type = base_type;
+                for (int pi = 0; pi < path.count; pi++)
+                {
+                    indices[pi + 1] = LLVMConstInt(
+                        LLVMInt32TypeInContext(ctx->context), (unsigned)path.indices[pi], false);
+                    if (pi < path.count - 1)
+                    {
+                        struct_field_t const * f = type_descriptor_get_struct_field(
+                            cur_type, path.indices[pi]);
+                        if (f == NULL || f->type_desc == NULL) break;
+                        cur_type = f->type_desc;
+                    }
+                }
                 struct_field_t const * field = type_descriptor_get_struct_field(
-                    base_type, field_idx);
+                    cur_type, path.indices[path.count - 1]);
                 if (field == NULL) break;
+
+                LLVMValueRef field_ptr = LLVMBuildInBoundsGEP2(
+                    ctx->builder, base_type->llvm_type, val, indices, (unsigned)n_indices,
+                    field_name_node->text);
                 val = LLVMBuildLoad2(ctx->builder, field->type_desc->llvm_type,
                                      field_ptr, "loadtmp");
                 break;
@@ -1657,7 +1678,10 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             return ir_gen_return_statement(ctx, node);
 
         case AST_NODE_COMPOUND_STATEMENT:
-            return ir_gen_compound_statement(ctx, node);
+            generator_push_scope(ctx->gen_ctx);
+            ir_gen_compound_statement(ctx, node);
+            generator_pop_scope(ctx->gen_ctx);
+            return NULL;
 
         case AST_NODE_EXPRESSION_STATEMENT:
             if (node->list.count > 0)

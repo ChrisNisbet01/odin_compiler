@@ -183,7 +183,57 @@ Output type flags (`-o:`):
 - Implicit context parameter on every procedure
 - `any` type / RTTI runtime operations
 - Tagged unions / `switch type`
-- `using` (struct embedding + name shadowing)
+- `using` (struct embedding + name shadowing) — see **Tasks: Struct Member Access** below
+
+## Tasks: Block Scoping
+
+Current status: Procedure bodies have a scope, but `if`/`for`/`switch` bodies and standalone `{ }` blocks do NOT push a scope. All variables in a procedure are flat.
+
+### Semantic Analyser Changes (`semantic_analyser.c`)
+
+Each location that processes a block body needs `generator_push_scope` / `generator_pop_scope`:
+
+| Location | Line | Description |
+|---|---|---|
+| `AST_NODE_COMPOUND_STATEMENT` (pass2 dispatch) | 731 | Standalone `{ }` blocks |
+| `AST_NODE_IF_STATEMENT` (then/else bodies) | 811-813 | Each body compound statement |
+| `AST_NODE_FOR_STATEMENT` (loop body) | 832 | For-loop body |
+| `AST_NODE_SWITCH_CASE` (case bodies) | 843-870 | Each case clause body |
+| `AST_NODE_SWITCH_DEFAULT` (default body) | 871-878 | Default clause body |
+
+### IR Generator Changes (`llvm_ir_generator.c`)
+
+Same locations in the IR generator — wrap compound statement calls with push/pop:
+
+| Location | Function | Description |
+|---|---|---|
+| `ir_gen_compound_statement` callers | `ir_gen_if`, `_for`, `_switch` | Bodies need scope |
+
+### Test
+
+`test/test_scope.odin` — verify variable isolation across control flow blocks and shadowing.
+
+## Tasks: Struct Member Access (`using` support)
+
+### Background
+
+In Odin, `using` on a struct field "promotes" the inner struct's fields into the parent scope, so `outer.field` works without naming the intermediate struct. Example:
+
+```odin
+Inner :: struct { y: int }
+Outer :: struct { using inner: Inner; x: int }
+// outer.y works — y is promoted from inner
+```
+
+Current state: None of this works. The grammar has `KwUsing?` in `StructField` but the semantic analyser ignores it. `type_descriptor_find_struct_field_index` only scans direct fields — it does not recurse.
+
+### Changes Needed
+
+1. **`struct_members.h`**: Add `bool is_using` flag to `struct_field_t`
+2. **`semantic_analyser.c`** (struct field registration): Detect `KwUsing` presence (via `AST_NODE_USING_DECL` or checking the struct field's children for a `using`-related node) and set `is_using` on the field
+3. **`type_descriptors.c`** (`type_descriptor_find_struct_field_index`): When a direct field lookup fails, recurse into `using`-marked struct fields. Handle name conflicts (direct fields shadow promoted ones; among siblings, first match wins — or last-declared wins, per Odin spec)
+4. **`llvm_ir_generator.c`** (GEP for promoted fields): When member access resolves to a promoted field, build the full GEP index chain (e.g., to access `outer.y`, GEP through `inner` then `y`)
+5. **Test**: `test/test_using.odin` — verify promoted field access and shadowing
 - Polymorphic procedures / monomorphisation
 - `when` compile-time branch pruning
 - `or_else` / `or_return` / `defer` codegen
