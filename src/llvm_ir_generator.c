@@ -1728,6 +1728,75 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         case AST_NODE_BOOL_FALSE:
             return ir_gen_bool_value(ctx, node);
 
+        case AST_NODE_CAST_EXPR:
+        {
+            if (node->list.count < 2) return NULL;
+            odin_grammar_node_t * expr_node = node->list.children[1];
+            LLVMValueRef src_val = ir_gen_node(ctx, expr_node);
+            if (src_val == NULL) return NULL;
+
+            TypeDescriptor const * dest_type = node->resolved_type;
+            if (dest_type == NULL) return NULL;
+
+            LLVMTypeRef dest_llvm_type = dest_type->llvm_type;
+            LLVMTypeRef src_llvm_type = LLVMTypeOf(src_val);
+            LLVMTypeKind src_kind = LLVMGetTypeKind(src_llvm_type);
+            LLVMTypeKind dest_kind = LLVMGetTypeKind(dest_llvm_type);
+
+            if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMIntegerTypeKind)
+            {
+                unsigned src_w = LLVMGetIntTypeWidth(src_llvm_type);
+                unsigned dst_w = LLVMGetIntTypeWidth(dest_llvm_type);
+                if (dst_w > src_w)
+                    return LLVMBuildIntCast2(ctx->builder, src_val, dest_llvm_type, false, "zext");
+                else
+                    return LLVMBuildIntCast2(ctx->builder, src_val, dest_llvm_type, false, "trunc");
+            }
+            else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
+                  && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
+            {
+                return LLVMBuildFPCast(ctx->builder, src_val, dest_llvm_type, "fpcast");
+            }
+            else if ((src_kind == LLVMIntegerTypeKind)
+                  && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
+            {
+                return LLVMBuildSIToFP(ctx->builder, src_val, dest_llvm_type, "sitofp");
+            }
+            else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
+                  && dest_kind == LLVMIntegerTypeKind)
+            {
+                return LLVMBuildFPToSI(ctx->builder, src_val, dest_llvm_type, "fptosi");
+            }
+            else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMPointerTypeKind)
+            {
+                return LLVMBuildPointerCast(ctx->builder, src_val, dest_llvm_type, "ptrcast");
+            }
+            else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMIntegerTypeKind)
+            {
+                return LLVMBuildPtrToInt(ctx->builder, src_val, dest_llvm_type, "ptrint");
+            }
+            else if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMPointerTypeKind)
+            {
+                return LLVMBuildIntToPtr(ctx->builder, src_val, dest_llvm_type, "intptr");
+            }
+            // Fallback for same-size casts
+            return LLVMBuildBitCast(ctx->builder, src_val, dest_llvm_type, "cast");
+        }
+
+        case AST_NODE_TRANSMUTE_EXPR:
+        {
+            if (node->list.count < 2) return NULL;
+            odin_grammar_node_t * expr_node = node->list.children[1];
+            LLVMValueRef src_val = ir_gen_node(ctx, expr_node);
+            if (src_val == NULL) return NULL;
+
+            TypeDescriptor const * dest_type = node->resolved_type;
+            if (dest_type == NULL) return NULL;
+
+            LLVMTypeRef dest_llvm_type = dest_type->llvm_type;
+            return LLVMBuildBitCast(ctx->builder, src_val, dest_llvm_type, "transmute");
+        }
+
         case AST_NODE_NIL:
         case AST_NODE_NONE:
             return ir_gen_nil(ctx, node);

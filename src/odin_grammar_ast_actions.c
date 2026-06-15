@@ -325,6 +325,9 @@ ast_action_struct_field_action(
 }
 DEFINE_ACTION(ast_action_struct_field_list_action, AST_NODE_STRUCT_FIELD_LIST)
 
+DEFINE_ACTION(ast_action_cast_expr_action, AST_NODE_CAST_EXPR)
+DEFINE_ACTION(ast_action_transmute_expr_action, AST_NODE_TRANSMUTE_EXPR)
+
 // --- Terminal nodes (text captured for semantic use) ---
 DEFINE_TERMINAL_ACTION(ast_action_identifier_action, AST_NODE_IDENTIFIER)
 DEFINE_TERMINAL_ACTION(ast_action_poly_ident_action, AST_NODE_POLY_IDENT)
@@ -468,6 +471,8 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_BIT_FIELD_FIELD_LIST, ast_action_bit_field_field_list_action);
     REGISTER(AST_ACTION_STRUCT_FIELD, ast_action_struct_field_action);
     REGISTER(AST_ACTION_STRUCT_FIELD_LIST, ast_action_struct_field_list_action);
+    REGISTER(AST_ACTION_CAST_EXPR, ast_action_cast_expr_action);
+    REGISTER(AST_ACTION_TRANSMUTE_EXPR, ast_action_transmute_expr_action);
 
 #undef REGISTER
 }

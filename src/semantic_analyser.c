@@ -304,6 +304,18 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             return bool_type;
         }
 
+        case AST_NODE_CAST_EXPR:
+        case AST_NODE_TRANSMUTE_EXPR:
+        {
+            // children[0] = type, children[1] = expression
+            TypeDescriptor const * target_type = NULL;
+            odin_grammar_node_t * type_node = (node->list.count >= 1) ? node->list.children[0] : NULL;
+            if (type_node) target_type = sem_resolve_type_expr(ctx, type_node);
+            if (node->list.count >= 2) sem_evaluate_expr(ctx, node->list.children[1]);
+            node->resolved_type = (TypeDescriptor *)target_type;
+            return target_type;
+        }
+
         case AST_NODE_NIL:
         {
             node->resolved_type = NULL;
