@@ -488,6 +488,14 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                         }
                         break;
 
+                    case AST_NODE_POSTFIX_DEREF:
+                        if (type && type->kind == TD_KIND_POINTER)
+                        {
+                            type = type->element_type;
+                            op->resolved_type = (TypeDescriptor *)type;
+                        }
+                        break;
+
                     default:
                         break;
                 }
