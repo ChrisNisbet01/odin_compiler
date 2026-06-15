@@ -15,6 +15,7 @@
 // --- Forward declarations ---
 static LLVMValueRef ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node);
+static LLVMValueRef ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node);
 static odin_grammar_node_t * expression_unwrap_to_identifier(odin_grammar_node_t * node);
 
 // --- Context lifecycle ---
@@ -1441,6 +1442,74 @@ ir_gen_top_level_variable(IrGenContext * ctx, odin_grammar_node_t * node)
     return global;
 }
 
+// --- Nested procedure declaration codegen ---
+
+static LLVMValueRef
+ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2) return NULL;
+    odin_grammar_node_t * name_node = node->list.children[0];
+    odin_grammar_node_t * value_node = node->list.children[1];
+    if (name_node->type != AST_NODE_IDENTIFIER) return NULL;
+
+    if (value_node->type != AST_NODE_PROCEDURE_LITERAL) return NULL;
+
+    TypeDescriptor const * proc_type = value_node->resolved_type;
+    if (proc_type == NULL || proc_type->kind != TD_KIND_PROC) return NULL;
+
+    // Save outer function context
+    LLVMValueRef outer_func = ctx->current_function;
+    TypeDescriptor const * outer_ret_type = ctx->current_return_type;
+    LLVMBasicBlockRef outer_block = LLVMGetInsertBlock(ctx->builder);
+
+    // Build nested function
+    LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, proc_type->llvm_type);
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
+    LLVMPositionBuilderAtEnd(ctx->builder, entry);
+
+    ctx->current_function = func;
+    ctx->current_return_type = proc_type->proc_metadata.return_type;
+
+    generator_push_scope(ctx->gen_ctx);
+    ir_gen_register_params(ctx, value_node, func);
+
+    odin_grammar_node_t * body_node = node_find_child(value_node, AST_NODE_COMPOUND_STATEMENT);
+    if (body_node)
+    {
+        ir_gen_compound_statement(ctx, body_node);
+    }
+
+    LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
+    LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);
+    if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
+    {
+        if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
+        {
+            LLVMBuildRetVoid(ctx->builder);
+        }
+        else
+        {
+            LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
+        }
+    }
+
+    generator_pop_scope(ctx->gen_ctx);
+
+    // Register in current (enclosing) scope
+    TypedValue tv = create_typed_value(func, proc_type, false);
+    generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
+
+    // Restore outer function context
+    ctx->current_function = outer_func;
+    ctx->current_return_type = outer_ret_type;
+    if (outer_block != NULL)
+    {
+        LLVMPositionBuilderAtEnd(ctx->builder, outer_block);
+    }
+
+    return func;
+}
+
 // --- Postfix expression / call codegen ---
 
 // Walk a comma-chained Expression tree to collect individual argument values.
@@ -1742,6 +1811,8 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             return NULL;
 
         case AST_NODE_CONSTANT_DECL:
+            if (ctx->current_function != NULL)
+                return ir_gen_nested_procedure_decl(ctx, node);
             return ir_gen_top_level_decl(ctx, node);
 
         default:

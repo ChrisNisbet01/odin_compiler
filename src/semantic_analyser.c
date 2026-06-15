@@ -820,6 +820,29 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             break;
         }
 
+        case AST_NODE_CONSTANT_DECL:
+        {
+            if (node->list.count < 2) break;
+            odin_grammar_node_t * name_node = node->list.children[0];
+            odin_grammar_node_t * value_node = node->list.children[1];
+            if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER) break;
+            if (value_node == NULL) break;
+
+            if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
+            {
+                sem_analyse_procedure_literal(ctx, value_node);
+            }
+            else
+            {
+                sem_evaluate_expr(ctx, value_node);
+            }
+
+            TypeDescriptor const * val_type = value_node->resolved_type;
+            TypedValue tv = create_typed_value(NULL, val_type, false);
+            scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+            break;
+        }
+
         case AST_NODE_IF_STATEMENT:
         {
             // children[0] = condition, children[1] = then-body, children[2] = else-body (optional)

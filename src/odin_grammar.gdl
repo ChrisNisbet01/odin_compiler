@@ -395,6 +395,7 @@ Statement = DeferStatement
           | FallthroughStatement
           | WhenStatement
           | VariableDecl
+          | ConstantDecl
           | AssignStatement
           | ExpressionStatement;
 
