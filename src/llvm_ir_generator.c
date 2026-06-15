@@ -1797,6 +1797,52 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             return LLVMBuildBitCast(ctx->builder, src_val, dest_llvm_type, "transmute");
         }
 
+        case AST_NODE_LEN_EXPR:
+        case AST_NODE_CAP_EXPR:
+        {
+            if (node->list.count < 1) return NULL;
+            odin_grammar_node_t * operand = node->list.children[0];
+            LLVMValueRef operand_val = ir_gen_node(ctx, operand);
+            if (operand_val == NULL) return NULL;
+
+            TypeDescriptor const * operand_type = operand->resolved_type;
+            if (operand_type == NULL) return NULL;
+
+            // Array: compile-time constant from type descriptor
+            if (operand_type->kind == TD_KIND_ARRAY)
+            {
+                return LLVMConstInt(LLVMInt64TypeInContext(ctx->context),
+                                    (unsigned long long)operand_type->as.array.count, false);
+            }
+
+            // Slice or string: extract .len field (field index 1) from {ptr, len} struct
+            LLVMTypeRef val_type = LLVMTypeOf(operand_val);
+            LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
+            LLVMValueRef len_val = NULL;
+
+            if (val_kind == LLVMPointerTypeKind)
+            {
+                // Pointer to struct — GEP + Load
+                LLVMTypeRef struct_type = LLVMGetElementType(val_type);
+                LLVMValueRef indices[] = {
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)
+                };
+                LLVMValueRef field_ptr = LLVMBuildInBoundsGEP2(
+                    ctx->builder, struct_type, operand_val, indices, 2, "len.ptr");
+                len_val = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context),
+                                         field_ptr, "len");
+            }
+            else
+            {
+                // Struct value — ExtractValue
+                len_val = LLVMBuildExtractValue(ctx->builder, operand_val, 1, "len");
+            }
+
+            if (len_val == NULL) return NULL;
+            return len_val;
+        }
+
         case AST_NODE_NIL:
         case AST_NODE_NONE:
             return ir_gen_nil(ctx, node);

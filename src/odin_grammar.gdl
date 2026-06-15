@@ -39,6 +39,8 @@ KwCast = lexeme("cast" IdBoundary);
 KwMake = lexeme("make" IdBoundary);
 KwNew = lexeme("new" IdBoundary);
 KwDelete = lexeme("delete" IdBoundary);
+KwLen = lexeme("len" IdBoundary);
+KwCap = lexeme("cap" IdBoundary);
 KwTrue = lexeme("true" IdBoundary);
 KwFalse = lexeme("false" IdBoundary);
 KwNil = lexeme("nil" IdBoundary);
@@ -89,7 +91,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwUsing | KwConst
     | KwStruct | KwUnion | KwEnum | KwMap | KwDynamic
     | KwDistinct | KwTransmute | KwCast
-    | KwMake | KwNew | KwDelete
+    | KwMake | KwNew | KwDelete | KwLen | KwCap
     | KwTrue | KwFalse | KwNil | KwNone
     | KwContext | KwAsm | KwAutoCast
     | KwOrElse | KwOrReturn | KwNot | KwAnd | KwOr | KwNotIn
@@ -302,7 +304,9 @@ UnaryOp = UnaryOpNot | UnaryOpNeg | UnaryOpPos | UnaryOpXor | UnaryOpAddr;
 UnaryPrefix = (UnaryOp UnaryExpression) @AST_ACTION_UNARY_PREFIX;
 CastExpr = KwCast LParen TypeName RParen UnaryExpression @AST_ACTION_CAST_EXPR;
 TransmuteExpr = KwTransmute LParen TypeName RParen UnaryExpression @AST_ACTION_TRANSMUTE_EXPR;
-UnaryExpression = CastExpr | TransmuteExpr | UnaryPrefix | PostfixExpression;
+LenExpr = KwLen LParen Expression RParen @AST_ACTION_LEN_EXPR;
+CapExpr = KwCap LParen Expression RParen @AST_ACTION_CAP_EXPR;
+UnaryExpression = LenExpr | CapExpr | CastExpr | TransmuteExpr | UnaryPrefix | PostfixExpression;
 
 MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
 MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;

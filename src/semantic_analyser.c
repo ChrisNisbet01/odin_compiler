@@ -316,6 +316,36 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             return target_type;
         }
 
+        case AST_NODE_LEN_EXPR:
+        case AST_NODE_CAP_EXPR:
+        {
+            if (node->list.count < 1) return NULL;
+            odin_grammar_node_t * operand = node->list.children[0];
+            sem_evaluate_expr(ctx, operand);
+            TypeDescriptor const * operand_type = operand->resolved_type;
+            if (operand_type == NULL) return NULL;
+
+            // Validate: valid for arrays, slices, strings (len only for strings)
+            bool valid = (operand_type->kind == TD_KIND_ARRAY)
+                      || (operand_type->kind == TD_KIND_SLICE)
+                      || (operand_type->kind == TD_KIND_BASIC
+                          && operand_type->as.basic.name != NULL
+                          && strcmp(operand_type->as.basic.name, "string") == 0
+                          && node->type == AST_NODE_LEN_EXPR);
+            if (!valid)
+            {
+                sem_error_list_add(&ctx->errors, node,
+                    node->type == AST_NODE_LEN_EXPR
+                        ? "invalid operand type for len"
+                        : "invalid operand type for cap");
+                return NULL;
+            }
+
+            TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
+            node->resolved_type = (TypeDescriptor *)int_type;
+            return int_type;
+        }
+
         case AST_NODE_NIL:
         {
             node->resolved_type = NULL;
