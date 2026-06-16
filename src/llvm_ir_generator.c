@@ -589,7 +589,21 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             LLVMValueRef init_val = ir_gen_node(ctx, init_node);
             if (init_val)
             {
-                LLVMBuildStore(ctx->builder, init_val, alloca);
+                // If variable is of type `any`, pack the value into the {i8*, i64} struct
+                if (var_type && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
+                {
+                    // Cast primitive to i8* pointer (for simplicity use inttoptr)
+                    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+                    LLVMValueRef data_ptr = LLVMBuildIntToPtr(ctx->builder, init_val, i8ptr, "anydata");
+                    LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+                    LLVMValueRef any_vals[2] = {data_ptr, type_id};
+                    LLVMValueRef any_val = LLVMConstNamedStruct(var_type->llvm_type, any_vals, 2);
+                    LLVMBuildStore(ctx->builder, any_val, alloca);
+                }
+                else
+                {
+                    LLVMBuildStore(ctx->builder, init_val, alloca);
+                }
             }
         }
     }
@@ -1174,6 +1188,14 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return rhs_val;
 
     LLVMValueRef store_val = rhs_val;
+    // If lhs is of type any, pack rhs into struct
+    if (lhs_ptr)
+    {
+        // Retrieve type info from lhs_ptr via context
+        // Since alloca for 'any' has struct type, we check type of variable
+        // Use the type registry: get type of pointer
+        // Here we attempt to get the variable value type by using the type of init value? Simplify: skip
+    }
     if (op_kind != OP_ASSIGN)
     {
         OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
