@@ -341,11 +341,12 @@ RangeExpression = chainl1(LogOrExpression, RangeOp) @AST_ACTION_RANGE_EXPRESSION
 TernaryExpression = RangeExpression (Question Expression Colon Expression)? @AST_ACTION_TERNARY_EXPRESSION;
 
 OrElseExpr = TernaryExpression (KwOrElse TernaryExpression)? @AST_ACTION_OR_ELSE;
-OrReturnExpr = OrElseExpr KwOrReturn? @AST_ACTION_OR_RETURN;
+OrReturnExpr = OrElseExpr KwOrReturn @AST_ACTION_OR_RETURN;
+SuffixExpression = OrReturnExpr | OrElseExpr;
 
 AssignOp = Assign | PlusAssign | MinusAssign | MulAssign | DivAssign | ModAssign
           | AndAssign | OrAssign | XorAssign | ShlAssign | ShrAssign @AST_ACTION_ASSIGN_OP;
-AssignExpression = OrReturnExpr (AssignOp OrReturnExpr)? @AST_ACTION_ASSIGN_EXPRESSION;
+AssignExpression = SuffixExpression (AssignOp SuffixExpression)? @AST_ACTION_ASSIGN_EXPRESSION;
 
 Expression = chainl1(AssignExpression, Comma) @AST_ACTION_EXPRESSION;
 ArgumentList = Expression? @AST_ACTION_ARGUMENT_LIST;

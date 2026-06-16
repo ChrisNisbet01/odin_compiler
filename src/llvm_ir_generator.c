@@ -21,6 +21,8 @@ static odin_grammar_node_t * expression_unwrap_to_identifier(odin_grammar_node_t
 static void ir_gen_emit_defers_at_depth(IrGenContext * ctx, int depth);
 static void ir_gen_emit_defers_from_depth(IrGenContext * ctx, int min_depth);
 static void ir_gen_emit_all_defers(IrGenContext * ctx);
+static LLVMValueRef ir_gen_or_else_expression(IrGenContext * ctx, odin_grammar_node_t * node);
+static LLVMValueRef ir_gen_or_return_expression(IrGenContext * ctx, odin_grammar_node_t * node);
 
 // --- Context lifecycle ---
 
@@ -605,7 +607,6 @@ is_expression_wrapper_type(odin_grammar_node_type_t type)
     {
         case AST_NODE_EXPRESSION:
         case AST_NODE_ASSIGN_EXPRESSION:
-        case AST_NODE_OR_RETURN:
         case AST_NODE_OR_ELSE:
         case AST_NODE_TERNARY_EXPRESSION:
         case AST_NODE_RANGE_EXPRESSION:
@@ -927,6 +928,90 @@ ir_gen_lvalue_ptr(IrGenContext * ctx, odin_grammar_node_t * node)
         if (sym && sym->value.is_lvalue) lhs_ptr = sym->value.value;
     }
     return lhs_ptr;
+}
+
+static LLVMValueRef
+ir_gen_or_else_expression(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    // OrElseExpr = TernaryExpression (KwOrElse TernaryExpression)?
+    // KwOrElse lexeme is consumed but not added as a child node.
+    // When or_else is present: node has 2 children [Ternary, Ternary]
+    // When absent: node has 1 child [Ternary]
+    if (node->list.count < 2)
+    {
+        if (node->list.count > 0) return ir_gen_node(ctx, node->list.children[0]);
+        return NULL;
+    }
+
+    LLVMValueRef lhs = ir_gen_node(ctx, node->list.children[0]);
+    if (lhs == NULL) return NULL;
+
+    LLVMTypeRef lhs_type = LLVMTypeOf(lhs);
+
+    LLVMValueRef is_zero;
+    LLVMTypeKind tk = LLVMGetTypeKind(lhs_type);
+    if (tk == LLVMIntegerTypeKind)
+        is_zero = LLVMBuildICmp(ctx->builder, LLVMIntEQ, lhs, LLVMConstNull(lhs_type), "orelse_isnil");
+    else if (tk == LLVMPointerTypeKind)
+        is_zero = LLVMBuildICmp(ctx->builder, LLVMIntEQ, lhs, LLVMConstNull(lhs_type), "orelse_isnil");
+    else
+        return lhs;
+
+    LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(ctx->builder);
+    LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "or.rhs");
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "or.merge");
+
+    LLVMBuildCondBr(ctx->builder, is_zero, rhs_bb, merge_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, rhs_bb);
+    LLVMValueRef rhs = ir_gen_node(ctx, node->list.children[1]);
+    if (rhs == NULL) rhs = LLVMConstNull(lhs_type);
+    LLVMBuildBr(ctx->builder, merge_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
+    LLVMValueRef phi = LLVMBuildPhi(ctx->builder, lhs_type, "or.phi");
+    LLVMValueRef incoming_vals[] = { lhs, rhs };
+    LLVMBasicBlockRef incoming_blocks[] = { entry_bb, rhs_bb };
+    LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
+
+    return phi;
+}
+
+static LLVMValueRef
+ir_gen_or_return_expression(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    // OrReturnExpr = OrElseExpr KwOrReturn
+    // Only present when or_return keyword is used; always do short-circuit.
+    if (node->list.count < 1) return NULL;
+
+    LLVMValueRef val = ir_gen_node(ctx, node->list.children[0]);
+    if (val == NULL) return NULL;
+
+    LLVMTypeRef val_type = LLVMTypeOf(val);
+
+    LLVMValueRef is_zero;
+    LLVMTypeKind tk = LLVMGetTypeKind(val_type);
+    if (tk == LLVMIntegerTypeKind)
+        is_zero = LLVMBuildICmp(ctx->builder, LLVMIntEQ, val, LLVMConstNull(val_type), "orret_isnil");
+    else if (tk == LLVMPointerTypeKind)
+        is_zero = LLVMBuildICmp(ctx->builder, LLVMIntEQ, val, LLVMConstNull(val_type), "orret_isnil");
+    else
+        return val;
+
+    LLVMBasicBlockRef ret_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "or.ret");
+    LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "or.cont");
+
+    LLVMBuildCondBr(ctx->builder, is_zero, ret_bb, cont_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, ret_bb);
+    ir_gen_emit_all_defers(ctx);
+    if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
+        LLVMBuildRetVoid(ctx->builder);
+    else
+        LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
+
+    LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
+    return val;
 }
 
 // Handle assignment expressions: AssignExpression = OrReturnExpr (AssignOp OrReturnExpr)?
@@ -2269,10 +2354,14 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         case AST_NODE_POSTFIX_EXPRESSION:
             return ir_gen_postfix_expression(ctx, node);
 
+        // OrElseExpr and OrReturnExpr — handle with conditional branching
+        case AST_NODE_OR_ELSE:
+            return ir_gen_or_else_expression(ctx, node);
+        case AST_NODE_OR_RETURN:
+            return ir_gen_or_return_expression(ctx, node);
+
         // Wrapper expression nodes — delegate to first child
         case AST_NODE_EXPRESSION:
-        case AST_NODE_OR_RETURN:
-        case AST_NODE_OR_ELSE:
         case AST_NODE_TERNARY_EXPRESSION:
         case AST_NODE_PRIMARY_EXPRESSION:
             return ir_gen_expression(ctx, node);
@@ -2397,7 +2486,6 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         }
     }
 
-    fprintf(stderr, "DEBUG SLICE ir_generate done, errors=%d\n", ir_gen_error_collection_has_errors(&ctx->errors));
     return !ir_gen_error_collection_has_errors(&ctx->errors);
 }
 

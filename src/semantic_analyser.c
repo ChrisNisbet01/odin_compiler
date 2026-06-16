@@ -417,10 +417,42 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             return NULL;
         }
 
+        case AST_NODE_OR_ELSE:
+        {
+            // OrElseExpr = TernaryExpression (KwOrElse TernaryExpression)?
+            // KwOrElse lexeme consumed, not a child. Without or_else: 1 child; with or_else: 2 children.
+            if (node->list.count < 2)
+            {
+                if (node->list.count > 0)
+                {
+                    TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
+                    if (inner_type) node->resolved_type = (TypeDescriptor *)inner_type;
+                    return inner_type;
+                }
+                return NULL;
+            }
+            TypeDescriptor const * lhs_type = sem_evaluate_expr(ctx, node->list.children[0]);
+            TypeDescriptor const * rhs_type = sem_evaluate_expr(ctx, node->list.children[1]);
+            TypeDescriptor const * result_type = lhs_type ? lhs_type : rhs_type;
+            if (result_type) node->resolved_type = (TypeDescriptor *)result_type;
+            return result_type;
+        }
+
+        case AST_NODE_OR_RETURN:
+        {
+            // OrReturnExpr = OrElseExpr KwOrReturn
+            // Only present when or_return keyword is used. 1 child: OrElseExpr.
+            if (node->list.count > 0)
+            {
+                TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
+                if (inner_type) node->resolved_type = (TypeDescriptor *)inner_type;
+                return inner_type;
+            }
+            return NULL;
+        }
+
         case AST_NODE_EXPRESSION:
         case AST_NODE_ASSIGN_EXPRESSION:
-        case AST_NODE_OR_RETURN:
-        case AST_NODE_OR_ELSE:
         case AST_NODE_TERNARY_EXPRESSION:
         case AST_NODE_PRIMARY_EXPRESSION:
         {
@@ -1038,20 +1070,7 @@ sem_pass2_analyse_bodies(SemContext * ctx)
             odin_grammar_node_t * top_decl = ext_decl->list.children[j];
             if (top_decl == NULL) continue;
 
-            if (top_decl->type == AST_NODE_CONSTANT_DECL)
-            {
-                if (top_decl->list.count < 2) continue;
-                odin_grammar_node_t * value_node = top_decl->list.children[1];
-                if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
-                {
-                    sem_analyse_procedure_literal(ctx, value_node);
-                }
-                else
-                {
-                    sem_evaluate_expr(ctx, value_node);
-                }
-            }
-            else if (top_decl->type == AST_NODE_VARIABLE_DECL)
+            if (top_decl->type == AST_NODE_CONSTANT_DECL || top_decl->type == AST_NODE_VARIABLE_DECL)
             {
                 sem_pass2_node(ctx, top_decl, NULL);
             }

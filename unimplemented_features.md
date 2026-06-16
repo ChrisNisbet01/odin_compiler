@@ -43,16 +43,6 @@
 
 ## Partially Implemented
 
-### break/continue do not emit defers
-Break and continue branch to the loop's target blocks directly without calling `ir_gen_emit_defers_at_depth` first. Any pending defers in the enclosing scope are silently dropped. Return correctly emits all defers first.
-
-**Affects**: `src/llvm_ir_generator.c` lines 2234–2246 (`AST_NODE_BREAK_STATEMENT`, `AST_NODE_CONTINUE_STATEMENT`).
-
-### Logical `&&` / `||` without short-circuit
-`AST_NODE_LOG_AND_EXPRESSION` and `AST_NODE_LOG_OR_EXPRESSION` use bitwise AND/OR in IR generation. Both operands are always evaluated; no short-circuit branching is emitted.
-
-**Affects**: `src/llvm_ir_generator.c` lines 349–361.
-
 ### Chained struct member access with `using`
 `using` field promotion works for single-level access (e.g., `v.x`), but chained access (e.g., `v.inner.x`) fails because the rvalue path loads intermediate struct values, breaking subsequent GEP chains. This affects all nested member access, not just `using`.
 
