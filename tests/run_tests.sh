@@ -65,7 +65,7 @@ run_test() {
 
     # 2. Compile .ll with clang to executable
     echo "  [CLANG] Compiling $ll_file -> $exe_file"
-    if ! clang "$ll_file" -o "$exe_file" 2>> "$err_file"; then
+    if ! timeout 2 clang "$ll_file" -o "$exe_file" 2>> "$err_file"; then
         echo "  ERROR: clang compilation failed. Check $err_file"
         TEST_FAILED=true
         current_test_failed=true
@@ -78,7 +78,7 @@ run_test() {
     echo "  [RUN] Executing $exe_file"
     local exec_output="$OUTPUT_DIR/${base_name}_exec.log"
     set +e
-    "$exe_file" > "$exec_output" 2>&1
+    timeout 2 "$exe_file" > "$exec_output" 2>&1
     local exit_code=$?
     set -e
 
