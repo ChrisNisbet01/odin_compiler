@@ -30,9 +30,11 @@ struct TypeDescriptors
 static TypeDescriptor *
 type_descriptor_alloc(TypeDescriptors * registry)
 {
-    if (registry->count >= MAX_TYPES) return NULL;
-    TypeDescriptor * td = calloc(1, sizeof(TypeDescriptor));
-    if (td == NULL) return NULL;
+    if (registry->count >= MAX_TYPES)
+        return NULL;
+    TypeDescriptor * td = calloc(1, sizeof(*td));
+    if (td == NULL)
+        return NULL;
     registry->types[registry->count++] = td;
     return td;
 }
@@ -40,20 +42,16 @@ type_descriptor_alloc(TypeDescriptors * registry)
 static LLVMTypeRef
 string_llvm_type(LLVMContextRef ctx)
 {
-    LLVMTypeRef elems[2] = {
-        LLVMPointerType(LLVMInt8TypeInContext(ctx), 0),
-        LLVMInt64TypeInContext(ctx)
-    };
+    LLVMTypeRef elems[2] = {LLVMPointerType(LLVMInt8TypeInContext(ctx), 0), LLVMInt64TypeInContext(ctx)};
     return LLVMStructTypeInContext(ctx, elems, 2, false);
 }
 
 TypeDescriptors *
-type_descriptors_create_registry(
-    LLVMContextRef context, LLVMTargetDataRef data_layout, LLVMBuilderRef builder
-)
+type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_layout, LLVMBuilderRef builder)
 {
-    TypeDescriptors * reg = calloc(1, sizeof(TypeDescriptors));
-    if (reg == NULL) return NULL;
+    TypeDescriptors * reg = calloc(1, sizeof(*reg));
+    if (reg == NULL)
+        return NULL;
 
     reg->context = context;
     reg->data_layout = data_layout;
@@ -133,22 +131,28 @@ type_descriptors_create_registry(
         reg->ptr_type->as.basic.width = 64;
     }
 
-    struct { char const * name; int width; bool is_float; bool is_unsigned; } basic_specs[] = {
-        {"int",    64, false, true},
-        {"i8",      8, false, false},
-        {"i16",    16, false, false},
-        {"i32",    32, false, false},
-        {"i64",    64, false, false},
-        {"u8",      8, false, true},
-        {"u16",    16, false, true},
-        {"u32",    32, false, true},
-        {"u64",    64, false, true},
-        {"f32",    32, true,  false},
-        {"f64",    64, true,  false},
-        {"rune",   32, false, true},
-        {"byte",    8, false, true},
-        {"uintptr",64, false, true},
-        {"bool",    1, false, true},
+    struct
+    {
+        char const * name;
+        int width;
+        bool is_float;
+        bool is_unsigned;
+    } basic_specs[] = {
+        {"int", 64, false, true},
+        {"i8", 8, false, false},
+        {"i16", 16, false, false},
+        {"i32", 32, false, false},
+        {"i64", 64, false, false},
+        {"u8", 8, false, true},
+        {"u16", 16, false, true},
+        {"u32", 32, false, true},
+        {"u64", 64, false, true},
+        {"f32", 32, true, false},
+        {"f64", 64, true, false},
+        {"rune", 32, false, true},
+        {"byte", 8, false, true},
+        {"uintptr", 64, false, true},
+        {"bool", 1, false, true},
     };
 
     LLVMTypeRef string_llvm = string_llvm_type(context);
@@ -156,7 +160,8 @@ type_descriptors_create_registry(
     for (size_t i = 0; i < sizeof(basic_specs) / sizeof(basic_specs[0]); i++)
     {
         TypeDescriptor * td = type_descriptor_alloc(reg);
-        if (td == NULL) continue;
+        if (td == NULL)
+            continue;
 
         td->kind = TD_KIND_BASIC;
         td->as.basic.name = basic_specs[i].name;
@@ -166,9 +171,8 @@ type_descriptors_create_registry(
 
         if (basic_specs[i].is_float)
         {
-            td->llvm_type = basic_specs[i].width == 32
-                ? LLVMFloatTypeInContext(context)
-                : LLVMDoubleTypeInContext(context);
+            td->llvm_type
+                = basic_specs[i].width == 32 ? LLVMFloatTypeInContext(context) : LLVMDoubleTypeInContext(context);
         }
         else
         {
@@ -198,11 +202,18 @@ type_descriptors_create_registry(
         reg->basic_types[reg->basic_count++] = cstring_td;
     }
 
+    // Define `any` as a struct { i8* data; i64 type_id } to distinguish from `string`
+    LLVMTypeRef any_llvm = LLVMStructCreateNamed(context, "any");
+    LLVMTypeRef any_fields[2] = {
+        LLVMPointerType(LLVMInt8TypeInContext(context), 0), // data pointer
+        LLVMInt64TypeInContext(context)                     // type identifier
+    };
+    LLVMStructSetBody(any_llvm, any_fields, 2, 0);
     TypeDescriptor * any_td = type_descriptor_alloc(reg);
     if (any_td)
     {
         any_td->kind = TD_KIND_BASIC;
-        any_td->llvm_type = string_llvm;
+        any_td->llvm_type = any_llvm;
         any_td->as.basic.name = "any";
         any_td->as.basic.width = 128;
         reg->basic_types[reg->basic_count++] = any_td;
@@ -214,7 +225,8 @@ type_descriptors_create_registry(
 void
 type_descriptors_destroy_registry(TypeDescriptors * registry)
 {
-    if (registry == NULL) return;
+    if (registry == NULL)
+        return;
     for (int i = 0; i < registry->count; i++)
     {
         if (registry->types[i]->struct_metadata.members.fields)
@@ -235,9 +247,7 @@ type_descriptors_destroy_registry(TypeDescriptors * registry)
 }
 
 TypeDescriptor const *
-get_or_create_basic_type(
-    TypeDescriptors * registry, char const * name, int width, bool is_float, bool is_unsigned
-)
+get_or_create_basic_type(TypeDescriptors * registry, char const * name, int width, bool is_float, bool is_unsigned)
 {
     (void)registry;
     (void)name;
@@ -258,7 +268,8 @@ get_or_create_pointer_type(TypeDescriptors * registry, TypeDescriptor const * po
     }
 
     TypeDescriptor * td = type_descriptor_alloc(registry);
-    if (td == NULL) return NULL;
+    if (td == NULL)
+        return NULL;
     td->kind = TD_KIND_POINTER;
     td->pointee = pointee;
     td->llvm_type = LLVMPointerType(pointee->llvm_type, 0);
@@ -266,21 +277,18 @@ get_or_create_pointer_type(TypeDescriptors * registry, TypeDescriptor const * po
 }
 
 TypeDescriptor const *
-get_or_create_array_type(
-    TypeDescriptors * registry, TypeDescriptor const * element_type, size_t count
-)
+get_or_create_array_type(TypeDescriptors * registry, TypeDescriptor const * element_type, size_t count)
 {
     for (int i = 0; i < registry->count; i++)
     {
         TypeDescriptor * t = registry->types[i];
-        if (t->kind == TD_KIND_ARRAY
-            && t->element_type == element_type
-            && t->as.array.count == count)
+        if (t->kind == TD_KIND_ARRAY && t->element_type == element_type && t->as.array.count == count)
             return t;
     }
 
     TypeDescriptor * td = type_descriptor_alloc(registry);
-    if (td == NULL) return NULL;
+    if (td == NULL)
+        return NULL;
     td->kind = TD_KIND_ARRAY;
     td->element_type = element_type;
     td->as.array.count = count;
@@ -299,14 +307,12 @@ get_or_create_slice_type(TypeDescriptors * registry, TypeDescriptor const * elem
     }
 
     TypeDescriptor * td = type_descriptor_alloc(registry);
-    if (td == NULL) return NULL;
+    if (td == NULL)
+        return NULL;
     td->kind = TD_KIND_SLICE;
     td->element_type = element_type;
 
-    LLVMTypeRef elems[2] = {
-        LLVMPointerType(element_type->llvm_type, 0),
-        LLVMInt64TypeInContext(registry->context)
-    };
+    LLVMTypeRef elems[2] = {LLVMPointerType(element_type->llvm_type, 0), LLVMInt64TypeInContext(registry->context)};
     td->llvm_type = LLVMStructTypeInContext(registry->context, elems, 2, false);
     return td;
 }
@@ -328,10 +334,14 @@ get_or_create_proc_type(
     for (int i = 0; i < registry->count; i++)
     {
         TypeDescriptor * t = registry->types[i];
-        if (t->kind != TD_KIND_PROC) continue;
-        if (t->proc_metadata.is_variadic != is_variadic) continue;
-        if (t->proc_metadata.param_count != param_count) continue;
-        if (t->proc_metadata.return_type != return_type) continue;
+        if (t->kind != TD_KIND_PROC)
+            continue;
+        if (t->proc_metadata.is_variadic != is_variadic)
+            continue;
+        if (t->proc_metadata.param_count != param_count)
+            continue;
+        if (t->proc_metadata.return_type != return_type)
+            continue;
         bool match = true;
         for (int j = 0; j < param_count; j++)
         {
@@ -341,11 +351,13 @@ get_or_create_proc_type(
                 break;
             }
         }
-        if (match) return t;
+        if (match)
+            return t;
     }
 
     TypeDescriptor * td = type_descriptor_alloc(registry);
-    if (td == NULL) return NULL;
+    if (td == NULL)
+        return NULL;
     td->kind = TD_KIND_PROC;
     td->proc_metadata.return_type = return_type;
     td->proc_metadata.param_count = param_count;
@@ -354,14 +366,14 @@ get_or_create_proc_type(
 
     if (param_count > 0)
     {
-        td->proc_metadata.params = malloc((size_t)param_count * sizeof(TypeDescriptor const *));
-        memcpy((void *)td->proc_metadata.params, params, (size_t)param_count * sizeof(TypeDescriptor const *));
+        td->proc_metadata.params = malloc((size_t)param_count * sizeof(*td->proc_metadata.params));
+        memcpy((void *)td->proc_metadata.params, params, (size_t)param_count * sizeof(*td->proc_metadata.params));
     }
 
     LLVMTypeRef * llvm_params = NULL;
     if (param_count > 0)
     {
-        llvm_params = malloc((size_t)param_count * sizeof(LLVMTypeRef));
+        llvm_params = malloc((size_t)param_count * sizeof(*llvm_params));
         for (int i = 0; i < param_count; i++)
         {
             llvm_params[i] = params[i]->llvm_type;
@@ -376,25 +388,24 @@ get_or_create_proc_type(
 
 TypeDescriptor const *
 register_struct_type(
-    TypeDescriptors * registry, LLVMTypeRef llvm_struct, bool is_complete,
-    struct_or_union_members_st const * members
+    TypeDescriptors * registry, LLVMTypeRef llvm_struct, bool is_complete, struct_or_union_members_st const * members
 )
 {
     TypeDescriptor * td = type_descriptor_alloc(registry);
-    if (td == NULL) return NULL;
+    if (td == NULL)
+        return NULL;
     td->kind = TD_KIND_STRUCT;
     td->llvm_type = llvm_struct;
     td->struct_metadata.is_complete = is_complete;
 
     if (members && members->count > 0)
     {
-        td->struct_metadata.members.fields = malloc(
-            (size_t)members->count * sizeof(struct_field_t)
-        );
+        td->struct_metadata.members.fields
+            = malloc((size_t)members->count * sizeof(*td->struct_metadata.members.fields));
         memcpy(
             td->struct_metadata.members.fields,
             members->fields,
-            (size_t)members->count * sizeof(struct_field_t)
+            (size_t)members->count * sizeof(*td->struct_metadata.members.fields)
         );
         td->struct_metadata.members.count = members->count;
     }
@@ -470,23 +481,28 @@ type_descriptor_get_ptr_type(TypeDescriptors * registry)
 bool
 is_integer_kind(TypeDescriptor const * desc)
 {
-    if (desc == NULL) return false;
-    if (desc->kind != TD_KIND_BASIC) return false;
+    if (desc == NULL)
+        return false;
+    if (desc->kind != TD_KIND_BASIC)
+        return false;
     return !desc->as.basic.is_float && desc->as.basic.width > 0;
 }
 
 bool
 is_floating_kind(TypeDescriptor const * desc)
 {
-    if (desc == NULL) return false;
-    if (desc->kind != TD_KIND_BASIC) return false;
+    if (desc == NULL)
+        return false;
+    if (desc->kind != TD_KIND_BASIC)
+        return false;
     return desc->as.basic.is_float;
 }
 
 int
 type_descriptor_find_struct_field_index(TypeDescriptor const * desc, char const * name)
 {
-    if (desc == NULL || desc->kind != TD_KIND_STRUCT) return -1;
+    if (desc == NULL || desc->kind != TD_KIND_STRUCT)
+        return -1;
     for (int i = 0; i < desc->struct_metadata.members.count; i++)
     {
         if (strcmp(desc->struct_metadata.members.fields[i].name, name) == 0)
@@ -498,16 +514,18 @@ type_descriptor_find_struct_field_index(TypeDescriptor const * desc, char const 
 struct_field_t const *
 type_descriptor_get_struct_field(TypeDescriptor const * desc, int index)
 {
-    if (desc == NULL || desc->kind != TD_KIND_STRUCT) return NULL;
-    if (index < 0 || index >= desc->struct_metadata.members.count) return NULL;
+    if (desc == NULL || desc->kind != TD_KIND_STRUCT)
+        return NULL;
+    if (index < 0 || index >= desc->struct_metadata.members.count)
+        return NULL;
     return &desc->struct_metadata.members.fields[index];
 }
 
 bool
-type_descriptor_find_struct_field_path(
-    TypeDescriptor const * desc, char const * name, field_access_path_t * path)
+type_descriptor_find_struct_field_path(TypeDescriptor const * desc, char const * name, field_access_path_t * path)
 {
-    if (desc == NULL || desc->kind != TD_KIND_STRUCT) return false;
+    if (desc == NULL || desc->kind != TD_KIND_STRUCT)
+        return false;
 
     for (int i = 0; i < desc->struct_metadata.members.count; i++)
     {
@@ -522,8 +540,10 @@ type_descriptor_find_struct_field_path(
     for (int i = 0; i < desc->struct_metadata.members.count; i++)
     {
         struct_field_t const * field = &desc->struct_metadata.members.fields[i];
-        if (!field->is_using) continue;
-        if (field->type_desc == NULL || field->type_desc->kind != TD_KIND_STRUCT) continue;
+        if (!field->is_using)
+            continue;
+        if (field->type_desc == NULL || field->type_desc->kind != TD_KIND_STRUCT)
+            continue;
 
         field_access_path_t sub_path;
         if (type_descriptor_find_struct_field_path(field->type_desc, name, &sub_path))
