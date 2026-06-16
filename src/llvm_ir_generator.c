@@ -255,6 +255,66 @@ ir_gen_nil(IrGenContext * ctx, odin_grammar_node_t * node)
 // --- Binary expression codegen ---
 
 static LLVMValueRef
+ir_gen_logical_short_circuit(IrGenContext * ctx, odin_grammar_node_t * node, OperatorKind op_kind)
+{
+    LLVMValueRef lhs = ir_gen_node(ctx, node->list.children[0]);
+    if (lhs == NULL) return NULL;
+
+    LLVMTypeRef lhs_type = LLVMTypeOf(lhs);
+
+    LLVMValueRef lhs_bool;
+    if (LLVMGetTypeKind(lhs_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(lhs_type) == 1)
+        lhs_bool = lhs;
+    else
+        lhs_bool = LLVMBuildICmp(ctx->builder, LLVMIntNE, lhs, LLVMConstNull(lhs_type), "log_lhs");
+
+    LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(ctx->builder);
+    LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "logrhs");
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "logmerge");
+
+    if (op_kind == OP_LOG_AND)
+        LLVMBuildCondBr(ctx->builder, lhs_bool, rhs_bb, merge_bb);
+    else
+        LLVMBuildCondBr(ctx->builder, lhs_bool, merge_bb, rhs_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, rhs_bb);
+    LLVMValueRef rhs = ir_gen_node(ctx, node->list.children[node->list.count - 1]);
+    LLVMValueRef rhs_bool;
+    if (rhs != NULL)
+    {
+        LLVMTypeRef rhs_type = LLVMTypeOf(rhs);
+        if (LLVMGetTypeKind(rhs_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(rhs_type) == 1)
+            rhs_bool = rhs;
+        else
+            rhs_bool = LLVMBuildICmp(ctx->builder, LLVMIntNE, rhs, LLVMConstNull(rhs_type), "log_rhs");
+    }
+    else
+    {
+        rhs_bool = LLVMConstInt(LLVMInt1TypeInContext(ctx->context), 0, false);
+    }
+    LLVMBuildBr(ctx->builder, merge_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
+    LLVMTypeRef bool_ty = LLVMInt1TypeInContext(ctx->context);
+    LLVMValueRef phi = LLVMBuildPhi(ctx->builder, bool_ty, "log_phi");
+
+    if (op_kind == OP_LOG_AND)
+    {
+        LLVMValueRef incoming_vals[] = { LLVMConstInt(bool_ty, 0, false), rhs_bool };
+        LLVMBasicBlockRef incoming_blocks[] = { entry_bb, rhs_bb };
+        LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
+    }
+    else
+    {
+        LLVMValueRef incoming_vals[] = { LLVMConstInt(bool_ty, 1, false), rhs_bool };
+        LLVMBasicBlockRef incoming_blocks[] = { entry_bb, rhs_bb };
+        LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
+    }
+
+    return LLVMBuildIntCast2(ctx->builder, phi, lhs_type, false, "logext");
+}
+
+static LLVMValueRef
 ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     odin_grammar_node_t * op_node = node_find_op(node);
@@ -269,6 +329,9 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
     AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
     if (op_md == NULL) return NULL;
+
+    if (op_md->kind == OP_LOG_AND || op_md->kind == OP_LOG_OR)
+        return ir_gen_logical_short_circuit(ctx, node, op_md->kind);
 
     LLVMValueRef lhs = ir_gen_node(ctx, node->list.children[0]);
     LLVMValueRef rhs = ir_gen_node(ctx, node->list.children[node->list.count - 1]);
@@ -445,7 +508,11 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 case OP_UNARY_POS:
                     return operand;
                 case OP_UNARY_NOT:
-                    return LLVMBuildNot(ctx->builder, operand, "nottmp");
+                {
+                    LLVMValueRef zero = LLVMConstNull(LLVMTypeOf(operand));
+                    LLVMValueRef is_zero = LLVMBuildICmp(ctx->builder, LLVMIntEQ, operand, zero, "iszero");
+                    return LLVMBuildIntCast2(ctx->builder, is_zero, LLVMTypeOf(operand), false, "lognot");
+                }
                 case OP_UNARY_XOR:
                     return LLVMBuildNot(ctx->builder, operand, "xortmp");
                 default:

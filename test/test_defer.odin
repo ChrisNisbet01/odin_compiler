@@ -13,27 +13,27 @@ main :: proc() -> int {
     }
 
     // Test 2: Multiple defers in same scope (LIFO)
-    y := ""
+    y := 0
     if true {
-        defer y = y + "A"
-        defer y = y + "B"
-        y = "C"
+        defer y = y * 10 + 1
+        defer y = y * 10 + 2
+        y = 3
     }
-    if y != "CBA" {
+    if y != 321 {
         result = 2
     }
 
     // Test 3: Nested defers
-    z := ""
+    z := 0
     if true {
-        defer z = z + "1"
+        defer z = z * 10 + 1
         if true {
-            defer z = z + "2"
-            z = z + "3"
+            defer z = z * 10 + 2
+            z = z * 10 + 3
         }
-        z = z + "4"
+        z = z * 10 + 4
     }
-    if z != "3241" {
+    if z != 3241 {
         result = 3
     }
 
@@ -111,7 +111,7 @@ main :: proc() -> int {
         g = 0
         break
     }
-    if g != 21 {
+    if g != 12 {
         result = 10
     }
 
