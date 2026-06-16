@@ -1,22 +1,72 @@
 # Unimplemented / Partially Implemented Core Features
 
 ## Not Implemented
-- **`defer` statement codegen** – Parsed and semantically analysed, but no LLVM IR generation (`ir_gen_defer_statement` missing).
-- **`or_else` / `or_return` statements** – No AST node handling, semantic analysis, or codegen.
-- **`when` compile‑time branch** – No support.
-- **`any` type / RTTI** – No type descriptor or runtime support.
-- **Tagged unions / `switch type`** – No support.
-- **Polymorphic procedures / monomorphisation** – Generics not implemented.
-- **Built‑in procedures** (`make`, `new`, `delete`, `len`, `cap`, `append`) – No intrinsic handling.
-- **`transmute` / `cast`** – No support.
-- **`bit_field`, `bit_set`, `map` type codegen** – Only basic type descriptors exist; no lowering to LLVM.
-- **`foreign` blocks / external linking** – No support.
-- **`soa` (structure‑of‑arrays) layout** – Not implemented.
-- **Implicit context parameter (`$`)** – No hidden parameter insertion on procedures.
-- **Multiple return values** – Procedures only support a single return type; tuple returns not handled in IRgen (only single‑value `LLVMBuildRet`).
-- **`using` on parameters** – Grammar allows it but no detection or handling.
+
+### Statements
+- **`when` compile-time branch** (`AST_NODE_WHEN_STATEMENT`) – Parsed, AST built, but no case in semantic analyser or IR generator. Silently skipped.
+- **`when` declaration** (`AST_NODE_WHEN_DECL`) – Same as above; no sem/IR handling.
+- **`foreign` blocks / imports** (`AST_NODE_FOREIGN_BLOCK`, `AST_NODE_FOREIGN_IMPORT`) – Parsed, AST built, no sem/IR.
+- **Top-level `using`** (`AST_NODE_USING_DECL`) – Parsed, AST built, no sem/IR.
+
+### Expressions
+- **`or_else`** (`AST_NODE_OR_ELSE`) – Parsed, AST built, sem and IR both treat it as identity on the LHS. The fallback expression is never evaluated. No nil/error checking.
+- **`or_return`** (`AST_NODE_OR_RETURN`) – Same as above; treated as identity. No return-on-nil/error behavior.
+- **Ternary `cond ? a : b`** (`AST_NODE_TERNARY_EXPRESSION`) – Parsed, AST built, sem and IR both evaluate/return only the condition. `a` and `b` branches ignored.
+- **Type assertion `.(Type)`** (`AST_NODE_POSTFIX_ASSERTION`) – Parsed, AST built, no case in `sem_evaluate_expr` or IR rvalue handler.
+- **`in` / `not_in` operators** – Parsed, operator metadata stored, but `ir_gen_binary_op_by_kind` returns NULL for these (no IR codegen).
+- **Range `..` / `..<` in expressions** – Parsed, operator metadata stored, no IR codegen. For-range loops not implemented either.
+- **For-range clause** (`for i, val in expr`) – Grammar parses it, but sem and IR treat it as C-style for. Range iteration not implemented.
+- **Built-in procedures** (`make`, `new`, `delete`) – Keywords defined and reserved, no grammar rules or AST nodes.
+
+### Types
+- **`dynamic_array`** (`[dynamic]T`) – Parsed, no sem/IR.
+- **`map` type** – Parsed, no sem/IR.
+- **`union` type** – Parsed, no sem/IR.
+- **`enum` type** – Parsed, no sem/IR.
+- **`bit_field` type** – Parsed, no sem/IR.
+- **`bit_set` type** – Parsed, no sem/IR.
+- **`soa` (structure-of-arrays) layout** – Parsed, no sem/IR.
+- **`distinct` type** – Parsed, no sem/IR.
+- **`any` type / RTTI** – Registered in type registry but uses wrong LLVM layout (`{i8*,i64}` string layout instead of `{rawptr, typeid}`). No runtime type information support.
+
+### Procedures & Declarations
+- **Polymorphic procedures / monomorphisation** – Generics not implemented. `$T` poly-ident (`AST_NODE_POLY_IDENT`) parsed but not handled.
+- **Multiple return values** – Grammar supports named returns and return lists; `AST_NODE_NAMED_RETURN`, `AST_NODE_RETURN_LIST` exist. Sem only extracts first return type. IR only handles single `LLVMBuildRet`. No tuple/destructuring support.
+- **Variadic parameters (`..`)** – `AST_NODE_ELLIPSIS` parsed but no variadic call or parameter handling.
+- **`where` clauses on procedures** – Parsed, no sem/IR.
+- **Implicit context parameter** – No hidden `$context` parameter insertion on procedures.
+- **`#assert` directive** – Parsed as `AST_NODE_DIRECTIVE_WITH_ARGS`, silently skipped.
+- **`#load` / `#partial` / other directives** – Same, parsed and skipped.
+- **`context` built-in** – Keyword reserved, no grammar rules or handling.
+- **`auto_cast`** – Keyword reserved, not implemented.
+- **Inline `asm`** – Keyword reserved, not implemented.
 
 ## Partially Implemented
-- **Chained struct member access** – `using` field promotion works for single‑level access (e.g., `v.x`), but chained access (e.g., `v.inner.x`) fails because the rvalue path loads intermediate struct values, breaking subsequent GEP chains. This is a pre‑existing limitation affecting all nested member access, not just `using`.
-- **Nested procedures as values** – Procedure literals can appear anywhere expressions are allowed (including inside other procs), but there is no dedicated support for nested proc *declarations* as symbols; they are treated as constant/proc‑value declarations, which works via existing variable/constant handling.
-- **`defer` statement semantics** – The statement is recognised in the semantic analyser (passed to `sem_pass2_node`), but no codegen is emitted, so it currently does nothing.
+
+### break/continue do not emit defers
+Break and continue branch to the loop's target blocks directly without calling `ir_gen_emit_defers_at_depth` first. Any pending defers in the enclosing scope are silently dropped. Return correctly emits all defers first.
+
+**Affects**: `src/llvm_ir_generator.c` lines 2234–2246 (`AST_NODE_BREAK_STATEMENT`, `AST_NODE_CONTINUE_STATEMENT`).
+
+### Logical `&&` / `||` without short-circuit
+`AST_NODE_LOG_AND_EXPRESSION` and `AST_NODE_LOG_OR_EXPRESSION` use bitwise AND/OR in IR generation. Both operands are always evaluated; no short-circuit branching is emitted.
+
+**Affects**: `src/llvm_ir_generator.c` lines 349–361.
+
+### Chained struct member access with `using`
+`using` field promotion works for single-level access (e.g., `v.x`), but chained access (e.g., `v.inner.x`) fails because the rvalue path loads intermediate struct values, breaking subsequent GEP chains. This affects all nested member access, not just `using`.
+
+**Affects**: `src/type_descriptors.c` (path resolution works), `src/llvm_ir_generator.c` (rvalue GEP chain breaks).
+
+### Procedure parameter types not semantically analysed
+`AST_NODE_PROCEDURE_SIGNATURE` resolves the return type correctly, but parameter types are not individually analysed or type-checked. The IR generator registers parameters manually.
+
+**Affects**: `src/semantic_analyser.c` line 107–128.
+
+### Nested procedures as values
+Procedure literals can appear anywhere expressions are allowed (including inside other procs), but there is no dedicated support for nested proc *declarations* as symbols; they are treated as constant/proc-value declarations, which works via existing variable/constant handling.
+
+### `string` / `cstring` / `any` basic type registration
+These types are registered but partially work. `string` maps to `{i8*, i64}` which is correct for the data pointer + length model. `any` incorrectly reuses the string layout.
+
+**Affects**: `src/type_descriptors.c` line 201–208.

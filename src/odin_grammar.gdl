@@ -283,13 +283,13 @@ PrimaryExpression = StringLiteral | RawStringLiteral | RuneLiteral
 
 PostfixOpCall = LParen ArgumentList? RParen @AST_ACTION_POSTFIX_CALL;
 PostfixOpSubscript = LBracket Expression RBracket @AST_ACTION_POSTFIX_SUBSCRIPT;
-PostfixOpSlice = LBracket (Expression? DotDot Expression?) RBracket @AST_ACTION_POSTFIX_SLICE;
-PostfixOpSliceLt = LBracket Expression? DotDotLt Expression? RBracket @AST_ACTION_POSTFIX_SLICE_LT;
+PostfixOpSlice = LBracket (LogOrExpression? DotDot LogOrExpression?) RBracket @AST_ACTION_POSTFIX_SLICE;
+PostfixOpSliceLt = LBracket (LogOrExpression? DotDotLt LogOrExpression?) RBracket @AST_ACTION_POSTFIX_SLICE_LT;
 PostfixOpMember = Dot Identifier @AST_ACTION_POSTFIX_MEMBER;
 PostfixOpDeref = PointerCaret @AST_ACTION_POSTFIX_DEREF;
 PostfixOpAssertion = Dot LParen TypeName RParen @AST_ACTION_POSTFIX_ASSERTION;
 
-PostfixOp = PostfixOpCall | PostfixOpSubscript | PostfixOpSlice | PostfixOpSliceLt
+PostfixOp = PostfixOpCall | PostfixOpSlice | PostfixOpSliceLt | PostfixOpSubscript
            | PostfixOpMember | PostfixOpDeref | PostfixOpAssertion;
 
 PostfixOps = PostfixOp* @AST_ACTION_POSTFIX_OPS;

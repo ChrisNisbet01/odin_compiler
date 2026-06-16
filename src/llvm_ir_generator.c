@@ -18,6 +18,10 @@ static LLVMValueRef ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node
 static LLVMValueRef ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node);
 static odin_grammar_node_t * expression_unwrap_to_identifier(odin_grammar_node_t * node);
 
+static void ir_gen_emit_defers_at_depth(IrGenContext * ctx, int depth);
+static void ir_gen_emit_defers_from_depth(IrGenContext * ctx, int min_depth);
+static void ir_gen_emit_all_defers(IrGenContext * ctx);
+
 // --- Context lifecycle ---
 
 IrGenContext *
@@ -571,6 +575,71 @@ expression_unwrap_to_identifier(odin_grammar_node_t * node)
     return NULL;
 }
 
+typedef struct {
+    int has_low;
+    int has_high;
+    odin_grammar_node_t * low_expr;
+    odin_grammar_node_t * high_expr;
+} slice_bounds_info;
+
+static slice_bounds_info
+slice_get_bounds_info(odin_grammar_node_t * op)
+{
+    slice_bounds_info info = {0};
+    if (op == NULL || op->text == NULL) return info;
+
+    // Parse text to determine which bounds are present.
+    // Text is "[i..j]", "[i..]", "[..j]", "[..]" for SLICE
+    // or "[i..<j]" etc for SLICE_LT.
+    char const * text = op->text;
+    size_t len = strlen(text);
+
+    // Find the range separator
+    char const * sep = strstr(text, "..");
+    if (sep != NULL)
+    {
+        size_t sep_pos = sep - text;
+        size_t sep_len = 2;
+        if (sep_len + 1 < len && text[sep_pos + 2] == '<') sep_len = 3;
+
+        // Content between '[' and sep indicates low bound
+        if (sep_pos > 1) info.has_low = 1;
+
+        // Content after sep and before ']' indicates high bound
+        char const * after = sep + sep_len;
+        size_t after_len = len - (size_t)(after - text);
+        if (after_len > 1) info.has_high = 1;
+    }
+
+    // Collect expression children in order
+    odin_grammar_node_t * exprs[2] = {NULL, NULL};
+    int expr_count = 0;
+    for (size_t i = 0; i < op->list.count; i++)
+    {
+        odin_grammar_node_t * child = op->list.children[i];
+        if (child != NULL && is_expression_wrapper_type(child->type))
+        {
+            if (expr_count < 2) exprs[expr_count] = child;
+            expr_count++;
+        }
+    }
+
+    if (expr_count == 2)
+    {
+        info.low_expr = exprs[0];
+        info.high_expr = exprs[1];
+    }
+    else if (expr_count == 1)
+    {
+        if (info.has_low && !info.has_high)
+            info.low_expr = exprs[0];
+        else if (info.has_high && !info.has_low)
+            info.high_expr = exprs[0];
+    }
+
+    return info;
+}
+
 // Evaluate a node as an lvalue (return a pointer to the storage location).
 static LLVMValueRef
 ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
@@ -622,18 +691,45 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                         LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
                         if (index_val == NULL) return NULL;
 
-                        if (cur_type == NULL || cur_type->kind != TD_KIND_ARRAY) return NULL;
+                        if (cur_type == NULL) return NULL;
 
-                        LLVMTypeRef arr_type = cur_type->llvm_type;
-                        LLVMValueRef indices[] = {
-                            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                            index_val
-                        };
-                        ptr = LLVMBuildInBoundsGEP2(
-                            ctx->builder, arr_type, ptr, indices, 2, "subs");
+                        if (cur_type->kind == TD_KIND_ARRAY)
+                        {
+                            LLVMTypeRef arr_type = cur_type->llvm_type;
+                            LLVMValueRef indices[] = {
+                                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                                index_val
+                            };
+                            ptr = LLVMBuildInBoundsGEP2(
+                                ctx->builder, arr_type, ptr, indices, 2, "subs");
 
-                        if (cur_type->element_type)
-                            cur_type = cur_type->element_type;
+                            if (cur_type->element_type)
+                                cur_type = cur_type->element_type;
+                        }
+                else if (cur_type->kind == TD_KIND_SLICE)
+                {
+                    // Load data pointer from slice struct, then GEP with index
+                    LLVMValueRef data_indices[] = {
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)
+                    };
+                    LLVMValueRef data_field = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->llvm_type, ptr, data_indices, 2, "slice.data.ptr");
+                            LLVMValueRef data = LLVMBuildLoad2(ctx->builder,
+                                LLVMPointerType(cur_type->element_type->llvm_type, 0),
+                                data_field, "slice.data");
+
+                            ptr = LLVMBuildInBoundsGEP2(
+                                ctx->builder, cur_type->element_type->llvm_type,
+                                data, &index_val, 1, "slice.subs");
+
+                            if (cur_type->element_type)
+                                cur_type = cur_type->element_type;
+                        }
+                        else
+                        {
+                            return NULL;
+                        }
                         break;
                     }
 
@@ -845,6 +941,66 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     return LLVMBuildStore(ctx->builder, store_val, lhs_ptr);
 }
 
+// --- Defer helper functions ---
+
+static void
+ir_gen_emit_defers_at_depth(IrGenContext * ctx, int depth)
+{
+    // Emit defers at given scope depth from top to bottom (LIFO)
+    for (int i = ctx->defer_count - 1; i >= 0; i--)
+    {
+        if (ctx->defer_stack[i].scope_depth == depth)
+        {
+            ir_gen_node(ctx, ctx->defer_stack[i].node);
+        }
+    }
+    // Compact stack, removing entries at this depth
+    int write = 0;
+    for (int read = 0; read < ctx->defer_count; read++)
+    {
+        if (ctx->defer_stack[read].scope_depth != depth)
+        {
+            ctx->defer_stack[write++] = ctx->defer_stack[read];
+        }
+    }
+    ctx->defer_count = write;
+}
+
+static void
+ir_gen_emit_defers_from_depth(IrGenContext * ctx, int min_depth)
+{
+    // Emit all defers with scope_depth >= min_depth (inside the loop/switch body)
+    // Iterate from top to bottom so inner defers fire first (LIFO)
+    for (int i = ctx->defer_count - 1; i >= 0; i--)
+    {
+        if (ctx->defer_stack[i].scope_depth >= min_depth)
+        {
+            ir_gen_node(ctx, ctx->defer_stack[i].node);
+        }
+    }
+    // Compact stack, keeping only defers with scope_depth < min_depth
+    int write = 0;
+    for (int read = 0; read < ctx->defer_count; read++)
+    {
+        if (ctx->defer_stack[read].scope_depth < min_depth)
+        {
+            ctx->defer_stack[write++] = ctx->defer_stack[read];
+        }
+    }
+    ctx->defer_count = write;
+}
+
+static void
+ir_gen_emit_all_defers(IrGenContext * ctx)
+{
+    // Emit all pending defers from top to bottom (LIFO, inner scope first)
+    for (int i = ctx->defer_count - 1; i >= 0; i--)
+    {
+        ir_gen_node(ctx, ctx->defer_stack[i].node);
+    }
+    ctx->defer_count = 0;
+}
+
 // --- Statement codegen ---
 
 static LLVMValueRef
@@ -864,14 +1020,22 @@ ir_gen_return_statement(IrGenContext * ctx, odin_grammar_node_t * node)
             }
         }
     }
-    if (expr == NULL)
+
+    // Evaluate return value first, then run defers, then ret
+    LLVMValueRef val = NULL;
+    if (expr != NULL)
+    {
+        val = ir_gen_node(ctx, expr);
+        if (val == NULL) return NULL;
+    }
+
+    // Emit all pending defers before the return instruction
+    ir_gen_emit_all_defers(ctx);
+
+    if (val == NULL)
     {
         return LLVMBuildRetVoid(ctx->builder);
     }
-
-    LLVMValueRef val = ir_gen_node(ctx, expr);
-    if (val == NULL) return NULL;
-
     return LLVMBuildRet(ctx->builder, val);
 }
 
@@ -992,6 +1156,7 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         ctx->loop_stack[ctx->loop_depth].continue_bb = cond_bb;
         ctx->loop_stack[ctx->loop_depth].break_bb = end_bb;
+        ctx->loop_stack[ctx->loop_depth].scope_depth = ctx->current_scope_depth;
         ctx->loop_depth++;
     }
 
@@ -1093,6 +1258,7 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         ctx->loop_stack[ctx->loop_depth].continue_bb = NULL;
         ctx->loop_stack[ctx->loop_depth].break_bb = end_bb;
+        ctx->loop_stack[ctx->loop_depth].scope_depth = ctx->current_scope_depth;
         ctx->loop_depth++;
     }
 
@@ -1164,6 +1330,16 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
 
         // Case body
         LLVMPositionBuilderAtEnd(ctx->builder, case_bb);
+
+        // Set fallthrough target for any fallthrough statement in this case
+        if (i < case_count - 1)
+            ctx->fallthrough_target_bb = case_bbs[i + 1];
+        else if (default_bb)
+            ctx->fallthrough_target_bb = default_bb;
+        else
+            ctx->fallthrough_target_bb = end_bb;
+
+        ctx->current_scope_depth++;
         generator_push_scope(ctx->gen_ctx);
         for (size_t ci = 1; ci < case_clause->list.count; ci++)
         {
@@ -1176,9 +1352,16 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMValueRef case_term = LLVMGetLastInstruction(case_block_end);
         if (case_term == NULL || !LLVMIsATerminatorInst(case_term))
         {
+            ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
             LLVMBuildBr(ctx->builder, end_bb);
         }
+        else
+        {
+            ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
+        }
+        ctx->current_scope_depth--;
         generator_pop_scope(ctx->gen_ctx);
+        ctx->fallthrough_target_bb = NULL;
 
         // Position builder at the miss block for next iteration
         if (i < case_count - 1)
@@ -1192,6 +1375,7 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     if (default_bb)
     {
         LLVMPositionBuilderAtEnd(ctx->builder, default_bb);
+        ctx->current_scope_depth++;
         generator_push_scope(ctx->gen_ctx);
         for (size_t ci = 0; ci < default_case->list.count; ci++)
         {
@@ -1203,8 +1387,14 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMValueRef def_term = LLVMGetLastInstruction(def_block_end);
         if (def_term == NULL || !LLVMIsATerminatorInst(def_term))
         {
+            ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
             LLVMBuildBr(ctx->builder, end_bb);
         }
+        else
+        {
+            ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
+        }
+        ctx->current_scope_depth--;
         generator_pop_scope(ctx->gen_ctx);
     }
 
@@ -1311,13 +1501,14 @@ ir_gen_procedure_literal(IrGenContext * ctx, odin_grammar_node_t * node)
 
     if (body_node)
     {
-        ir_gen_compound_statement(ctx, body_node);
+        ir_gen_node(ctx, body_node);
     }
 
     LLVMBasicBlockRef current_block = LLVMGetInsertBlock(ctx->builder);
     LLVMValueRef last_inst = LLVMGetLastInstruction(current_block);
     if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
     {
+        ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
         if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
         {
             LLVMBuildRetVoid(ctx->builder);
@@ -1367,13 +1558,14 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
         if (body_node)
         {
-            ir_gen_compound_statement(ctx, body_node);
+            ir_gen_node(ctx, body_node);
         }
 
         LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
         LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);
         if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
         {
+            ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
             if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
             {
                 LLVMBuildRetVoid(ctx->builder);
@@ -1485,13 +1677,14 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     odin_grammar_node_t * body_node = node_find_child(value_node, AST_NODE_COMPOUND_STATEMENT);
     if (body_node)
     {
-        ir_gen_compound_statement(ctx, body_node);
+        ir_gen_node(ctx, body_node);
     }
 
     LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
     LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);
     if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
     {
+        ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
         if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
         {
             LLVMBuildRetVoid(ctx->builder);
@@ -1626,16 +1819,40 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
                 if (index_val == NULL) break;
 
-                if (cur_type == NULL || cur_type->kind != TD_KIND_ARRAY) break;
+                if (cur_type == NULL) break;
 
-                LLVMTypeRef arr_type = cur_type->llvm_type;
-                LLVMValueRef indices[] = {
-                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                    index_val
-                };
-                LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(
-                    ctx->builder, arr_type, val, indices, 2, "subs");
-                val = elem_ptr;
+                if (cur_type->kind == TD_KIND_ARRAY)
+                {
+                    LLVMTypeRef arr_type = cur_type->llvm_type;
+                    LLVMValueRef indices[] = {
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                        index_val
+                    };
+                    LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(
+                        ctx->builder, arr_type, val, indices, 2, "subs");
+                    val = elem_ptr;
+                }
+                else if (cur_type->kind == TD_KIND_SLICE)
+                {
+                    // Load data pointer from slice struct, then GEP with index
+                    LLVMValueRef data_indices[] = {
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)
+                    };
+                    LLVMValueRef data_field = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->llvm_type, val, data_indices, 2, "slice.data.ptr");
+                    LLVMValueRef data = LLVMBuildLoad2(ctx->builder,
+                        LLVMPointerType(cur_type->element_type->llvm_type, 0),
+                        data_field, "slice.data");
+
+                    val = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->element_type->llvm_type,
+                        data, &index_val, 1, "slice.subs");
+                }
+                else
+                {
+                    break;
+                }
 
                 if (cur_type->element_type)
                     cur_type = cur_type->element_type;
@@ -1697,6 +1914,114 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 if (pointee_type == NULL) break;
                 val = LLVMBuildLoad2(ctx->builder, pointee_type->llvm_type, val, "deref");
                 cur_type = pointee_type;
+                break;
+            }
+
+            case AST_NODE_POSTFIX_SLICE:
+            case AST_NODE_POSTFIX_SLICE_LT:
+            {
+                if (cur_type == NULL
+                    || (cur_type->kind != TD_KIND_SLICE && cur_type->kind != TD_KIND_ARRAY))
+                    break;
+
+                TypeDescriptor const * slice_type = cur_type;
+                TypeDescriptor const * elem_type = slice_type->element_type;
+                if (elem_type == NULL) break;
+
+                LLVMValueRef data, len;
+
+                if (cur_type->kind == TD_KIND_SLICE)
+                {
+                    // Load data pointer from slice struct field 0 via GEP+Load
+                    LLVMValueRef field0_indices[] = {
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)
+                    };
+                    LLVMValueRef data_gep = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->llvm_type, val, field0_indices, 2, "slice.data.gep");
+                    data = LLVMBuildLoad2(ctx->builder,
+                        LLVMPointerType(elem_type->llvm_type, 0),
+                        data_gep, "slice.data");
+                    // Load length from slice struct field 1 via GEP+Load
+                    LLVMValueRef field1_indices[] = {
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)
+                    };
+                    LLVMValueRef len_gep = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->llvm_type, val, field1_indices, 2, "slice.len.gep");
+                    len = LLVMBuildLoad2(ctx->builder,
+                        LLVMInt64TypeInContext(ctx->context),
+                        len_gep, "slice.len");
+                }
+                else
+                {
+                    // For arrays, create a slice view: {ptr_to_first_elem, len}
+                    slice_type = get_or_create_slice_type(ctx->type_registry, elem_type);
+                    LLVMValueRef zero_indices[] = {
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)
+                    };
+                    data = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->llvm_type, val, zero_indices, 2, "arr.ptr");
+                    len = LLVMConstInt(LLVMInt64TypeInContext(ctx->context),
+                        (unsigned long long)cur_type->as.array.count, false);
+                }
+
+                // Determine which bounds are present
+                slice_bounds_info bounds = slice_get_bounds_info(op);
+
+                // Compute new data and len
+                LLVMValueRef new_data = data;
+                LLVMValueRef new_len = len;
+
+                if (bounds.has_low && bounds.low_expr != NULL)
+                {
+                    LLVMValueRef low_val = ir_gen_node(ctx, bounds.low_expr);
+                    if (low_val)
+                    {
+                        new_data = LLVMBuildInBoundsGEP2(
+                            ctx->builder, elem_type->llvm_type, data, &low_val, 1, "slice.newdata");
+                        new_len = LLVMBuildSub(ctx->builder, len, low_val, "slice.newlen");
+                    }
+                }
+
+                if (bounds.has_high && bounds.high_expr != NULL)
+                {
+                    LLVMValueRef high_val = ir_gen_node(ctx, bounds.high_expr);
+                    if (high_val)
+                    {
+                        if (bounds.has_low)
+                        {
+                            LLVMValueRef low_val = ir_gen_node(ctx, bounds.low_expr);
+                            if (low_val)
+                                new_len = LLVMBuildSub(ctx->builder, high_val, low_val, "slice.newlen");
+                        }
+                        else
+                        {
+                            new_len = high_val;
+                        }
+                    }
+                }
+
+                // Build new slice struct
+                LLVMValueRef slice_ptr = LLVMBuildAlloca(ctx->builder,
+                    slice_type->llvm_type, "slice.tmp");
+                LLVMValueRef result_data_indices[] = {
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)
+                };
+                LLVMValueRef data_gep = LLVMBuildInBoundsGEP2(
+                    ctx->builder, slice_type->llvm_type, slice_ptr, result_data_indices, 2, "slice.data.gep");
+                LLVMBuildStore(ctx->builder, new_data, data_gep);
+                LLVMValueRef result_len_indices[] = {
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)
+                };
+                LLVMValueRef len_gep = LLVMBuildInBoundsGEP2(
+                    ctx->builder, slice_type->llvm_type, slice_ptr, result_len_indices, 2, "slice.len.gep");
+                LLVMBuildStore(ctx->builder, new_len, len_gep);
+                val = LLVMBuildLoad2(ctx->builder, slice_type->llvm_type, slice_ptr, "slice.res");
+                cur_type = slice_type;
                 break;
             }
 
@@ -1905,8 +2230,11 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             return ir_gen_return_statement(ctx, node);
 
         case AST_NODE_COMPOUND_STATEMENT:
+            ctx->current_scope_depth++;
             generator_push_scope(ctx->gen_ctx);
             ir_gen_compound_statement(ctx, node);
+            ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
+            ctx->current_scope_depth--;
             generator_pop_scope(ctx->gen_ctx);
             return NULL;
 
@@ -1933,6 +2261,8 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         case AST_NODE_BREAK_STATEMENT:
             if (ctx->loop_depth > 0)
             {
+                int loop_scope = ctx->loop_stack[ctx->loop_depth - 1].scope_depth;
+                ir_gen_emit_defers_from_depth(ctx, loop_scope + 1);
                 LLVMBuildBr(ctx->builder, ctx->loop_stack[ctx->loop_depth - 1].break_bb);
             }
             return NULL;
@@ -1940,7 +2270,25 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         case AST_NODE_CONTINUE_STATEMENT:
             if (ctx->loop_depth > 0)
             {
+                int loop_scope = ctx->loop_stack[ctx->loop_depth - 1].scope_depth;
+                ir_gen_emit_defers_from_depth(ctx, loop_scope + 1);
                 LLVMBuildBr(ctx->builder, ctx->loop_stack[ctx->loop_depth - 1].continue_bb);
+            }
+            return NULL;
+
+        case AST_NODE_FALLTHROUGH_STATEMENT:
+            if (ctx->fallthrough_target_bb)
+            {
+                LLVMBuildBr(ctx->builder, ctx->fallthrough_target_bb);
+            }
+            return NULL;
+
+        case AST_NODE_DEFER_STATEMENT:
+            if (node->list.count > 0 && ctx->defer_count < MAX_DEFERS)
+            {
+                ctx->defer_stack[ctx->defer_count].node = node->list.children[0];
+                ctx->defer_stack[ctx->defer_count].scope_depth = ctx->current_scope_depth;
+                ctx->defer_count++;
             }
             return NULL;
 
@@ -1982,6 +2330,7 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         }
     }
 
+    fprintf(stderr, "DEBUG SLICE ir_generate done, errors=%d\n", ir_gen_error_collection_has_errors(&ctx->errors));
     return !ir_gen_error_collection_has_errors(&ctx->errors);
 }
 

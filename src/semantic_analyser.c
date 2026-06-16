@@ -496,6 +496,23 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                         }
                         break;
 
+                    case AST_NODE_POSTFIX_SLICE:
+                    case AST_NODE_POSTFIX_SLICE_LT:
+                        if (type && type->kind == TD_KIND_SLICE)
+                        {
+                            // Slicing a slice yields the same slice type
+                            op->resolved_type = (TypeDescriptor *)type;
+                        }
+                        else if (type && type->kind == TD_KIND_ARRAY)
+                        {
+                            // Slicing an array yields a slice of the element type
+                            TypeDescriptor const * slice_type = get_or_create_slice_type(
+                                ctx->type_registry, type->element_type);
+                            type = slice_type;
+                            op->resolved_type = (TypeDescriptor *)type;
+                        }
+                        break;
+
                     default:
                         break;
                 }
@@ -991,6 +1008,13 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
 
         case AST_NODE_BREAK_STATEMENT:
         case AST_NODE_CONTINUE_STATEMENT:
+            break;
+
+        case AST_NODE_DEFER_STATEMENT:
+            if (node->list.count > 0)
+            {
+                sem_pass2_node(ctx, node->list.children[0], expected_return_type);
+            }
             break;
 
         default:

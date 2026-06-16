@@ -81,5 +81,45 @@ main :: proc() -> int {
     }
     if total != 111 { return 6 }
 
+    // Test fallthrough: first case falls through to second case
+    x = 1
+    result = 0
+    switch x {
+    case 1:
+        result = result + 10
+        fallthrough
+    case 2:
+        result = result + 100
+    }
+    if result != 110 { return 7 }
+
+    // Test fallthrough: second case falls through to default
+    x = 2
+    result = 0
+    switch x {
+    case 1:
+        result = 10
+    case 2:
+        result = result + 20
+        fallthrough
+    case:
+        result = result + 200
+    }
+    if result != 220 { return 8 }
+
+    // Test fallthrough with no match: no case matched, just default
+    x = 99
+    result = 0
+    switch x {
+    case 1:
+        result = 10
+        fallthrough
+    case 2:
+        result = 20
+    case:
+        result = 99
+    }
+    if result != 99 { return 9 }
+
     return 0
 }

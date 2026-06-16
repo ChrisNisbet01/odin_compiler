@@ -11,11 +11,19 @@
 #include <stdbool.h>
 
 #define MAX_LOOP_DEPTH 64
+#define MAX_DEFERS 128
+
+typedef struct
+{
+    odin_grammar_node_t * node;
+    int scope_depth;
+} DeferEntry;
 
 typedef struct
 {
     LLVMBasicBlockRef continue_bb;
     LLVMBasicBlockRef break_bb;
+    int scope_depth;
 } LoopContext;
 
 typedef struct
@@ -37,6 +45,12 @@ typedef struct
 
     LoopContext loop_stack[MAX_LOOP_DEPTH];
     int loop_depth;
+
+    LLVMBasicBlockRef fallthrough_target_bb;
+
+    DeferEntry defer_stack[MAX_DEFERS];
+    int defer_count;
+    int current_scope_depth;
 } IrGenContext;
 
 IrGenContext * ir_gen_context_create(char const * module_name, TypeDescriptors * type_registry, GeneratorContext * gen_ctx);
