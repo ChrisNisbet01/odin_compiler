@@ -451,9 +451,32 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             return NULL;
         }
 
+        case AST_NODE_TERNARY_EXPRESSION:
+        {
+            // TernaryExpression = RangeExpression (? Expression : Expression)?
+            // Without ?: 1 child [Range]; with ?: 3 children [cond, true, false]
+            if (node->list.count < 3)
+            {
+                if (node->list.count > 0)
+                {
+                    TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
+                    if (inner_type) node->resolved_type = (TypeDescriptor *)inner_type;
+                    return inner_type;
+                }
+                return NULL;
+            }
+            TypeDescriptor const * cond_type = sem_evaluate_expr(ctx, node->list.children[0]);
+            TypeDescriptor const * true_type = sem_evaluate_expr(ctx, node->list.children[1]);
+            TypeDescriptor const * false_type = sem_evaluate_expr(ctx, node->list.children[2]);
+            TypeDescriptor const * result_type = true_type ? true_type : false_type;
+            if (result_type) node->resolved_type = (TypeDescriptor *)result_type;
+            (void)cond_type;
+            (void)false_type;
+            return result_type;
+        }
+
         case AST_NODE_EXPRESSION:
         case AST_NODE_ASSIGN_EXPRESSION:
-        case AST_NODE_TERNARY_EXPRESSION:
         case AST_NODE_PRIMARY_EXPRESSION:
         {
             if (node->list.count > 0)
