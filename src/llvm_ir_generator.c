@@ -592,13 +592,39 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 // If variable is of type `any`, pack the value into the {i8*, i64} struct
                 if (var_type && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
                 {
-                    // Cast primitive to i8* pointer (for simplicity use inttoptr)
+                    // Build a runtime any struct {i8*, i64} using GEP + store
                     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
-                    LLVMValueRef data_ptr = LLVMBuildIntToPtr(ctx->builder, init_val, i8ptr, "anydata");
+                    LLVMValueRef zero_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                    LLVMValueRef data_ptr;
+                    LLVMTypeRef val_type = LLVMTypeOf(init_val);
+                    LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
+                    if (val_kind == LLVMIntegerTypeKind)
+                    {
+                        data_ptr = LLVMBuildIntToPtr(ctx->builder, init_val, i8ptr, "anydata");
+                    }
+                    else if (val_kind == LLVMPointerTypeKind)
+                    {
+                        data_ptr = LLVMBuildBitCast(ctx->builder, init_val, i8ptr, "anydata");
+                    }
+                    else
+                    {
+                        // For struct/array types, allocate temporary storage
+                        LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, val_type, "anytmp");
+                        LLVMBuildStore(ctx->builder, init_val, tmp);
+                        data_ptr = LLVMBuildBitCast(ctx->builder, tmp, i8ptr, "anydata");
+                    }
                     LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-                    LLVMValueRef any_vals[2] = {data_ptr, type_id};
-                    LLVMValueRef any_val = LLVMConstNamedStruct(var_type->llvm_type, any_vals, 2);
-                    LLVMBuildStore(ctx->builder, any_val, alloca);
+                    LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                    LLVMValueRef idx2 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                    LLVMValueRef gep0[2] = {zero_idx, idx1};
+                    LLVMValueRef data_field
+                        = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, gep0, 2, "any.data");
+                    LLVMBuildStore(ctx->builder, data_ptr, data_field);
+                    LLVMValueRef idx3 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+                    LLVMValueRef gep1[2] = {zero_idx, idx3};
+                    LLVMValueRef id_field
+                        = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, gep1, 2, "any.typeid");
+                    LLVMBuildStore(ctx->builder, type_id, id_field);
                 }
                 else
                 {
