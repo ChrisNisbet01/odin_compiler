@@ -1188,6 +1188,42 @@ ir_gen_ternary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
 // Handle assignment expressions: AssignExpression = OrReturnExpr (AssignOp
 // OrReturnExpr)?
+
+// Pack a value into an 'any' struct {i8* data, i64 type_id}.
+// lhs_ptr must be a pointer to an any struct alloca.
+static void
+ir_gen_pack_any(IrGenContext * ctx, LLVMValueRef lhs_ptr, LLVMValueRef rhs_val, LLVMTypeRef any_struct_type)
+{
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMValueRef zero_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    LLVMValueRef data_ptr;
+    LLVMTypeRef val_type = LLVMTypeOf(rhs_val);
+    LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
+    if (val_kind == LLVMIntegerTypeKind)
+    {
+        data_ptr = LLVMBuildIntToPtr(ctx->builder, rhs_val, i8ptr, "anydata");
+    }
+    else if (val_kind == LLVMPointerTypeKind)
+    {
+        data_ptr = LLVMBuildBitCast(ctx->builder, rhs_val, i8ptr, "anydata");
+    }
+    else
+    {
+        LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, val_type, "anytmp");
+        LLVMBuildStore(ctx->builder, rhs_val, tmp);
+        data_ptr = LLVMBuildBitCast(ctx->builder, tmp, i8ptr, "anydata");
+    }
+    LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+    LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    LLVMValueRef gep0[2] = {zero_idx, idx1};
+    LLVMValueRef data_field = LLVMBuildInBoundsGEP2(ctx->builder, any_struct_type, lhs_ptr, gep0, 2, "any.data");
+    LLVMBuildStore(ctx->builder, data_ptr, data_field);
+    LLVMValueRef idx2 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+    LLVMValueRef gep1[2] = {zero_idx, idx2};
+    LLVMValueRef id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_struct_type, lhs_ptr, gep1, 2, "any.typeid");
+    LLVMBuildStore(ctx->builder, type_id, id_field);
+}
+
 static LLVMValueRef
 ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -1214,25 +1250,23 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return rhs_val;
 
     LLVMValueRef store_val = rhs_val;
-    // If lhs is of type any, pack rhs into struct
-    if (lhs_ptr)
+    TypeDescriptor const * lhs_type_desc = NULL;
+    odin_grammar_node_t * lhs_expr = node->list.children[0];
+    odin_grammar_node_t * t = lhs_expr;
+    while (t && t->list.count >= 1 && t->list.children[0])
+        t = t->list.children[0];
+    if (t)
+        lhs_type_desc = t->resolved_type;
+    if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
+        && strcmp(lhs_type_desc->as.basic.name, "any") == 0)
     {
-        // Retrieve type info from lhs_ptr via context
-        // Since alloca for 'any' has struct type, we check type of variable
-        // Use the type registry: get type of pointer
-        // Here we attempt to get the variable value type by using the type of init value? Simplify: skip
+        ir_gen_pack_any(ctx, lhs_ptr, rhs_val, lhs_type_desc->llvm_type);
+        return rhs_val;
     }
+
     if (op_kind != OP_ASSIGN)
     {
         OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
-        TypeDescriptor const * lhs_type_desc = NULL;
-        odin_grammar_node_t * lhs_expr = node->list.children[0];
-        // Walk wrappers to find resolved_type
-        odin_grammar_node_t * t = lhs_expr;
-        while (t && t->list.count >= 1 && t->list.children[0])
-            t = t->list.children[0];
-        if (t)
-            lhs_type_desc = t->resolved_type;
         if (lhs_type_desc == NULL)
             lhs_type_desc = type_descriptor_get_int64_type(ctx->type_registry);
 
@@ -1246,39 +1280,42 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 static LLVMValueRef
 ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
 {
-    fprintf(stderr, "DEBUG: ir_gen_assign_statement called, node type=%d, count=%zu\n", node->type, node->list.count);
     if (node->list.count < 2)
         return NULL;
 
     odin_grammar_node_t * op_node = node_find_op(node);
     AstOpMetadata * op_md = (op_node) ? (AstOpMetadata *)op_node->metadata : NULL;
     OperatorKind op_kind = op_md ? op_md->kind : OP_ASSIGN;
-    fprintf(stderr, "DEBUG: op_kind=%d\n", op_kind);
 
     if (op_kind != OP_ASSIGN && compound_assign_to_binary_op(op_kind) == OP_INVALID)
         return NULL;
 
     LLVMValueRef rhs_val = ir_gen_node(ctx, node->list.children[2]);
-    fprintf(stderr, "DEBUG: rhs_val=%p\n", (void *)rhs_val);
     if (rhs_val == NULL)
         return NULL;
 
     LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
-    fprintf(stderr, "DEBUG: lhs_ptr=%p\n", (void *)lhs_ptr);
     if (lhs_ptr == NULL)
         return rhs_val;
 
     LLVMValueRef store_val = rhs_val;
+    TypeDescriptor const * lhs_type_desc = NULL;
+    odin_grammar_node_t * lhs_expr = node->list.children[0];
+    odin_grammar_node_t * t = lhs_expr;
+    while (t && t->list.count >= 1 && t->list.children[0])
+        t = t->list.children[0];
+    if (t)
+        lhs_type_desc = t->resolved_type;
+    if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
+        && strcmp(lhs_type_desc->as.basic.name, "any") == 0)
+    {
+        ir_gen_pack_any(ctx, lhs_ptr, rhs_val, lhs_type_desc->llvm_type);
+        return rhs_val;
+    }
+
     if (op_kind != OP_ASSIGN)
     {
         OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
-        TypeDescriptor const * lhs_type_desc = NULL;
-        odin_grammar_node_t * lhs_expr = node->list.children[0];
-        odin_grammar_node_t * t = lhs_expr;
-        while (t && t->list.count >= 1 && t->list.children[0])
-            t = t->list.children[0];
-        if (t)
-            lhs_type_desc = t->resolved_type;
         if (lhs_type_desc == NULL)
             lhs_type_desc = type_descriptor_get_int64_type(ctx->type_registry);
 
@@ -2304,6 +2341,49 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 break;
             val = LLVMBuildLoad2(ctx->builder, pointee_type->llvm_type, val, "deref");
             cur_type = pointee_type;
+            break;
+        }
+
+        case AST_NODE_POSTFIX_ASSERTION:
+        {
+            // Type assertion x.(T) for 'any': extract data pointer, bitcast, load
+            if (cur_type == NULL || cur_type->kind != TD_KIND_BASIC || cur_type->as.basic.name == NULL
+                || strcmp(cur_type->as.basic.name, "any") != 0)
+                break;
+            TypeDescriptor const * target_type = op->resolved_type;
+            if (target_type == NULL)
+                break;
+            // Use alloca+store+GEP+Load to extract field 0 (data pointer) from the any struct
+            LLVMValueRef tmp_alloca = LLVMBuildAlloca(ctx->builder, cur_type->llvm_type, "assert.tmp");
+            LLVMBuildStore(ctx->builder, val, tmp_alloca);
+            LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+            LLVMValueRef gep_data[2] = {idx0, idx0};
+            LLVMValueRef data_field
+                = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, tmp_alloca, gep_data, 2, "assert.data.ptr");
+            LLVMValueRef data_ptr = LLVMBuildLoad2(
+                ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_field, "assert.data"
+            );
+            // Extract according to target type:
+            // - integer: data was packed via inttoptr, so ptrtoint back
+            // - pointer: data was packed via bitcast, so bitcast back
+            // - struct/array: data was packed via alloca+store+bitcast, so load through
+            if (target_type->kind == TD_KIND_BASIC && !target_type->as.basic.is_float && target_type->as.basic.width > 0
+                && target_type->as.basic.width <= 64)
+            {
+                val = LLVMBuildPtrToInt(ctx->builder, data_ptr, target_type->llvm_type, "assert.val");
+            }
+            else if (target_type->kind == TD_KIND_POINTER)
+            {
+                val = LLVMBuildBitCast(ctx->builder, data_ptr, target_type->llvm_type, "assert.val");
+            }
+            else
+            {
+                LLVMValueRef typed_ptr = LLVMBuildBitCast(
+                    ctx->builder, data_ptr, LLVMPointerType(target_type->llvm_type, 0), "assert.typed"
+                );
+                val = LLVMBuildLoad2(ctx->builder, target_type->llvm_type, typed_ptr, "assert.val");
+            }
+            cur_type = target_type;
             break;
         }
 

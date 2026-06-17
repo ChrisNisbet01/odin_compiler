@@ -642,6 +642,25 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 }
                 break;
 
+            case AST_NODE_POSTFIX_ASSERTION:
+            {
+                // Type assertion x.(T): only valid for 'any' type currently
+                if (type && type->kind == TD_KIND_BASIC && type->as.basic.name
+                    && strcmp(type->as.basic.name, "any") == 0)
+                {
+                    if (op->list.count > 0)
+                    {
+                        TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, op->list.children[0]);
+                        if (target_type)
+                        {
+                            type = target_type;
+                            op->resolved_type = (TypeDescriptor *)type;
+                        }
+                    }
+                }
+                break;
+            }
+
             case AST_NODE_POSTFIX_SLICE:
             case AST_NODE_POSTFIX_SLICE_LT:
                 if (type && type->kind == TD_KIND_SLICE)

@@ -7,6 +7,16 @@ Procedure literals can appear anywhere expressions are allowed (including inside
 
 **Affects**: `src/semantic_analyser.c` line 1063–1087, `src/llvm_ir_generator.c` line 2027–2096, `test/test_nested_proc.odin`
 
+### Procedure parameter types not semantically analysed
+`AST_NODE_PROCEDURE_SIGNATURE` resolves parameter types individually (lines 113–198, 716–903). Each parameter's type is resolved via `sem_resolve_type_expr`, stored in the proc type descriptor, and registered into the symbol table. The test `test_proc_params.odin` covers int, bool, float, pointer, and mixed parameter types, including pointer dereference return.
+
+**Affects**: `src/semantic_analyser.c` lines 113–198, 716–903. Test: `test/test_proc_params.odin`.
+
+### `any` type assertion and assignment packing
+`x.(T)` type assertions now work for `any` type: semantic analyser resolves the target type, and IR generator extracts the packed value (ptrtoint for integers, bitcast for pointers, load-through for structs/floats). Assignment to `any` variables packs the RHS value. Both `ir_gen_assign_expression` and `ir_gen_assign_statement` handle `any` packing. `string` and `cstring` basic types remain registered and functional.
+
+**Affects**: `src/semantic_analyser.c` POSTFIX_ASSERTION handler, `src/llvm_ir_generator.c` POSTFIX_ASSERTION handler + `ir_gen_pack_any` + assignment packing. Test: `test/test_any_ops.odin`.
+
 ## Not Implemented
 
 ### Statements
@@ -19,7 +29,7 @@ Procedure literals can appear anywhere expressions are allowed (including inside
 - **`or_else`** (`AST_NODE_OR_ELSE`) – Parsed, AST built, sem and IR both treat it as identity on the LHS. The fallback expression is never evaluated. No nil/error checking.
 - **`or_return`** (`AST_NODE_OR_RETURN`) – Same as above; treated as identity. No return-on-nil/error behavior.
 - **Ternary `cond ? a : b`** (`AST_NODE_TERNARY_EXPRESSION`) – Parsed, AST built, sem and IR both evaluate/return only the condition. `a` and `b` branches ignored.
-- **Type assertion `.(Type)`** (`AST_NODE_POSTFIX_ASSERTION`) – Parsed, AST built, no case in `sem_evaluate_expr` or IR rvalue handler.
+- **Type assertion `.(Type)`** (`AST_NODE_POSTFIX_ASSERTION`) – Now supported for `any` type: semantic analyser resolves target type, IR generator extracts packed value via ptrtoint/bitcast/load. Not yet supported for union types.
 - **`in` / `not_in` operators** – Parsed, operator metadata stored, but `ir_gen_binary_op_by_kind` returns NULL for these (no IR codegen).
 - **Range `..` / `..<` in expressions** – Parsed, operator metadata stored, no IR codegen. For-range loops not implemented either.
 - **For-range clause** (`for i, val in expr`) – Grammar parses it, but sem and IR treat it as C-style for. Range iteration not implemented.
@@ -34,7 +44,7 @@ Procedure literals can appear anywhere expressions are allowed (including inside
 - **`bit_set` type** – Parsed, no sem/IR.
 - **`soa` (structure-of-arrays) layout** – Parsed, no sem/IR.
 - **`distinct` type** – Parsed, no sem/IR.
-- **`any` type / RTTI** – Registered in type registry with correct `{i8*, i64}` layout (data pointer + type identifier). Basic variable declarations and packing of integer, pointer, and struct values into `any` work. No runtime type information or extraction support yet.
+- **`any` type / RTTI** – Registered in type registry with correct `{i8*, i64}` layout. Variable declaration and assignment packing for integers, pointers, and struct/array values work. Type assertion `x.(T)` extracts values back. No runtime type identifiers (type_id always 0) or type switching.
 
 ### Procedures & Declarations
 - **Polymorphic procedures / monomorphisation** – Generics not implemented. `$T` poly-ident (`AST_NODE_POLY_IDENT`) parsed but not handled.
@@ -47,15 +57,3 @@ Procedure literals can appear anywhere expressions are allowed (including inside
 - **`context` built-in** – Keyword reserved, no grammar rules or handling.
 - **`auto_cast`** – Keyword reserved, not implemented.
 - **Inline `asm`** – Keyword reserved, not implemented.
-
-## Partially Implemented
-
-### Procedure parameter types not semantically analysed
-`AST_NODE_PROCEDURE_SIGNATURE` resolves the return type correctly, but parameter types are not individually analysed or type-checked. The IR generator registers parameters manually.
-
-**Affects**: `src/semantic_analyser.c` line 107–128.
-
-### `string` / `cstring` / `any` basic type registration
-These types are registered and functional. `string` maps to `{i8*, i64}`. `any` maps to `{i8*, i64}` (data pointer + type identifier). Value packing for `any` supports integers, pointers, and struct/array types.
-
-**Affects**: `src/type_descriptors.c` line 201–208. Tests: `test_any_full.odin`.
