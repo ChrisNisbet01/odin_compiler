@@ -1,5 +1,12 @@
 # Unimplemented / Partially Implemented Core Features
 
+## Recently Completed
+
+### Nested procedures as values
+Procedure literals can appear anywhere expressions are allowed (including inside other procs). Nested proc declarations as symbols are handled through `AST_NODE_CONSTANT_DECL` in both the semantic analyser and IR generator. Storing, passing as higher-order arguments, and calling via variable all work. Tests cover basic nesting, cross-calling, higher-order passing, and variable storage.
+
+**Affects**: `src/semantic_analyser.c` line 1063–1087, `src/llvm_ir_generator.c` line 2027–2096, `test/test_nested_proc.odin`
+
 ## Not Implemented
 
 ### Statements
@@ -47,9 +54,6 @@
 `AST_NODE_PROCEDURE_SIGNATURE` resolves the return type correctly, but parameter types are not individually analysed or type-checked. The IR generator registers parameters manually.
 
 **Affects**: `src/semantic_analyser.c` line 107–128.
-
-### Nested procedures as values
-Procedure literals can appear anywhere expressions are allowed (including inside other procs), but there is no dedicated support for nested proc *declarations* as symbols; they are treated as constant/proc-value declarations, which works via existing variable/constant handling.
 
 ### `string` / `cstring` / `any` basic type registration
 These types are registered and functional. `string` maps to `{i8*, i64}`. `any` maps to `{i8*, i64}` (data pointer + type identifier). Value packing for `any` supports integers, pointers, and struct/array types.

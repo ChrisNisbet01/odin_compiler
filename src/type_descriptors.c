@@ -380,7 +380,8 @@ get_or_create_proc_type(
         }
     }
     LLVMTypeRef ret_llvm = return_type ? return_type->llvm_type : LLVMVoidTypeInContext(registry->context);
-    td->llvm_type = LLVMFunctionType(ret_llvm, llvm_params, (unsigned)param_count, is_variadic);
+    td->proc_metadata.func_type = LLVMFunctionType(ret_llvm, llvm_params, (unsigned)param_count, is_variadic);
+    td->llvm_type = LLVMPointerType(td->proc_metadata.func_type, 0);
     free(llvm_params);
 
     return td;

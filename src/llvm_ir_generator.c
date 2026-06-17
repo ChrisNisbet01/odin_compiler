@@ -1861,8 +1861,9 @@ ir_gen_procedure_literal(IrGenContext * ctx, odin_grammar_node_t * node)
     if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
         return NULL;
 
-    LLVMValueRef func
-        = LLVMAddFunction(ctx->module, generate_anon_name(&ctx->anon_counter, "proc"), proc_type->llvm_type);
+    LLVMValueRef func = LLVMAddFunction(
+        ctx->module, generate_anon_name(&ctx->anon_counter, "proc"), proc_type->proc_metadata.func_type
+    );
 
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
     LLVMPositionBuilderAtEnd(ctx->builder, entry);
@@ -1920,7 +1921,7 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
             return NULL;
 
-        LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, proc_type->llvm_type);
+        LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, proc_type->proc_metadata.func_type);
 
         LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
         LLVMPositionBuilderAtEnd(ctx->builder, entry);
@@ -2047,7 +2048,7 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMBasicBlockRef outer_block = LLVMGetInsertBlock(ctx->builder);
 
     // Build nested function
-    LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, proc_type->llvm_type);
+    LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, proc_type->proc_metadata.func_type);
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
     LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
@@ -2169,7 +2170,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
                 return val;
 
-            LLVMTypeRef func_type = proc_type->llvm_type;
+            LLVMTypeRef func_type = proc_type->proc_metadata.func_type;
 
             LLVMValueRef args[128];
             int arg_count = 0;
@@ -2413,13 +2414,15 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 
     // If the final value is a pointer and the result type is non-composite, load
-    // it
+    // it. Proc types are excluded because the pointer IS the value (function
+    // pointer).
     if (val != NULL && cur_type != NULL)
     {
         LLVMTypeRef val_llvm_type = LLVMTypeOf(val);
         if (LLVMGetTypeKind(val_llvm_type) == LLVMPointerTypeKind)
         {
-            if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_ARRAY && cur_type->kind != TD_KIND_SLICE)
+            if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_ARRAY && cur_type->kind != TD_KIND_SLICE
+                && cur_type->kind != TD_KIND_PROC)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }

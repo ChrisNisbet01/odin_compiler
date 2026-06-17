@@ -19,6 +19,7 @@ typedef struct
     TypeDescriptor const ** returns;
     bool is_variadic;
     bool is_void_return;
+    LLVMTypeRef func_type;
 } ProcMetadata;
 
 typedef struct
@@ -79,21 +80,18 @@ typedef struct TypeDescriptor
     } as;
 } TypeDescriptor;
 
-TypeDescriptors * type_descriptors_create_registry(
-    LLVMContextRef context, LLVMTargetDataRef data_layout, LLVMBuilderRef builder
-);
+TypeDescriptors *
+type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_layout, LLVMBuilderRef builder);
 
 void type_descriptors_destroy_registry(TypeDescriptors * registry);
 
-TypeDescriptor const * get_or_create_basic_type(
-    TypeDescriptors * registry, char const * name, int width, bool is_float, bool is_unsigned
-);
+TypeDescriptor const *
+get_or_create_basic_type(TypeDescriptors * registry, char const * name, int width, bool is_float, bool is_unsigned);
 
 TypeDescriptor const * get_or_create_pointer_type(TypeDescriptors * registry, TypeDescriptor const * pointee);
 
-TypeDescriptor const * get_or_create_array_type(
-    TypeDescriptors * registry, TypeDescriptor const * element_type, size_t count
-);
+TypeDescriptor const *
+get_or_create_array_type(TypeDescriptors * registry, TypeDescriptor const * element_type, size_t count);
 
 TypeDescriptor const * get_or_create_slice_type(TypeDescriptors * registry, TypeDescriptor const * element_type);
 
@@ -108,8 +106,7 @@ TypeDescriptor const * get_or_create_proc_type(
 );
 
 TypeDescriptor const * register_struct_type(
-    TypeDescriptors * registry, LLVMTypeRef llvm_struct, bool is_complete,
-    struct_or_union_members_st const * members
+    TypeDescriptors * registry, LLVMTypeRef llvm_struct, bool is_complete, struct_or_union_members_st const * members
 );
 
 TypeDescriptor const * get_basic_type_by_name(TypeDescriptors * registry, char const * name);
@@ -146,5 +143,4 @@ typedef struct
     int count;
 } field_access_path_t;
 
-bool type_descriptor_find_struct_field_path(
-    TypeDescriptor const * desc, char const * name, field_access_path_t * path);
+bool type_descriptor_find_struct_field_path(TypeDescriptor const * desc, char const * name, field_access_path_t * path);
