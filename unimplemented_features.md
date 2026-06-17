@@ -17,6 +17,16 @@ Procedure literals can appear anywhere expressions are allowed (including inside
 
 **Affects**: `src/semantic_analyser.c` POSTFIX_ASSERTION handler, `src/llvm_ir_generator.c` POSTFIX_ASSERTION handler + `ir_gen_pack_any` + assignment packing. Test: `test/test_any_ops.odin`.
 
+### `or_else` / `or_return` expressions
+`or_else` provides a fallback value when the LHS is nil/zero: if `lhs != 0`, use `lhs`; otherwise evaluate and use `rhs`. Implemented with conditional branch + phi node. `or_return` short-circuits on nil/zero: if the expression evaluates to zero, returns a zero value of the enclosing function's return type. Both work for integer and pointer types.
+
+**Affects**: `src/semantic_analyser.c` OR_ELSE/OR_RETURN handlers, `src/llvm_ir_generator.c` `ir_gen_or_else_expression`/`ir_gen_or_return_expression`. Test: `tests/test_or_else.odin` (also covers or_return).
+
+### Ternary `cond ? a : b`
+Fully implemented with conditional branch to then/else blocks and a phi node selecting the result. Supports integer and pointer condition types; both branches must produce compatible types.
+
+**Affects**: `src/semantic_analyser.c` TERNARY_EXPRESSION handler, `src/llvm_ir_generator.c` `ir_gen_ternary_expression`. Tests: `tests/test_ternary.odin`, `tests/test_ternary2.odin`.
+
 ## Not Implemented
 
 ### Statements
@@ -26,10 +36,7 @@ Procedure literals can appear anywhere expressions are allowed (including inside
 - **Top-level `using`** (`AST_NODE_USING_DECL`) – Parsed, AST built, no sem/IR.
 
 ### Expressions
-- **`or_else`** (`AST_NODE_OR_ELSE`) – Parsed, AST built, sem and IR both treat it as identity on the LHS. The fallback expression is never evaluated. No nil/error checking.
-- **`or_return`** (`AST_NODE_OR_RETURN`) – Same as above; treated as identity. No return-on-nil/error behavior.
-- **Ternary `cond ? a : b`** (`AST_NODE_TERNARY_EXPRESSION`) – Parsed, AST built, sem and IR both evaluate/return only the condition. `a` and `b` branches ignored.
-- **Type assertion `.(Type)`** (`AST_NODE_POSTFIX_ASSERTION`) – Now supported for `any` type: semantic analyser resolves target type, IR generator extracts packed value via ptrtoint/bitcast/load. Not yet supported for union types.
+- **Type assertion `.(Type)` for union types** – Currently only works for `any` type. Union type assertions need RTTI.
 - **`in` / `not_in` operators** – Parsed, operator metadata stored, but `ir_gen_binary_op_by_kind` returns NULL for these (no IR codegen).
 - **Range `..` / `..<` in expressions** – Parsed, operator metadata stored, no IR codegen. For-range loops not implemented either.
 - **For-range clause** (`for i, val in expr`) – Grammar parses it, but sem and IR treat it as C-style for. Range iteration not implemented.
