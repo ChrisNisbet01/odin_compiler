@@ -923,8 +923,8 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 if (cur_type == NULL || cur_type->kind != TD_KIND_POINTER)
                     return NULL;
                 ptr = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, ptr, "deref");
-                if (cur_type->element_type)
-                    cur_type = cur_type->element_type;
+                if (cur_type->pointee)
+                    cur_type = cur_type->pointee;
                 break;
             }
 
@@ -2299,7 +2299,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             if (cur_type == NULL || cur_type->kind != TD_KIND_POINTER)
                 break;
-            TypeDescriptor const * pointee_type = cur_type->element_type;
+            TypeDescriptor const * pointee_type = cur_type->pointee;
             if (pointee_type == NULL)
                 break;
             val = LLVMBuildLoad2(ctx->builder, pointee_type->llvm_type, val, "deref");
