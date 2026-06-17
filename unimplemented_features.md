@@ -27,7 +27,7 @@
 - **`bit_set` type** – Parsed, no sem/IR.
 - **`soa` (structure-of-arrays) layout** – Parsed, no sem/IR.
 - **`distinct` type** – Parsed, no sem/IR.
-- **`any` type / RTTI** – Registered in type registry but uses wrong LLVM layout (`{i8*,i64}` string layout instead of `{rawptr, typeid}`). No runtime type information support.
+- **`any` type / RTTI** – Registered in type registry with correct `{i8*, i64}` layout (data pointer + type identifier). Basic variable declarations and packing of integer, pointer, and struct values into `any` work. No runtime type information or extraction support yet.
 
 ### Procedures & Declarations
 - **Polymorphic procedures / monomorphisation** – Generics not implemented. `$T` poly-ident (`AST_NODE_POLY_IDENT`) parsed but not handled.
@@ -44,9 +44,10 @@
 ## Partially Implemented
 
 ### Chained struct member access with `using`
-`using` field promotion works for single-level access (e.g., `v.x`), but chained access (e.g., `v.inner.x`) fails because the rvalue path loads intermediate struct values, breaking subsequent GEP chains. This affects all nested member access, not just `using`.
+`using` field promotion and chained struct member access are now fully functional. Both single-level (e.g., `v.x`) and chained access (e.g., `v.inner.x`) work correctly in lvalue and rvalue paths. Tests: `test_using.odin`, `test_chained_member.odin`.
 
-**Affects**: `src/type_descriptors.c` (path resolution works), `src/llvm_ir_generator.c` (rvalue GEP chain breaks).
+### break/continue do not emit defers
+`break` and `continue` statements are parsed and handled in the IR generator but do not emit pending defers before the branch. This means defer statements inside loops/switch cases are not executed on break/continue.
 
 ### Procedure parameter types not semantically analysed
 `AST_NODE_PROCEDURE_SIGNATURE` resolves the return type correctly, but parameter types are not individually analysed or type-checked. The IR generator registers parameters manually.
