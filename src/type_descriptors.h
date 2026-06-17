@@ -95,6 +95,8 @@ get_or_create_array_type(TypeDescriptors * registry, TypeDescriptor const * elem
 
 TypeDescriptor const * get_or_create_slice_type(TypeDescriptors * registry, TypeDescriptor const * element_type);
 
+TypeDescriptor const * get_or_create_enum_type(TypeDescriptors * registry, char const * tag, LLVMTypeRef llvm_type);
+
 TypeDescriptor const * get_or_create_proc_type(
     TypeDescriptors * registry,
     TypeDescriptor const * return_type,

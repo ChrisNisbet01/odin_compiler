@@ -21,6 +21,7 @@ sem_context_init(
 }
 
 // --- Forward declarations ---
+static TypeDescriptor const * sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node);
 static void sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type);
 
 // --- Type expression resolution ---
@@ -195,6 +196,76 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (proc_type)
             node->resolved_type = (TypeDescriptor *)proc_type;
         return proc_type;
+    }
+
+    case AST_NODE_ENUM_TYPE:
+    {
+        odin_grammar_node_t * enum_name_node = NULL;
+        odin_grammar_node_t * enumerator_list = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_IDENTIFIER)
+                enum_name_node = child;
+            else if (child->type == AST_NODE_ENUMERATOR_LIST)
+                enumerator_list = child;
+        }
+        char const * enum_name = enum_name_node ? enum_name_node->text : NULL;
+        bool enum_named = (enum_name != NULL);
+
+        TypeDescriptor const * int_td = get_basic_type_by_name(ctx->type_registry, "int");
+        LLVMTypeRef llvm_int_type = int_td ? int_td->llvm_type : LLVMInt64TypeInContext(ctx->gen_ctx->context);
+        TypeDescriptor const * enum_td = get_or_create_enum_type(ctx->type_registry, enum_name, llvm_int_type);
+        if (enum_td == NULL)
+            return NULL;
+
+        if (enumerator_list)
+        {
+            int next_value = 0;
+            for (size_t i = 0; i < enumerator_list->list.count; i++)
+            {
+                odin_grammar_node_t * enumerator = enumerator_list->list.children[i];
+                if (enumerator == NULL || enumerator->type != AST_NODE_ENUMERATOR)
+                    continue;
+
+                odin_grammar_node_t * en_name_node = NULL;
+                odin_grammar_node_t * en_value_node = NULL;
+                for (size_t ci = 0; ci < enumerator->list.count; ci++)
+                {
+                    odin_grammar_node_t * child = enumerator->list.children[ci];
+                    if (child == NULL)
+                        continue;
+                    if (child->type == AST_NODE_IDENTIFIER)
+                        en_name_node = child;
+                    else
+                        en_value_node = child;
+                }
+                if (en_name_node == NULL || en_name_node->text == NULL)
+                    continue;
+
+                if (en_value_node)
+                {
+                    sem_evaluate_expr(ctx, en_value_node);
+                    if (en_value_node->resolved_type)
+                        next_value = 0;
+                }
+
+                odin_grammar_node_t * val_node = enumerator;
+                val_node->resolved_type = (TypeDescriptor *)enum_td;
+
+                LLVMValueRef llvm_val = LLVMConstInt(llvm_int_type, (unsigned long long)next_value, false);
+                TypedValue tv = create_typed_value(llvm_val, enum_td, false);
+                scope_add_symbol(generator_current_scope(ctx->gen_ctx), en_name_node->text, tv);
+
+                next_value++;
+            }
+        }
+
+        if (enum_td)
+            node->resolved_type = (TypeDescriptor *)enum_td;
+        return enum_td;
     }
 
     case AST_NODE_STRUCT_TYPE:

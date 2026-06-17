@@ -421,6 +421,28 @@ register_struct_type(
 }
 
 TypeDescriptor const *
+get_or_create_enum_type(TypeDescriptors * registry, char const * tag, LLVMTypeRef llvm_type)
+{
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_ENUM)
+            continue;
+        if (tag != NULL && t->as.enum_type.tag != NULL && strcmp(t->as.enum_type.tag, tag) == 0)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_ENUM;
+    td->llvm_type = llvm_type ? llvm_type : LLVMInt32TypeInContext(registry->context);
+    if (tag)
+        td->as.enum_type.tag = tag;
+    return td;
+}
+
+TypeDescriptor const *
 get_basic_type_by_name(TypeDescriptors * registry, char const * name)
 {
     for (int i = 0; i < registry->basic_count; i++)

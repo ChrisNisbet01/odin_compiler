@@ -540,6 +540,67 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 }
 
+// --- Enum type codegen ---
+
+static void
+ir_gen_register_enum_enumerators(IrGenContext * ctx, odin_grammar_node_t * enum_type_node)
+{
+    odin_grammar_node_t * enumerator_list = NULL;
+    for (size_t i = 0; i < enum_type_node->list.count; i++)
+    {
+        odin_grammar_node_t * child = enum_type_node->list.children[i];
+        if (child && child->type == AST_NODE_ENUMERATOR_LIST)
+        {
+            enumerator_list = child;
+            break;
+        }
+    }
+    if (enumerator_list == NULL)
+        return;
+
+    TypeDescriptor const * enum_td = enum_type_node->resolved_type;
+    LLVMTypeRef llvm_int_type = LLVMInt64TypeInContext(ctx->context);
+    if (enum_td && enum_td->llvm_type)
+        llvm_int_type = enum_td->llvm_type;
+
+    int next_value = 0;
+    for (size_t i = 0; i < enumerator_list->list.count; i++)
+    {
+        odin_grammar_node_t * enumerator = enumerator_list->list.children[i];
+        if (enumerator == NULL || enumerator->type != AST_NODE_ENUMERATOR)
+            continue;
+
+        odin_grammar_node_t * en_name_node = NULL;
+        odin_grammar_node_t * en_value_node = NULL;
+        for (size_t ci = 0; ci < enumerator->list.count; ci++)
+        {
+            odin_grammar_node_t * child = enumerator->list.children[ci];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_IDENTIFIER)
+                en_name_node = child;
+            else
+                en_value_node = child;
+        }
+        if (en_name_node == NULL || en_name_node->text == NULL)
+            continue;
+
+        int value = next_value;
+        if (en_value_node)
+        {
+            LLVMValueRef val = ir_gen_node(ctx, en_value_node);
+            if (val && LLVMGetTypeKind(val) == LLVMIntegerTypeKind)
+                value = (int)LLVMConstIntGetSExtValue(val);
+        }
+
+        LLVMValueRef llvm_val = LLVMConstInt(llvm_int_type, (unsigned long long)value, false);
+        TypedValue tv = create_typed_value(llvm_val, enum_td, false);
+        scope_add_symbol(generator_current_scope(ctx->gen_ctx), en_name_node->text, tv);
+
+        next_value = value + 1;
+    }
+}
+
 // --- Variable codegen ---
 
 static LLVMValueRef
@@ -650,6 +711,19 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     // Register in current scope
     TypedValue tv = create_typed_value(alloca, var_type, true);
     generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
+
+    // If the type annotation is an enum type, register its enumerators
+    // in the current scope so they can be looked up during IR gen
+    // (the semantic analysis scope was freed, so resolved_symbol is dangling)
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child && child->type == AST_NODE_ENUM_TYPE)
+        {
+            ir_gen_register_enum_enumerators(ctx, child);
+            break;
+        }
+    }
 
     return alloca;
 }
