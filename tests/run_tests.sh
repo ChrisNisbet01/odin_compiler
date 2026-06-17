@@ -8,9 +8,9 @@ set -e
 COMPILER="${1:-./build/src/odinc}"
 SPECIFIC_TEST="$2"
 
-SCRIPT_DIR=$(dirname "$0")
-TEST_DIR="$SCRIPT_DIR/../test"
-OUTPUT_DIR="$SCRIPT_DIR/../test/output"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEST_DIR="$SCRIPT_DIR"
+OUTPUT_DIR="$TEST_DIR/output"
 
 mkdir -p "$OUTPUT_DIR"
 
