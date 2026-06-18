@@ -27,6 +27,13 @@ Fully implemented with conditional branch to then/else blocks and a phi node sel
 
 **Affects**: `src/semantic_analyser.c` TERNARY_EXPRESSION handler, `src/llvm_ir_generator.c` `ir_gen_ternary_expression`. Tests: `tests/test_ternary.odin`, `tests/test_ternary2.odin`.
 
+### `enum` type
+Enums are parsed and semantically analysed. The semantic analyser creates an enum type descriptor with integer backing type and registers each enumerator as a constant in the current scope. The IR generator processes enum types in variable declarations, re-computes enumerator values, and registers them as LLVM constant integers. Test covers enum constant lookup via `cast(int) B`.
+
+**Affects**: `src/semantic_analyser.c` (AST_NODE_ENUM_TYPE handler in sem_resolve_type_expr, ~line 201), `src/type_descriptors.c/h` (get_or_create_enum_type), `src/llvm_ir_generator.c` (ir_gen_register_enum_enumerators, ir_gen_variable_decl enum type detection). Test: `tests/test_enum.odin`.
+
+### All 35 tests pass.
+
 ## Not Implemented
 
 ### Statements
@@ -46,7 +53,6 @@ Fully implemented with conditional branch to then/else blocks and a phi node sel
 - **`dynamic_array`** (`[dynamic]T`) – Parsed, no sem/IR.
 - **`map` type** – Parsed, no sem/IR.
 - **`union` type** – Parsed, no sem/IR.
-- **`enum` type** – Parsed, no sem/IR.
 - **`bit_field` type** – Parsed, no sem/IR.
 - **`bit_set` type** – Parsed, no sem/IR.
 - **`soa` (structure-of-arrays) layout** – Parsed, no sem/IR.
