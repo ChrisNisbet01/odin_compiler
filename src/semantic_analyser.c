@@ -86,6 +86,27 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return arr_type;
     }
 
+    case AST_NODE_DISTINCT_TYPE:
+    {
+        // DistinctType = KwDistinct TypePrefix
+        // Resolve the inner type and return its descriptor (treating distinct as transparent)
+        odin_grammar_node_t * inner = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            if (is_type_node(node->list.children[i]))
+            {
+                inner = node->list.children[i];
+                break;
+            }
+        }
+        if (inner == NULL)
+            return NULL;
+        TypeDescriptor const * base = sem_resolve_type_expr(ctx, inner);
+        if (base)
+            node->resolved_type = (TypeDescriptor *)base;
+        return base;
+    }
+
     case AST_NODE_SLICE_TYPE:
     {
         // SliceType = LBracket RBracket TypePrefix
@@ -491,6 +512,13 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
         node->resolved_type = (TypeDescriptor *)int_type;
         return int_type;
+    }
+
+    case AST_NODE_DISTINCT_TYPE:
+    {
+        TypeDescriptor const * td = sem_resolve_type_expr(ctx, node);
+        node->resolved_type = (TypeDescriptor *)td;
+        return td;
     }
 
     case AST_NODE_NIL:

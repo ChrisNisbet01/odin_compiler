@@ -37,7 +37,12 @@ Enums are parsed and semantically analysed. The semantic analyser creates an enu
 
 **Affects**: `src/semantic_analyser.c` (AST_NODE_WHEN_STATEMENT case), `src/llvm_ir_generator.c` (AST_NODE_WHEN_STATEMENT case dispatch). Test: `tests/test_when.odin`.
 
-### All 36 tests pass.
+### `distinct` type
+`distinct` type expressions now work in variable declarations (e.g. `x: distinct int`). The semantic analyser resolves the inner type and returns its descriptor (treating `distinct` as transparent — no type safety checking). The IR generator uses the base type's LLVM type directly. Note: type alias declarations (`MyType :: distinct int`) do not parse due to grammar limitations (TypePrefix not included in PrimaryExpression).
+
+**Affects**: `src/semantic_analyser.c` (AST_NODE_DISTINCT_TYPE cases in sem_resolve_type_expr and sem_evaluate_expr). Test: `tests/test_distinct.odin`.
+
+### All 37 tests pass.
 
 ## Not Implemented
 
@@ -60,7 +65,6 @@ Enums are parsed and semantically analysed. The semantic analyser creates an enu
 - **`bit_field` type** – Parsed, no sem/IR.
 - **`bit_set` type** – Parsed, no sem/IR.
 - **`soa` (structure-of-arrays) layout** – Parsed, no sem/IR.
-- **`distinct` type** – Parsed, no sem/IR.
 - **`any` type / RTTI** – Registered in type registry with correct `{i8*, i64}` layout. Variable declaration and assignment packing for integers, pointers, and struct/array values work. Type assertion `x.(T)` extracts values back. No runtime type identifiers (type_id always 0) or type switching.
 
 ### Procedures & Declarations
