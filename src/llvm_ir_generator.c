@@ -1560,7 +1560,6 @@ ir_gen_if_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMPositionBuilderAtEnd(ctx->builder, then_bb);
     if (then_node)
     {
-        fprintf(stderr, "DEBUG: then_node type = %d\n", then_node->type);
         ir_gen_node(ctx, then_node);
     }
     LLVMBasicBlockRef then_end = LLVMGetInsertBlock(ctx->builder);
@@ -2807,6 +2806,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return ir_gen_variable_decl(ctx, node);
 
     case AST_NODE_IF_STATEMENT:
+    case AST_NODE_WHEN_STATEMENT:
         return ir_gen_if_statement(ctx, node);
 
     case AST_NODE_FOR_STATEMENT:

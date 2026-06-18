@@ -1176,6 +1176,29 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         break;
     }
 
+    case AST_NODE_WHEN_STATEMENT:
+    {
+        // Same structure as IF_STATEMENT: children[0] = condition, children[1] = then-body,
+        // subsequent children = else-when/else clauses
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_COMPOUND_STATEMENT)
+            {
+                generator_push_scope(ctx->gen_ctx);
+                sem_analyse_compound_statement(ctx, child, expected_return_type);
+                generator_pop_scope(ctx->gen_ctx);
+            }
+            else
+            {
+                sem_evaluate_expr(ctx, child);
+            }
+        }
+        break;
+    }
+
     case AST_NODE_IF_STATEMENT:
     {
         // children[0] = condition, children[1] = then-body, children[2] = else-body (optional)

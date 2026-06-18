@@ -32,13 +32,17 @@ Enums are parsed and semantically analysed. The semantic analyser creates an enu
 
 **Affects**: `src/semantic_analyser.c` (AST_NODE_ENUM_TYPE handler in sem_resolve_type_expr, ~line 201), `src/type_descriptors.c/h` (get_or_create_enum_type), `src/llvm_ir_generator.c` (ir_gen_register_enum_enumerators, ir_gen_variable_decl enum type detection). Test: `tests/test_enum.odin`.
 
-### All 35 tests pass.
+### `when` compile-time branch
+`when` statements inside procedure bodies are now handled as runtime `if` statements. The semantic analyser processes the condition and body (pushing/poping scopes for compound statements). The IR generator dispatches `AST_NODE_WHEN_STATEMENT` to `ir_gen_if_statement`. Note: `when` is treated as runtime `if`, not compile-time evaluation. Top-level `when` declarations (`AST_NODE_WHEN_DECL`) remain unhandled.
+
+**Affects**: `src/semantic_analyser.c` (AST_NODE_WHEN_STATEMENT case), `src/llvm_ir_generator.c` (AST_NODE_WHEN_STATEMENT case dispatch). Test: `tests/test_when.odin`.
+
+### All 36 tests pass.
 
 ## Not Implemented
 
 ### Statements
-- **`when` compile-time branch** (`AST_NODE_WHEN_STATEMENT`) – Parsed, AST built, but no case in semantic analyser or IR generator. Silently skipped.
-- **`when` declaration** (`AST_NODE_WHEN_DECL`) – Same as above; no sem/IR handling.
+- **`when` declaration** (`AST_NODE_WHEN_DECL`) – Parsed, AST built, no sem/IR. Top-level `when` blocks not yet handled.
 - **`foreign` blocks / imports** (`AST_NODE_FOREIGN_BLOCK`, `AST_NODE_FOREIGN_IMPORT`) – Parsed, AST built, no sem/IR.
 - **Top-level `using`** (`AST_NODE_USING_DECL`) – Parsed, AST built, no sem/IR.
 
