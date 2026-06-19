@@ -1768,12 +1768,13 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
 
     // Detect for-range: first child is a raw Identifier
     bool is_for_range = false;
-    odin_grammar_node_t * loop_var_node = NULL;
+    odin_grammar_node_t * loop_var_nodes[MAX_LOOP_DEPTH];
+    int loop_var_count = 0;
     odin_grammar_node_t * range_expr_node = NULL;
 
     if (node->list.count >= 2 && node->list.children[0] != NULL && node->list.children[0]->type == AST_NODE_IDENTIFIER)
     {
-        for (size_t i = 1; i < node->list.count; i++)
+        for (size_t i = 0; i < node->list.count && loop_var_count < MAX_LOOP_DEPTH; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
             if (child == NULL)
@@ -1781,11 +1782,13 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
             if (child->type == AST_NODE_COMPOUND_STATEMENT)
                 break;
             if (child->type == AST_NODE_IDENTIFIER)
+            {
+                loop_var_nodes[loop_var_count++] = child;
                 continue;
+            }
             if (child->resolved_type && child->resolved_type->kind == TD_KIND_RANGE)
             {
                 is_for_range = true;
-                loop_var_node = node->list.children[0];
                 range_expr_node = child;
             }
             break;
@@ -1848,20 +1851,24 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
             ctx->loop_depth++;
         }
 
-        // Allocate loop variable, initialize to low, register in scope
-        LLVMValueRef loop_alloca = LLVMBuildAlloca(ctx->builder, i64, loop_var_node ? loop_var_node->text : "for.i");
-        LLVMSetAlignment(loop_alloca, LLVMABIAlignmentOfType(ctx->data_layout, i64));
-        LLVMBuildStore(ctx->builder, low_val, loop_alloca);
-
+        // Allocate loop variables, initialize to low, register in scope
+        LLVMValueRef loop_allocas[MAX_LOOP_DEPTH];
         TypeDescriptor const * i64_td = type_descriptor_get_int64_type(ctx->type_registry);
-        TypedValue tv = create_typed_value(loop_alloca, i64_td, true);
-        generator_add_symbol(ctx->gen_ctx, loop_var_node ? loop_var_node->text : "", tv);
+        for (int vi = 0; vi < loop_var_count; vi++)
+        {
+            char const * name = loop_var_nodes[vi] ? loop_var_nodes[vi]->text : "for.var";
+            loop_allocas[vi] = LLVMBuildAlloca(ctx->builder, i64, name);
+            LLVMSetAlignment(loop_allocas[vi], LLVMABIAlignmentOfType(ctx->data_layout, i64));
+            LLVMBuildStore(ctx->builder, low_val, loop_allocas[vi]);
+            TypedValue tv = create_typed_value(loop_allocas[vi], i64_td, true);
+            generator_add_symbol(ctx->gen_ctx, name, tv);
+        }
 
         LLVMBuildBr(ctx->builder, cond_bb);
 
         // Condition block: loop_var < high
         LLVMPositionBuilderAtEnd(ctx->builder, cond_bb);
-        LLVMValueRef loop_val = LLVMBuildLoad2(ctx->builder, i64, loop_alloca, "for.i.val");
+        LLVMValueRef loop_val = LLVMBuildLoad2(ctx->builder, i64, loop_allocas[0], "for.i.val");
         LLVMValueRef cmp = LLVMBuildICmp(ctx->builder, LLVMIntSLT, loop_val, high_val, "for.cmp");
         LLVMBuildCondBr(ctx->builder, cmp, body_bb, end_bb);
 
@@ -1878,11 +1885,14 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
             LLVMBuildBr(ctx->builder, inc_bb);
         }
 
-        // Increment block: loop_var++
+        // Increment block: load first var, increment, store to all vars
         LLVMPositionBuilderAtEnd(ctx->builder, inc_bb);
-        LLVMValueRef old_val = LLVMBuildLoad2(ctx->builder, i64, loop_alloca, "for.i.old");
+        LLVMValueRef old_val = LLVMBuildLoad2(ctx->builder, i64, loop_allocas[0], "for.i.old");
         LLVMValueRef inc = LLVMBuildAdd(ctx->builder, old_val, LLVMConstInt(i64, 1, false), "for.i.inc");
-        LLVMBuildStore(ctx->builder, inc, loop_alloca);
+        for (int vi = 0; vi < loop_var_count; vi++)
+        {
+            LLVMBuildStore(ctx->builder, inc, loop_allocas[vi]);
+        }
         LLVMBuildBr(ctx->builder, cond_bb);
 
         // Pop loop context

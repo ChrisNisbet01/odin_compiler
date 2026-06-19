@@ -47,7 +47,22 @@ Enums are parsed and semantically analysed. The semantic analyser creates an enu
 
 **Affects**: `src/llvm_ir_generator.c` (`ir_gen_in_expression`, `ir_gen_binary_expression` OP_IN/OP_NOT_IN cases). Test: `tests/test_in.odin`.
 
-### All 38 tests pass.
+### Range expressions (`..` / `..<`)
+Range expressions produce `{i64, i64}` struct values. The grammar parses `a..b` (inclusive) and `a..<b` (half-open) via the `RangeOp = DotDotLt | DotDot` rule (ordering is critical — `DotDotLt` must be tried first to avoid greedy `..` matching). The semantic analyser validates integer operands and creates a range type descriptor. The IR generator builds the struct: for inclusive, high = rhs + 1; for half-open, high = rhs.
+
+**Affects**: `src/type_descriptors.c/h` (`get_or_create_range_type`), `src/odin_grammar.gdl` (RangeOp rule ordering), `src/semantic_analyser.c` (AST_NODE_RANGE_EXPRESSION case), `src/llvm_ir_generator.c` (OP_RANGE/OP_RANGE_HALF in binary expressions).
+
+### For-range loop (`for i in expr { body }`)
+For-range loops iterate over range expressions. Grammar rules without `@AST_ACTION` annotations flatten children into the parent (`easy_pc_ast.c:341-360`), so `ForStatement` receives `[Identifier, Expression(range), CompoundStatement]` for `for i in 0..10`. The semantic analyser detects for-range (first child is raw `AST_NODE_IDENTIFIER`, range expression resolves to `TD_KIND_RANGE`) and declares the loop variable as `i64`. The IR generator emits: entry (eval range, extract low/high from struct) → init loop var → cond (cmp < high) → body → inc → cond. Continue target = increment block; break target = end block. Tests cover half-open and inclusive ranges.
+
+**Affects**: `src/semantic_analyser.c` (AST_NODE_FOR_STATEMENT for-range detection + var decl), `src/llvm_ir_generator.c` (`ir_gen_for_statement` for-range codegen). Test: `tests/test_range.odin`.
+
+### For-range loop with index + value (`for i, val in expr { body }`)
+Two-variable for-range is now supported. Both `i` and `val` receive the same loop value (for range expressions). The semantic analyser declares all identifier children before the range expression as `i64`. The IR generator allocates separate storage for each, initializes all to `low`, and increments all on each iteration. The condition block compares the first variable against `high`.
+
+**Affects**: `src/semantic_analyser.c` (already handles multiple identifiers), `src/llvm_ir_generator.c` (`ir_gen_for_statement` — array-based loop var collection, per-var allocas). Test: `tests/test_range2.odin`.
+
+### All 40 tests pass.
 
 ## Not Implemented
 
@@ -58,8 +73,6 @@ Enums are parsed and semantically analysed. The semantic analyser creates an enu
 
 ### Expressions
 - **Type assertion `.(Type)` for union types** – Currently only works for `any` type. Union type assertions need RTTI.
-- **Range `..` / `..<` in expressions** – Parsed, operator metadata stored, no IR codegen. For-range loops not implemented either.
-- **For-range clause** (`for i, val in expr`) – Grammar parses it, but sem and IR treat it as C-style for. Range iteration not implemented.
 - **Built-in procedures** (`make`, `new`, `delete`) – Keywords defined and reserved, no grammar rules or AST nodes.
 
 ### Types
