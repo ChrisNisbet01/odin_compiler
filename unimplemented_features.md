@@ -42,7 +42,12 @@ Enums are parsed and semantically analysed. The semantic analyser creates an enu
 
 **Affects**: `src/semantic_analyser.c` (AST_NODE_DISTINCT_TYPE cases in sem_resolve_type_expr and sem_evaluate_expr). Test: `tests/test_distinct.odin`.
 
-### All 37 tests pass.
+### `in` / `not_in` operators
+`in` and `not_in` operators now generate LLVM IR for both arrays and slices. The semantic analyser handles all comp expressions generically (no special handling needed). The IR generator's `ir_gen_in_expression` performs a linear search: extracts data pointer and length from the RHS container, iterates element-by-element in a loop, branches to found/notfound blocks, and selects the result via phi node. `not_in` negates the result. Tests cover arrays and slices with found/not-found cases in both `if` conditions and assignments.
+
+**Affects**: `src/llvm_ir_generator.c` (`ir_gen_in_expression`, `ir_gen_binary_expression` OP_IN/OP_NOT_IN cases). Test: `tests/test_in.odin`.
+
+### All 38 tests pass.
 
 ## Not Implemented
 
@@ -53,7 +58,6 @@ Enums are parsed and semantically analysed. The semantic analyser creates an enu
 
 ### Expressions
 - **Type assertion `.(Type)` for union types** – Currently only works for `any` type. Union type assertions need RTTI.
-- **`in` / `not_in` operators** – Parsed, operator metadata stored, but `ir_gen_binary_op_by_kind` returns NULL for these (no IR codegen).
 - **Range `..` / `..<` in expressions** – Parsed, operator metadata stored, no IR codegen. For-range loops not implemented either.
 - **For-range clause** (`for i, val in expr`) – Grammar parses it, but sem and IR treat it as C-style for. Range iteration not implemented.
 - **Built-in procedures** (`make`, `new`, `delete`) – Keywords defined and reserved, no grammar rules or AST nodes.

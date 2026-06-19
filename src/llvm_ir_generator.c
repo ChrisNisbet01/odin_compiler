@@ -24,6 +24,9 @@ static void ir_gen_emit_all_defers(IrGenContext * ctx);
 static LLVMValueRef ir_gen_or_else_expression(IrGenContext * ctx, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_or_return_expression(IrGenContext * ctx, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_ternary_expression(IrGenContext * ctx, odin_grammar_node_t * node);
+static LLVMValueRef ir_gen_in_expression(
+    IrGenContext * ctx, LLVMValueRef lhs, LLVMValueRef rhs, TypeDescriptor const * rhs_type, bool is_not_in
+);
 
 // --- Context lifecycle ---
 
@@ -330,6 +333,132 @@ ir_gen_logical_short_circuit(IrGenContext * ctx, odin_grammar_node_t * node, Ope
 }
 
 static LLVMValueRef
+ir_gen_in_expression(
+    IrGenContext * ctx, LLVMValueRef lhs, LLVMValueRef rhs, TypeDescriptor const * rhs_type, bool is_not_in
+)
+{
+    if (rhs_type == NULL)
+        return NULL;
+
+    LLVMTypeKind rhs_kind = LLVMGetTypeKind(LLVMTypeOf(rhs));
+
+    TypeDescriptor const * elem_type = NULL;
+    LLVMValueRef data_ptr = NULL;
+    LLVMValueRef count_val = NULL;
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx->context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->context);
+    LLVMValueRef zero_i32 = LLVMConstInt(i32, 0, false);
+
+    if (rhs_type->kind == TD_KIND_SLICE)
+    {
+        elem_type = rhs_type->element_type;
+        if (rhs_kind == LLVMPointerTypeKind)
+        {
+            LLVMValueRef slice_val = LLVMBuildLoad2(ctx->builder, rhs_type->llvm_type, rhs, "in.slice");
+            data_ptr = LLVMBuildExtractValue(ctx->builder, slice_val, 0, "in.data");
+            count_val = LLVMBuildExtractValue(ctx->builder, slice_val, 1, "in.len");
+        }
+        else
+        {
+            data_ptr = LLVMBuildExtractValue(ctx->builder, rhs, 0, "in.data");
+            count_val = LLVMBuildExtractValue(ctx->builder, rhs, 1, "in.len");
+        }
+    }
+    else if (rhs_type->kind == TD_KIND_ARRAY)
+    {
+        elem_type = rhs_type->element_type;
+        if (rhs_kind == LLVMPointerTypeKind)
+        {
+            data_ptr = LLVMBuildBitCast(
+                ctx->builder,
+                rhs,
+                LLVMPointerType(elem_type ? elem_type->llvm_type : LLVMInt8TypeInContext(ctx->context), 0),
+                "in.data"
+            );
+        }
+        else
+        {
+            data_ptr = LLVMBuildAlloca(ctx->builder, LLVMTypeOf(rhs), "in.arr");
+            LLVMBuildStore(ctx->builder, rhs, data_ptr);
+        }
+        count_val = LLVMConstInt(i64, (unsigned long long)rhs_type->as.array.count, false);
+    }
+    else
+    {
+        return NULL;
+    }
+
+    if (elem_type == NULL || data_ptr == NULL || count_val == NULL)
+        return NULL;
+
+    LLVMValueRef func = ctx->current_function;
+
+    LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(ctx->builder);
+
+    LLVMBasicBlockRef loop_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "in.loop");
+    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "in.body");
+    LLVMBasicBlockRef incr_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "in.incr");
+    LLVMBasicBlockRef found_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "in.found");
+    LLVMBasicBlockRef notfound_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "in.notfound");
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "in.merge");
+
+    LLVMMoveBasicBlockAfter(loop_bb, entry_bb);
+    LLVMMoveBasicBlockAfter(body_bb, loop_bb);
+    LLVMMoveBasicBlockAfter(incr_bb, body_bb);
+    LLVMMoveBasicBlockAfter(found_bb, incr_bb);
+    LLVMMoveBasicBlockAfter(notfound_bb, found_bb);
+    LLVMMoveBasicBlockAfter(merge_bb, notfound_bb);
+
+    LLVMValueRef idx_alloca = LLVMBuildAlloca(ctx->builder, i64, "in.idx");
+    LLVMBuildStore(ctx->builder, LLVMConstNull(i64), idx_alloca);
+    LLVMBuildBr(ctx->builder, loop_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, loop_bb);
+    LLVMValueRef idx = LLVMBuildLoad2(ctx->builder, i64, idx_alloca, "in.idx");
+    LLVMValueRef loop_cond = LLVMBuildICmp(ctx->builder, LLVMIntSLT, idx, count_val, "in.loop.cond");
+    LLVMBuildCondBr(ctx->builder, loop_cond, body_bb, notfound_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
+    LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, elem_type->llvm_type, data_ptr, &idx, 1, "in.elem");
+    LLVMValueRef elem_val = LLVMBuildLoad2(ctx->builder, elem_type->llvm_type, elem_ptr, "in.elem.val");
+
+    LLVMTypeKind elem_kind = LLVMGetTypeKind(elem_type->llvm_type);
+    LLVMValueRef eq;
+    if (elem_kind == LLVMFloatTypeKind || elem_kind == LLVMDoubleTypeKind)
+        eq = LLVMBuildFCmp(ctx->builder, LLVMRealOEQ, lhs, elem_val, "in.eq");
+    else
+        eq = LLVMBuildICmp(ctx->builder, LLVMIntEQ, lhs, elem_val, "in.eq");
+
+    LLVMBuildCondBr(ctx->builder, eq, found_bb, incr_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, incr_bb);
+    LLVMValueRef next_idx = LLVMBuildAdd(ctx->builder, idx, LLVMConstInt(i64, 1, false), "in.next");
+    LLVMBuildStore(ctx->builder, next_idx, idx_alloca);
+    LLVMBuildBr(ctx->builder, loop_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, found_bb);
+    LLVMBuildBr(ctx->builder, merge_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, notfound_bb);
+    LLVMBuildBr(ctx->builder, merge_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
+    LLVMValueRef result_i1 = LLVMBuildPhi(ctx->builder, LLVMInt1TypeInContext(ctx->context), "in.result");
+    LLVMValueRef phi_true = LLVMConstInt(LLVMInt1TypeInContext(ctx->context), 1, false);
+    LLVMValueRef phi_false = LLVMConstInt(LLVMInt1TypeInContext(ctx->context), 0, false);
+    LLVMBasicBlockRef phi_blocks[2] = {found_bb, notfound_bb};
+    LLVMValueRef phi_vals[2] = {phi_true, phi_false};
+    LLVMAddIncoming(result_i1, phi_vals, phi_blocks, 2);
+
+    if (is_not_in)
+    {
+        LLVMValueRef not_val = LLVMBuildNot(ctx->builder, result_i1, "in.not");
+        return LLVMBuildIntCast2(ctx->builder, not_val, LLVMInt64TypeInContext(ctx->context), false, "in.ext");
+    }
+    return LLVMBuildIntCast2(ctx->builder, result_i1, LLVMInt64TypeInContext(ctx->context), false, "in.ext");
+}
+
+static LLVMValueRef
 ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     odin_grammar_node_t * op_node = node_find_op(node);
@@ -436,6 +565,16 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMValueRef r = LLVMBuildICmp(ctx->builder, LLVMIntNE, rhs, LLVMConstNull(lhs_type), "lor_rhs");
         LLVMValueRef or_val = LLVMBuildOr(ctx->builder, l, r, "lortmp");
         return LLVMBuildIntCast2(ctx->builder, or_val, lhs_type, false, "lorext");
+    }
+    case OP_IN:
+    {
+        TypeDescriptor const * rhs_type = node->list.children[node->list.count - 1]->resolved_type;
+        return ir_gen_in_expression(ctx, lhs, rhs, rhs_type, false);
+    }
+    case OP_NOT_IN:
+    {
+        TypeDescriptor const * rhs_type = node->list.children[node->list.count - 1]->resolved_type;
+        return ir_gen_in_expression(ctx, lhs, rhs, rhs_type, true);
     }
     default:
         return NULL;
