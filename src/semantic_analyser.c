@@ -547,6 +547,27 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return operand_type;
     }
 
+    case AST_NODE_RANGE_EXPRESSION:
+    {
+        TypeDescriptor const * left_type = sem_evaluate_expr(ctx, node->list.children[0]);
+        TypeDescriptor const * right_type = sem_evaluate_expr(ctx, node->list.children[2]);
+        if (left_type == NULL || right_type == NULL)
+            return NULL;
+        if (!is_integer_kind(left_type) || !is_integer_kind(right_type))
+        {
+            sem_error_list_add(&ctx->errors, node, "Range expression requires integer operands");
+            node->resolved_type = (TypeDescriptor *)left_type;
+            return left_type;
+        }
+        odin_grammar_node_t * op_node = node_find_child(node, AST_NODE_RANGE_OP);
+        bool is_inclusive = false;
+        if (op_node && op_node->text)
+            is_inclusive = (strcmp(op_node->text, "..") == 0);
+        TypeDescriptor const * range_type = get_or_create_range_type(ctx->type_registry, is_inclusive);
+        node->resolved_type = (TypeDescriptor *)range_type;
+        return range_type;
+    }
+
     case AST_NODE_MUL_EXPRESSION:
     case AST_NODE_ADD_EXPRESSION:
     case AST_NODE_COMP_EXPRESSION:
@@ -556,7 +577,6 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_BIT_AND_EXPRESSION:
     case AST_NODE_BIT_XOR_EXPRESSION:
     case AST_NODE_BIT_OR_EXPRESSION:
-    case AST_NODE_RANGE_EXPRESSION:
     {
         TypeDescriptor const * left_type = sem_evaluate_expr(ctx, node->list.children[0]);
         TypeDescriptor const * right_type = sem_evaluate_expr(ctx, node->list.children[2]);
@@ -1256,12 +1276,56 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
     case AST_NODE_FOR_STATEMENT:
     {
         odin_grammar_node_t * body = node_find_child(node, AST_NODE_COMPOUND_STATEMENT);
+
+        // Detect for-range: first child is a raw Identifier
+        bool is_for_range = false;
+        if (node->list.count >= 2 && node->list.children[0] != NULL
+            && node->list.children[0]->type == AST_NODE_IDENTIFIER)
+        {
+            for (size_t i = 1; i < node->list.count; i++)
+            {
+                odin_grammar_node_t * child = node->list.children[i];
+                if (child == NULL)
+                    continue;
+                if (child->type == AST_NODE_COMPOUND_STATEMENT)
+                    break;
+                if (child->type == AST_NODE_IDENTIFIER)
+                    continue;
+                sem_evaluate_expr(ctx, child);
+                if (child->resolved_type && child->resolved_type->kind == TD_KIND_RANGE)
+                {
+                    is_for_range = true;
+                }
+                break;
+            }
+        }
+
+        generator_push_scope(ctx->gen_ctx);
+
+        if (is_for_range)
+        {
+            TypeDescriptor const * i64_type = type_descriptor_get_int64_type(ctx->type_registry);
+            for (size_t i = 0; i < node->list.count; i++)
+            {
+                odin_grammar_node_t * child = node->list.children[i];
+                if (child == NULL)
+                    continue;
+                if (child->type == AST_NODE_COMPOUND_STATEMENT)
+                    break;
+                if (child->type == AST_NODE_IDENTIFIER)
+                {
+                    TypedValue tv = create_typed_value(NULL, i64_type, true);
+                    generator_add_symbol(ctx->gen_ctx, child->text, tv);
+                }
+            }
+        }
+
         if (body)
         {
-            generator_push_scope(ctx->gen_ctx);
             sem_analyse_compound_statement(ctx, body, expected_return_type);
-            generator_pop_scope(ctx->gen_ctx);
         }
+
+        generator_pop_scope(ctx->gen_ctx);
         break;
     }
 

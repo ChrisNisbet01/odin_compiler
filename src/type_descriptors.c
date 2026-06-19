@@ -443,6 +443,27 @@ get_or_create_enum_type(TypeDescriptors * registry, char const * tag, LLVMTypeRe
 }
 
 TypeDescriptor const *
+get_or_create_range_type(TypeDescriptors * registry, bool is_inclusive)
+{
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind == TD_KIND_RANGE && t->as.range.is_inclusive == is_inclusive)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_RANGE;
+    td->as.range.is_inclusive = is_inclusive;
+
+    LLVMTypeRef elems[2] = {LLVMInt64TypeInContext(registry->context), LLVMInt64TypeInContext(registry->context)};
+    td->llvm_type = LLVMStructTypeInContext(registry->context, elems, 2, false);
+    return td;
+}
+
+TypeDescriptor const *
 get_basic_type_by_name(TypeDescriptors * registry, char const * name)
 {
     for (int i = 0; i < registry->basic_count; i++)

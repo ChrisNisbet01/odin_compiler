@@ -46,6 +46,7 @@ typedef enum
     TD_KIND_PROC,
     TD_KIND_DISTINCT,
     TD_KIND_SOA,
+    TD_KIND_RANGE,
 } td_kind_t;
 
 typedef struct TypeDescriptor
@@ -77,6 +78,10 @@ typedef struct TypeDescriptor
         {
             char const * tag;
         } enum_type;
+        struct
+        {
+            bool is_inclusive;
+        } range;
     } as;
 } TypeDescriptor;
 
@@ -96,6 +101,8 @@ get_or_create_array_type(TypeDescriptors * registry, TypeDescriptor const * elem
 TypeDescriptor const * get_or_create_slice_type(TypeDescriptors * registry, TypeDescriptor const * element_type);
 
 TypeDescriptor const * get_or_create_enum_type(TypeDescriptors * registry, char const * tag, LLVMTypeRef llvm_type);
+
+TypeDescriptor const * get_or_create_range_type(TypeDescriptors * registry, bool is_inclusive);
 
 TypeDescriptor const * get_or_create_proc_type(
     TypeDescriptors * registry,

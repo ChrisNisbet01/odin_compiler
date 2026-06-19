@@ -242,7 +242,7 @@ BitFieldField = Identifier Colon TypePrefix PipeInType IntegerLiteral @AST_ACTIO
 BitFieldFieldList = delimited(BitFieldField, Semicolon) Semicolon? @AST_ACTION_BIT_FIELD_FIELD_LIST;
 BitFieldType = KwBitField Directive? LBrace BitFieldFieldList RBrace @AST_ACTION_BIT_FIELD_TYPE;
 
-BitSetType = KwBitSet LBracket (TypePrefix | DotDot | DotDotLt) RBracket @AST_ACTION_BIT_SET_TYPE;
+BitSetType = KwBitSet LBracket (TypePrefix | DotDotLt | DotDot) RBracket @AST_ACTION_BIT_SET_TYPE;
 
 StructField = KwUsing? Identifier (Comma Identifier)* Colon TypePrefix @AST_ACTION_STRUCT_FIELD;
 StructFieldList = delimited(StructField, Semicolon) Semicolon? @AST_ACTION_STRUCT_FIELD_LIST;
@@ -335,7 +335,7 @@ LogAndExpression = chainl1(CompExpression, LogAndOp) @AST_ACTION_LOG_AND_EXPRESS
 LogOrOp = KwOr | PipePipe @AST_ACTION_LOG_OR_OP;
 LogOrExpression = chainl1(LogAndExpression, LogOrOp) @AST_ACTION_LOG_OR_EXPRESSION;
 
-RangeOp = DotDot | DotDotLt @AST_ACTION_RANGE_OP;
+RangeOp = DotDotLt | DotDot @AST_ACTION_RANGE_OP;
 RangeExpression = chainl1(LogOrExpression, RangeOp) @AST_ACTION_RANGE_EXPRESSION;
 
 TernaryExpression = RangeExpression (Question Expression Colon Expression)? @AST_ACTION_TERNARY_EXPRESSION;
