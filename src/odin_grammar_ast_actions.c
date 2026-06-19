@@ -61,6 +61,9 @@ determine_operator_kind(odin_grammar_node_type_t node_type, char const * sem, si
     if (sem == NULL || sem_len == 0)
         return OP_INVALID;
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
+
     switch (node_type)
     {
     case AST_NODE_ADD_OP:
@@ -212,6 +215,8 @@ determine_operator_kind(odin_grammar_node_type_t node_type, char const * sem, si
     default:
         return OP_INVALID;
     }
+
+#pragma GCC diagnostic pop
 }
 
 #define DEFINE_OP_ACTION(name, node_type)                                                                              \

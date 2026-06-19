@@ -489,6 +489,9 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMTypeKind type_kind = LLVMGetTypeKind(lhs_type);
     bool is_float = (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
+
     switch (op_md->kind)
     {
     case OP_ADD:
@@ -608,6 +611,8 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     default:
         return NULL;
     }
+
+#pragma GCC diagnostic pop
 }
 
 // --- Unary expression codegen ---
@@ -643,6 +648,9 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     }
     if (operand_node == NULL)
         return NULL;
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
 
     switch (op_md->kind)
     {
@@ -706,6 +714,8 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         }
     }
     }
+
+#pragma GCC diagnostic pop
 }
 
 // --- Enum type codegen ---
@@ -903,6 +913,9 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 static bool
 is_expression_wrapper_type(odin_grammar_node_type_t type)
 {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
+
     switch (type)
     {
     case AST_NODE_EXPRESSION:
@@ -926,6 +939,8 @@ is_expression_wrapper_type(odin_grammar_node_type_t type)
     default:
         return false;
     }
+
+#pragma GCC diagnostic pop
 }
 
 static odin_grammar_node_t *
@@ -1020,6 +1035,9 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     if (node == NULL)
         return NULL;
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
 
     switch (node->type)
     {
@@ -1184,11 +1202,16 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
     }
+
+#pragma GCC diagnostic pop
 }
 
 static OperatorKind
 compound_assign_to_binary_op(OperatorKind compound_kind)
 {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
+
     switch (compound_kind)
     {
     case OP_ADD_ASSIGN:
@@ -1214,6 +1237,8 @@ compound_assign_to_binary_op(OperatorKind compound_kind)
     default:
         return OP_INVALID;
     }
+
+#pragma GCC diagnostic pop
 }
 
 static LLVMValueRef
@@ -1225,6 +1250,9 @@ ir_gen_binary_op_by_kind(IrGenContext * ctx, LLVMValueRef lhs, LLVMValueRef rhs,
     LLVMTypeRef lhs_type = LLVMTypeOf(lhs);
     LLVMTypeKind type_kind = LLVMGetTypeKind(lhs_type);
     bool is_float = (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
 
     switch (kind)
     {
@@ -1256,6 +1284,8 @@ ir_gen_binary_op_by_kind(IrGenContext * ctx, LLVMValueRef lhs, LLVMValueRef rhs,
     default:
         return NULL;
     }
+
+#pragma GCC diagnostic pop
 }
 
 static LLVMValueRef
@@ -2566,6 +2596,9 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         if (op == NULL)
             continue;
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
+
         switch (op->type)
         {
         case AST_NODE_POSTFIX_CALL:
@@ -2870,6 +2903,8 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         default:
             break;
         }
+
+#pragma GCC diagnostic pop
     }
 
     // If the final value is a pointer and the result type is non-composite, load
@@ -2926,6 +2961,9 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     if (node == NULL)
         return NULL;
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
 
     switch (node->type)
     {
@@ -3300,6 +3338,8 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     default:
         return NULL;
     }
+
+#pragma GCC diagnostic pop
 }
 
 // --- Main entry point ---
