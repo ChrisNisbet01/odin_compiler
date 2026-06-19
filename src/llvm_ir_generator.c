@@ -767,7 +767,7 @@ ir_gen_register_enum_enumerators(IrGenContext * ctx, odin_grammar_node_t * enum_
         if (en_value_node)
         {
             LLVMValueRef val = ir_gen_node(ctx, en_value_node);
-            if (val && LLVMGetTypeKind(val) == LLVMIntegerTypeKind)
+            if (val && LLVMGetTypeKind(LLVMTypeOf(val)) == LLVMIntegerTypeKind)
                 value = (int)LLVMConstIntGetSExtValue(val);
         }
 
@@ -2916,7 +2916,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         if (LLVMGetTypeKind(val_llvm_type) == LLVMPointerTypeKind)
         {
             if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_ARRAY && cur_type->kind != TD_KIND_SLICE
-                && cur_type->kind != TD_KIND_PROC && cur_type->kind != TD_KIND_POINTER)
+                && cur_type->kind != TD_KIND_PROC)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }
@@ -3212,7 +3212,17 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         }
         else
         {
-            ir_gen_call_free(ctx, ptr_val);
+            // ir_gen_node auto-derefs pointers, giving the pointed-to value.
+            // For delete, we need the raw POINTER VALUE to free.
+            // Use lvalue to get the alloca, then load to get the pointer.
+            LLVMValueRef lvalue = ir_gen_lvalue_ptr(ctx, target);
+            if (lvalue != NULL)
+            {
+                LLVMTypeRef load_type
+                    = target_type ? target_type->llvm_type : LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+                LLVMValueRef ptr = LLVMBuildLoad2(ctx->builder, load_type, lvalue, "del.ptr");
+                ir_gen_call_free(ctx, ptr);
+            }
         }
         return NULL;
     }
