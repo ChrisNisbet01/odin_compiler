@@ -132,6 +132,30 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return slice_type;
     }
 
+    case AST_NODE_DYNAMIC_ARRAY_TYPE:
+    {
+        odin_grammar_node_t * elem_type_node = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            if (is_type_node(node->list.children[i]))
+            {
+                elem_type_node = node->list.children[i];
+                break;
+            }
+        }
+        if (elem_type_node == NULL)
+            return NULL;
+
+        TypeDescriptor const * elem_type = sem_resolve_type_expr(ctx, elem_type_node);
+        if (elem_type == NULL)
+            return NULL;
+
+        TypeDescriptor const * da_type = get_or_create_dynamic_array_type(ctx->type_registry, elem_type);
+        if (da_type)
+            node->resolved_type = (TypeDescriptor *)da_type;
+        return da_type;
+    }
+
     case AST_NODE_PROCEDURE_SIGNATURE:
     {
         TypeDescriptor const * return_type = NULL;
@@ -497,6 +521,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
         // Validate: valid for arrays, slices, strings (len only for strings)
         bool valid = (operand_type->kind == TD_KIND_ARRAY) || (operand_type->kind == TD_KIND_SLICE)
+                     || (operand_type->kind == TD_KIND_DYNAMIC_ARRAY)
                      || (operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name != NULL
                          && strcmp(operand_type->as.basic.name, "string") == 0 && node->type == AST_NODE_LEN_EXPR);
         if (!valid)
@@ -526,9 +551,9 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             sem_error_list_add(&ctx->errors, node, "invalid type argument to make");
             return NULL;
         }
-        if (td->kind != TD_KIND_SLICE)
+        if (td->kind != TD_KIND_SLICE && td->kind != TD_KIND_DYNAMIC_ARRAY)
         {
-            sem_error_list_add(&ctx->errors, node, "make only supports slice types");
+            sem_error_list_add(&ctx->errors, node, "make only supports slice and dynamic array types");
             return NULL;
         }
         sem_evaluate_expr(ctx, len_node);

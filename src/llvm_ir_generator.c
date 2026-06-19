@@ -128,7 +128,7 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
         // GEP/subscript/member access
         if (sym->value.type_info
             && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
-                || sym->value.type_info->kind == TD_KIND_STRUCT))
+                || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY))
         {
             return sym->value.value;
         }
@@ -1102,9 +1102,8 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                     if (cur_type->element_type)
                         cur_type = cur_type->element_type;
                 }
-                else if (cur_type->kind == TD_KIND_SLICE)
+                else if (cur_type->kind == TD_KIND_SLICE || cur_type->kind == TD_KIND_DYNAMIC_ARRAY)
                 {
-                    // Load data pointer from slice struct, then GEP with index
                     LLVMValueRef data_indices[]
                         = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
@@ -2668,9 +2667,8 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, val, indices, 2, "subs");
                 val = elem_ptr;
             }
-            else if (cur_type->kind == TD_KIND_SLICE)
+            else if (cur_type->kind == TD_KIND_SLICE || cur_type->kind == TD_KIND_DYNAMIC_ARRAY)
             {
-                // Load data pointer from slice struct, then GEP with index
                 LLVMValueRef data_indices[]
                     = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
@@ -2916,7 +2914,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         if (LLVMGetTypeKind(val_llvm_type) == LLVMPointerTypeKind)
         {
             if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_ARRAY && cur_type->kind != TD_KIND_SLICE
-                && cur_type->kind != TD_KIND_PROC)
+                && cur_type->kind != TD_KIND_PROC && cur_type->kind != TD_KIND_DYNAMIC_ARRAY)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }
@@ -3080,28 +3078,29 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             );
         }
 
-        // Slice or string: extract .len field (field index 1) from {ptr, len}
-        // struct
+        // For dynamic arrays: len = field 1, cap = field 2
+        // For slices/strings: both len and cap use field 1
+        bool is_cap = (node->type == AST_NODE_CAP_EXPR);
+        int field_index = (is_cap && operand_type->kind == TD_KIND_DYNAMIC_ARRAY) ? 2 : 1;
+        char const * field_name = (field_index == 2) ? "cap" : "len";
+
         LLVMTypeRef val_type = LLVMTypeOf(operand_val);
         LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
         LLVMValueRef len_val = NULL;
 
         if (val_kind == LLVMPointerTypeKind)
         {
-            // Pointer to struct — GEP + Load
-            // Use operand_type->llvm_type instead of LLVMGetElementType (broken with opaque pointers)
             LLVMTypeRef struct_type = operand_type->llvm_type;
             LLVMValueRef indices[]
                 = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_index, false)};
             LLVMValueRef field_ptr
                 = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, operand_val, indices, 2, "len.ptr");
-            len_val = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), field_ptr, "len");
+            len_val = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), field_ptr, field_name);
         }
         else
         {
-            // Struct value — ExtractValue
-            len_val = LLVMBuildExtractValue(ctx->builder, operand_val, 1, "len");
+            len_val = LLVMBuildExtractValue(ctx->builder, operand_val, (unsigned)field_index, field_name);
         }
 
         if (len_val == NULL)
@@ -3116,12 +3115,14 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         odin_grammar_node_t * type_node = node->list.children[0];
         odin_grammar_node_t * len_node = node->list.children[1];
 
-        TypeDescriptor const * slice_type = node->resolved_type;
-        if (slice_type == NULL || slice_type->kind != TD_KIND_SLICE)
+        TypeDescriptor const * result_type = node->resolved_type;
+        if (result_type == NULL || (result_type->kind != TD_KIND_SLICE && result_type->kind != TD_KIND_DYNAMIC_ARRAY))
             return NULL;
-        TypeDescriptor const * elem_type = slice_type->element_type;
+        TypeDescriptor const * elem_type = result_type->element_type;
         if (elem_type == NULL)
             return NULL;
+
+        bool is_da = (result_type->kind == TD_KIND_DYNAMIC_ARRAY);
 
         LLVMValueRef len_val = ir_gen_node(ctx, len_node);
         if (len_val == NULL)
@@ -3136,23 +3137,38 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         if (raw_mem == NULL)
             return NULL;
         LLVMTypeRef elem_ptr_type = LLVMPointerType(elem_type->llvm_type, 0);
-        LLVMValueRef data_ptr = LLVMBuildPointerCast(ctx->builder, raw_mem, elem_ptr_type, "slice.data");
+        LLVMValueRef data_ptr = LLVMBuildPointerCast(ctx->builder, raw_mem, elem_ptr_type, "make.data");
 
-        // Build slice struct {data_ptr, len}
-        LLVMValueRef slice_ptr = LLVMBuildAlloca(ctx->builder, slice_type->llvm_type, "make.slice");
+        LLVMValueRef make_ptr = LLVMBuildAlloca(ctx->builder, result_type->llvm_type, "make.result");
+
+        // Store data pointer (field 0)
         LLVMValueRef data_indices[]
             = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
         LLVMValueRef data_gep
-            = LLVMBuildInBoundsGEP2(ctx->builder, slice_type->llvm_type, slice_ptr, data_indices, 2, "slice.data.gep");
+            = LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, data_indices, 2, "make.data.gep");
         LLVMBuildStore(ctx->builder, data_ptr, data_gep);
+
+        // Store len (field 1)
         LLVMValueRef len_indices[]
             = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
         LLVMValueRef len_gep
-            = LLVMBuildInBoundsGEP2(ctx->builder, slice_type->llvm_type, slice_ptr, len_indices, 2, "slice.len.gep");
+            = LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, len_indices, 2, "make.len.gep");
         LLVMBuildStore(ctx->builder, len_val, len_gep);
-        return LLVMBuildLoad2(ctx->builder, slice_type->llvm_type, slice_ptr, "make.result");
+
+        // For dynamic arrays, also store capacity = len (field 2)
+        if (is_da)
+        {
+            LLVMValueRef cap_indices[]
+                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 2, false)};
+            LLVMValueRef cap_gep
+                = LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, cap_indices, 2, "make.cap.gep");
+            LLVMBuildStore(ctx->builder, len_val, cap_gep);
+        }
+
+        return LLVMBuildLoad2(ctx->builder, result_type->llvm_type, make_ptr, "make.result");
     }
 
     case AST_NODE_NEW_EXPR:
@@ -3185,7 +3201,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             return NULL;
 
         TypeDescriptor const * target_type = target->resolved_type;
-        if (target_type && target_type->kind == TD_KIND_SLICE)
+        if (target_type && (target_type->kind == TD_KIND_SLICE || target_type->kind == TD_KIND_DYNAMIC_ARRAY))
         {
             LLVMTypeRef struct_type = target_type->llvm_type;
             LLVMTypeRef val_type = LLVMTypeOf(ptr_val);

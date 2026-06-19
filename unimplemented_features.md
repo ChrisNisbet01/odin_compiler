@@ -65,11 +65,16 @@ Two-variable for-range is now supported. Both `i` and `val` receive the same loo
 ### `make`, `new`, `delete` built-in procedures
 `make(T, len)` allocates a slice backing array via `malloc` and returns a `[]T` slice struct `{data, len}`. `new(T)` allocates a single `T` via `malloc` and returns a `^T` pointer. `delete(expr)` frees backing memory: for slices it extracts the data pointer from the `{ptr, i64}` struct; for pointers it frees the pointer value directly. Grammar rules follow the `LenExpr` pattern. Semantic analyser validates types (make requires slice, new resolves to pointer). IR generation uses `ir_gen_call_malloc`/`ir_gen_call_free` helpers.
 
-**Bug fix**: Auto-dereference logic in `ir_gen_postfix_expression` (line 2883) did not exclude `TD_KIND_POINTER`, causing `delete(p2)` to load the pointed-to value (33) and pass it to `free(33)` instead of the heap pointer.
+**Bug fix**: `delete(p2)` for `^int` pointers used `ir_gen_node` which auto-derefed the pointer, passing the pointed-to value (33) to `free` instead of the heap address. Fixed by using `ir_gen_lvalue_ptr` in the delete handler to bypass auto-deref and load the raw pointer value. Also fixed `LLVMGetTypeKind(val)` → `LLVMGetTypeKind(LLVMTypeOf(val))` (line 770).
 
-**Affects**: `src/odin_grammar.gdl` (MakeExpr, NewExpr, DeleteExpr rules), `src/semantic_analyser.c` (lines 517-562), `src/llvm_ir_generator.c` (ir_gen_call_malloc/free helpers, LenExpr opaque pointer fix, MakeExpr/NewExpr/DeleteExpr handlers, auto-deref fix). Test: `tests/test_make_new_delete.odin`.
+**Affects**: `src/odin_grammar.gdl` (MakeExpr, NewExpr, DeleteExpr rules), `src/semantic_analyser.c` (lines 517-562), `src/llvm_ir_generator.c` (ir_gen_call_malloc/free helpers, LenExpr opaque pointer fix, MakeExpr/NewExpr/DeleteExpr handlers, delete handler lvalue fix). Test: `tests/test_make_new_delete.odin`.
 
-### All 42 tests pass (41 of 42, 1 pre-existing failure: test_cast.odin).
+### All 43 tests pass.
+
+### `dynamic_array` (`[dynamic]T`)
+Dynamic arrays are now fully implemented. `make([dynamic]T, len)` allocates backing memory via `malloc` and returns a 3-field struct `{T*, i64, i64}` (data, length, capacity). Subscript operations use the same data pointer extraction logic as slices. `len(da)` extracts field 1; `cap(da)` extracts field 2. `delete(da)` extracts the data pointer from field 0 and frees it. Type descriptor factory `get_or_create_dynamic_array_type()` creates the `{T*, i64, i64}` LLVM struct type. Semantic analysis validates dynamic arrays for `make`, `len`, `cap`, `delete`, and subscript operations.
+
+**Affects**: `src/type_descriptors.c/h` (`get_or_create_dynamic_array_type`), `src/semantic_analyser.c` (make/len/cap validation accepts dynamic arrays), `src/llvm_ir_generator.c` (make: 3-field struct with cap; len/cap: field index selection; subscript: data pointer extraction; delete: field 0 extraction; identifier skip list; auto-deref exclusion). Test: `tests/test_dynamic_array.odin`.
 
 ## Not Implemented
 
@@ -82,7 +87,6 @@ Two-variable for-range is now supported. Both `i` and `val` receive the same loo
 - **Type assertion `.(Type)` for union types** – Currently only works for `any` type. Union type assertions need RTTI.
 
 ### Types
-- **`dynamic_array`** (`[dynamic]T`) – Parsed, no sem/IR.
 - **`map` type** – Parsed, no sem/IR.
 - **`union` type** – Parsed, no sem/IR.
 - **`bit_field` type** – Parsed, no sem/IR.
