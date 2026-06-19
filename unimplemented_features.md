@@ -62,7 +62,14 @@ Two-variable for-range is now supported. Both `i` and `val` receive the same loo
 
 **Affects**: `src/semantic_analyser.c` (already handles multiple identifiers), `src/llvm_ir_generator.c` (`ir_gen_for_statement` — array-based loop var collection, per-var allocas). Test: `tests/test_range2.odin`.
 
-### All 40 tests pass.
+### `make`, `new`, `delete` built-in procedures
+`make(T, len)` allocates a slice backing array via `malloc` and returns a `[]T` slice struct `{data, len}`. `new(T)` allocates a single `T` via `malloc` and returns a `^T` pointer. `delete(expr)` frees backing memory: for slices it extracts the data pointer from the `{ptr, i64}` struct; for pointers it frees the pointer value directly. Grammar rules follow the `LenExpr` pattern. Semantic analyser validates types (make requires slice, new resolves to pointer). IR generation uses `ir_gen_call_malloc`/`ir_gen_call_free` helpers.
+
+**Bug fix**: Auto-dereference logic in `ir_gen_postfix_expression` (line 2883) did not exclude `TD_KIND_POINTER`, causing `delete(p2)` to load the pointed-to value (33) and pass it to `free(33)` instead of the heap pointer.
+
+**Affects**: `src/odin_grammar.gdl` (MakeExpr, NewExpr, DeleteExpr rules), `src/semantic_analyser.c` (lines 517-562), `src/llvm_ir_generator.c` (ir_gen_call_malloc/free helpers, LenExpr opaque pointer fix, MakeExpr/NewExpr/DeleteExpr handlers, auto-deref fix). Test: `tests/test_make_new_delete.odin`.
+
+### All 42 tests pass (41 of 42, 1 pre-existing failure: test_cast.odin).
 
 ## Not Implemented
 
@@ -73,7 +80,6 @@ Two-variable for-range is now supported. Both `i` and `val` receive the same loo
 
 ### Expressions
 - **Type assertion `.(Type)` for union types** – Currently only works for `any` type. Union type assertions need RTTI.
-- **Built-in procedures** (`make`, `new`, `delete`) – Keywords defined and reserved, no grammar rules or AST nodes.
 
 ### Types
 - **`dynamic_array`** (`[dynamic]T`) – Parsed, no sem/IR.

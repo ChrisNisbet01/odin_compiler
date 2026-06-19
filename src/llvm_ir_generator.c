@@ -2881,7 +2881,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         if (LLVMGetTypeKind(val_llvm_type) == LLVMPointerTypeKind)
         {
             if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_ARRAY && cur_type->kind != TD_KIND_SLICE
-                && cur_type->kind != TD_KIND_PROC)
+                && cur_type->kind != TD_KIND_PROC && cur_type->kind != TD_KIND_POINTER)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }
@@ -2889,6 +2889,34 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 
     return val;
+}
+
+// --- Heap allocation helpers ---
+
+static LLVMValueRef
+ir_gen_call_malloc(IrGenContext * ctx, LLVMValueRef size)
+{
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef malloc_args[] = {LLVMInt64TypeInContext(ctx->context)};
+    LLVMTypeRef malloc_type = LLVMFunctionType(i8ptr, malloc_args, 1, false);
+    LLVMValueRef malloc_fn = LLVMGetNamedFunction(ctx->module, "malloc");
+    if (malloc_fn == NULL)
+        malloc_fn = LLVMAddFunction(ctx->module, "malloc", malloc_type);
+    LLVMValueRef args[] = {size};
+    return LLVMBuildCall2(ctx->builder, malloc_type, malloc_fn, args, 1, "malloc");
+}
+
+static void
+ir_gen_call_free(IrGenContext * ctx, LLVMValueRef ptr)
+{
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef free_args[] = {i8ptr};
+    LLVMTypeRef free_type = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), free_args, 1, false);
+    LLVMValueRef free_fn = LLVMGetNamedFunction(ctx->module, "free");
+    if (free_fn == NULL)
+        free_fn = LLVMAddFunction(ctx->module, "free", free_type);
+    LLVMValueRef args[] = {LLVMBuildPointerCast(ctx->builder, ptr, i8ptr, "")};
+    LLVMBuildCall2(ctx->builder, free_type, free_fn, args, 1, "");
 }
 
 // --- Main node dispatcher ---
@@ -3023,7 +3051,8 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         if (val_kind == LLVMPointerTypeKind)
         {
             // Pointer to struct — GEP + Load
-            LLVMTypeRef struct_type = LLVMGetElementType(val_type);
+            // Use operand_type->llvm_type instead of LLVMGetElementType (broken with opaque pointers)
+            LLVMTypeRef struct_type = operand_type->llvm_type;
             LLVMValueRef indices[]
                 = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
@@ -3040,6 +3069,114 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         if (len_val == NULL)
             return NULL;
         return len_val;
+    }
+
+    case AST_NODE_MAKE_EXPR:
+    {
+        if (node->list.count < 2)
+            return NULL;
+        odin_grammar_node_t * type_node = node->list.children[0];
+        odin_grammar_node_t * len_node = node->list.children[1];
+
+        TypeDescriptor const * slice_type = node->resolved_type;
+        if (slice_type == NULL || slice_type->kind != TD_KIND_SLICE)
+            return NULL;
+        TypeDescriptor const * elem_type = slice_type->element_type;
+        if (elem_type == NULL)
+            return NULL;
+
+        LLVMValueRef len_val = ir_gen_node(ctx, len_node);
+        if (len_val == NULL)
+            return NULL;
+        len_val = LLVMBuildIntCast(ctx->builder, len_val, LLVMInt64TypeInContext(ctx->context), "len.i64");
+
+        // Compute total allocation size: sizeof(T) * len
+        LLVMValueRef elem_size = LLVMSizeOf(elem_type->llvm_type);
+        LLVMValueRef total_size = LLVMBuildMul(ctx->builder, elem_size, len_val, "makemem.size");
+
+        LLVMValueRef raw_mem = ir_gen_call_malloc(ctx, total_size);
+        if (raw_mem == NULL)
+            return NULL;
+        LLVMTypeRef elem_ptr_type = LLVMPointerType(elem_type->llvm_type, 0);
+        LLVMValueRef data_ptr = LLVMBuildPointerCast(ctx->builder, raw_mem, elem_ptr_type, "slice.data");
+
+        // Build slice struct {data_ptr, len}
+        LLVMValueRef slice_ptr = LLVMBuildAlloca(ctx->builder, slice_type->llvm_type, "make.slice");
+        LLVMValueRef data_indices[]
+            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+        LLVMValueRef data_gep
+            = LLVMBuildInBoundsGEP2(ctx->builder, slice_type->llvm_type, slice_ptr, data_indices, 2, "slice.data.gep");
+        LLVMBuildStore(ctx->builder, data_ptr, data_gep);
+        LLVMValueRef len_indices[]
+            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+        LLVMValueRef len_gep
+            = LLVMBuildInBoundsGEP2(ctx->builder, slice_type->llvm_type, slice_ptr, len_indices, 2, "slice.len.gep");
+        LLVMBuildStore(ctx->builder, len_val, len_gep);
+        return LLVMBuildLoad2(ctx->builder, slice_type->llvm_type, slice_ptr, "make.result");
+    }
+
+    case AST_NODE_NEW_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * type_node = node->list.children[0];
+
+        TypeDescriptor const * ptr_type = node->resolved_type;
+        if (ptr_type == NULL || ptr_type->kind != TD_KIND_POINTER)
+            return NULL;
+        TypeDescriptor const * pointee_type = ptr_type->pointee;
+        if (pointee_type == NULL)
+            return NULL;
+
+        LLVMValueRef size = LLVMSizeOf(pointee_type->llvm_type);
+        LLVMValueRef raw_mem = ir_gen_call_malloc(ctx, size);
+        if (raw_mem == NULL)
+            return NULL;
+        return LLVMBuildPointerCast(ctx->builder, raw_mem, ptr_type->llvm_type, "new.result");
+    }
+
+    case AST_NODE_DELETE_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * target = node->list.children[0];
+        LLVMValueRef ptr_val = ir_gen_node(ctx, target);
+        if (ptr_val == NULL)
+            return NULL;
+
+        TypeDescriptor const * target_type = target->resolved_type;
+        if (target_type && target_type->kind == TD_KIND_SLICE)
+        {
+            LLVMTypeRef struct_type = target_type->llvm_type;
+            LLVMTypeRef val_type = LLVMTypeOf(ptr_val);
+            LLVMValueRef data_ptr = NULL;
+            if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
+            {
+                LLVMValueRef indices[]
+                    = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                       LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+                LLVMValueRef data_gep
+                    = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr_val, indices, 2, "del.data.gep");
+                data_ptr = LLVMBuildLoad2(
+                    ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_gep, "del.data"
+                );
+            }
+            else
+            {
+                LLVMValueRef extracted = LLVMBuildExtractValue(ctx->builder, ptr_val, 0, "del.data");
+                data_ptr = LLVMBuildPointerCast(
+                    ctx->builder, extracted, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), ""
+                );
+            }
+            ir_gen_call_free(ctx, data_ptr);
+        }
+        else
+        {
+            ir_gen_call_free(ctx, ptr_val);
+        }
+        return NULL;
     }
 
     case AST_NODE_NIL:

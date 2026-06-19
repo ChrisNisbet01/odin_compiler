@@ -306,7 +306,10 @@ CastExpr = KwCast LParen TypeName RParen UnaryExpression @AST_ACTION_CAST_EXPR;
 TransmuteExpr = KwTransmute LParen TypeName RParen UnaryExpression @AST_ACTION_TRANSMUTE_EXPR;
 LenExpr = KwLen LParen Expression RParen @AST_ACTION_LEN_EXPR;
 CapExpr = KwCap LParen Expression RParen @AST_ACTION_CAP_EXPR;
-UnaryExpression = LenExpr | CapExpr | CastExpr | TransmuteExpr | UnaryPrefix | PostfixExpression;
+MakeExpr = KwMake LParen TypePrefix Comma Expression RParen @AST_ACTION_MAKE_EXPR;
+NewExpr = KwNew LParen TypePrefix RParen @AST_ACTION_NEW_EXPR;
+DeleteExpr = KwDelete LParen Expression RParen @AST_ACTION_DELETE_EXPR;
+UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | CastExpr | TransmuteExpr | UnaryPrefix | PostfixExpression;
 
 MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
 MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;

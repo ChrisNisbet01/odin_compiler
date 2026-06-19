@@ -514,6 +514,53 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return int_type;
     }
 
+    case AST_NODE_MAKE_EXPR:
+    {
+        if (node->list.count < 2)
+            return NULL;
+        odin_grammar_node_t * type_node = node->list.children[0];
+        odin_grammar_node_t * len_node = node->list.children[1];
+        TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+        if (td == NULL)
+        {
+            sem_error_list_add(&ctx->errors, node, "invalid type argument to make");
+            return NULL;
+        }
+        if (td->kind != TD_KIND_SLICE)
+        {
+            sem_error_list_add(&ctx->errors, node, "make only supports slice types");
+            return NULL;
+        }
+        sem_evaluate_expr(ctx, len_node);
+        node->resolved_type = (TypeDescriptor *)td;
+        return td;
+    }
+
+    case AST_NODE_NEW_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * type_node = node->list.children[0];
+        TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+        if (td == NULL)
+        {
+            sem_error_list_add(&ctx->errors, node, "invalid type argument to new");
+            return NULL;
+        }
+        TypeDescriptor const * ptr_type = get_or_create_pointer_type(ctx->type_registry, td);
+        node->resolved_type = (TypeDescriptor *)ptr_type;
+        return ptr_type;
+    }
+
+    case AST_NODE_DELETE_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        sem_evaluate_expr(ctx, node->list.children[0]);
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
     case AST_NODE_DISTINCT_TYPE:
     {
         TypeDescriptor const * td = sem_resolve_type_expr(ctx, node);
