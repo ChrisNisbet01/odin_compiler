@@ -228,7 +228,6 @@ ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node)
     // GEP to i8* pointer to first element (constant expression)
     LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
     LLVMValueRef indices[] = {zero, zero};
-    LLVMTypeRef i8_ptr_type = LLVMPointerType(i8_type, 0);
     LLVMValueRef ptr = LLVMConstInBoundsGEP2(arr_type, global, indices, 2);
 
     // Build {i8*, i64} string struct as a constant
@@ -345,9 +344,7 @@ ir_gen_in_expression(
     TypeDescriptor const * elem_type = NULL;
     LLVMValueRef data_ptr = NULL;
     LLVMValueRef count_val = NULL;
-    LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx->context);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->context);
-    LLVMValueRef zero_i32 = LLVMConstInt(i32, 0, false);
 
     if (rhs_type->kind == TD_KIND_SLICE)
     {
@@ -854,13 +851,12 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                     }
                     LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
                     LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                    LLVMValueRef idx2 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
                     LLVMValueRef gep0[2] = {zero_idx, idx1};
                     LLVMValueRef data_field
                         = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, gep0, 2, "any.data");
                     LLVMBuildStore(ctx->builder, data_ptr, data_field);
-                    LLVMValueRef idx3 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
-                    LLVMValueRef gep1[2] = {zero_idx, idx3};
+                    LLVMValueRef idx2 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+                    LLVMValueRef gep1[2] = {zero_idx, idx2};
                     LLVMValueRef id_field
                         = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, gep1, 2, "any.typeid");
                     LLVMBuildStore(ctx->builder, type_id, id_field);
@@ -2071,7 +2067,6 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
 
     // Create a block for each case + a default block
     LLVMBasicBlockRef case_bbs[64];
-    LLVMBasicBlockRef next_case_bb = NULL;
     LLVMBasicBlockRef default_bb = NULL;
 
     for (int i = 0; i < case_count; i++)
@@ -2085,7 +2080,6 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
 
     // Build compare-and-branch chain (like if-else)
     // Each case checks its value and branches to its body; next case on mismatch
-    LLVMBasicBlockRef prev_miss_bb = NULL;
     for (int i = 0; i < case_count; i++)
     {
         odin_grammar_node_t * case_clause = case_clauses[i];
@@ -2176,7 +2170,6 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         if (i < case_count - 1)
         {
             LLVMPositionBuilderAtEnd(ctx->builder, miss_bb);
-            prev_miss_bb = miss_bb;
         }
     }
 
@@ -2293,57 +2286,6 @@ ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, L
 
         param_index++;
     }
-}
-
-// --- Procedure literal codegen ---
-
-static LLVMValueRef
-ir_gen_procedure_literal(IrGenContext * ctx, odin_grammar_node_t * node)
-{
-    odin_grammar_node_t * body_node = node_find_child(node, AST_NODE_COMPOUND_STATEMENT);
-
-    TypeDescriptor const * proc_type = node->resolved_type;
-    if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
-        return NULL;
-
-    LLVMValueRef func = LLVMAddFunction(
-        ctx->module, generate_anon_name(&ctx->anon_counter, "proc"), proc_type->proc_metadata.func_type
-    );
-
-    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
-    LLVMPositionBuilderAtEnd(ctx->builder, entry);
-
-    ctx->current_function = func;
-    ctx->current_return_type = proc_type->proc_metadata.return_type;
-
-    generator_push_scope(ctx->gen_ctx);
-    ir_gen_register_params(ctx, node, func);
-
-    if (body_node)
-    {
-        ir_gen_node(ctx, body_node);
-    }
-
-    LLVMBasicBlockRef current_block = LLVMGetInsertBlock(ctx->builder);
-    LLVMValueRef last_inst = LLVMGetLastInstruction(current_block);
-    if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
-    {
-        ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
-        if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
-        {
-            LLVMBuildRetVoid(ctx->builder);
-        }
-        else
-        {
-            LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
-        }
-    }
-
-    generator_pop_scope(ctx->gen_ctx);
-    ctx->current_function = NULL;
-    ctx->current_return_type = NULL;
-
-    return func;
 }
 
 // --- Top-level declaration codegen ---
@@ -3112,7 +3054,6 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         if (node->list.count < 2)
             return NULL;
-        odin_grammar_node_t * type_node = node->list.children[0];
         odin_grammar_node_t * len_node = node->list.children[1];
 
         TypeDescriptor const * result_type = node->resolved_type;
@@ -3175,7 +3116,6 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         if (node->list.count < 1)
             return NULL;
-        odin_grammar_node_t * type_node = node->list.children[0];
 
         TypeDescriptor const * ptr_type = node->resolved_type;
         if (ptr_type == NULL || ptr_type->kind != TD_KIND_POINTER)

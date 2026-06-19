@@ -45,7 +45,9 @@ make_node(
 static odin_grammar_node_t *
 make_node_base(epc_cpt_node_t * node, void ** children, int count)
 {
-    odin_grammar_node_t * result = calloc(1, sizeof(odin_grammar_node_t));
+    (void)node;
+
+    odin_grammar_node_t * result = calloc(1, sizeof(*result));
     result->list.count = (size_t)count;
     result->list.children = calloc((size_t)count, sizeof(odin_grammar_node_t *));
     for (int i = 0; i < count; i++)
