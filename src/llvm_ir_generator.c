@@ -129,7 +129,7 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
         if (sym->value.type_info
             && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
                 || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY
-                || sym->value.type_info->kind == TD_KIND_MAP))
+                || sym->value.type_info->kind == TD_KIND_MAP || sym->value.type_info->kind == TD_KIND_BIT_FIELD))
         {
             return sym->value.value;
         }
@@ -816,6 +816,9 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMTypeRef llvm_type = var_type->llvm_type;
     LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, llvm_type, name_node->text);
     LLVMSetAlignment(alloca, LLVMABIAlignmentOfType(ctx->data_layout, llvm_type));
+
+    // Odin semantics: zero-initialize all local variables by default
+    LLVMBuildStore(ctx->builder, LLVMConstNull(llvm_type), alloca);
 
     // Store initial value if present (third child for `x: type = expr`)
     if (node->list.count >= 3)
@@ -1671,6 +1674,101 @@ ir_gen_pack_any(IrGenContext * ctx, LLVMValueRef lhs_ptr, LLVMValueRef rhs_val, 
     LLVMBuildStore(ctx->builder, type_id, id_field);
 }
 
+static bool
+ir_gen_bit_field_write(IrGenContext * ctx, odin_grammar_node_t * lhs_expr, LLVMValueRef rhs_val, OperatorKind op_kind)
+{
+    if (lhs_expr == NULL)
+        return false;
+    while (lhs_expr->type != AST_NODE_POSTFIX_EXPRESSION && is_expression_wrapper_type(lhs_expr->type)
+           && lhs_expr->list.count >= 1)
+        lhs_expr = lhs_expr->list.children[0];
+    if (lhs_expr->type != AST_NODE_POSTFIX_EXPRESSION || lhs_expr->list.count < 2)
+        return false;
+    odin_grammar_node_t * base = lhs_expr->list.children[0];
+    odin_grammar_node_t * ops = lhs_expr->list.children[1];
+    if (base == NULL || base->resolved_type == NULL || base->resolved_type->kind != TD_KIND_BIT_FIELD)
+        return false;
+    if (ops == NULL || ops->list.count == 0)
+        return false;
+    odin_grammar_node_t * last_op = ops->list.children[ops->list.count - 1];
+    if (last_op == NULL || last_op->type != AST_NODE_POSTFIX_MEMBER)
+        return false;
+    char const * field_name = NULL;
+    for (size_t ci = 0; ci < last_op->list.count; ci++)
+    {
+        odin_grammar_node_t * child = last_op->list.children[ci];
+        if (child != NULL && child->type == AST_NODE_IDENTIFIER)
+        {
+            field_name = child->text;
+            break;
+        }
+    }
+    if (field_name == NULL)
+        return false;
+    bit_field_field_info const * bf = type_descriptor_find_bit_field_field(base->resolved_type, field_name);
+    if (bf == NULL)
+        return false;
+    LLVMValueRef backing_ptr = ir_gen_lvalue_ptr(ctx, base);
+    if (backing_ptr == NULL)
+        return true;
+    LLVMTypeRef backing_type = base->resolved_type->llvm_type;
+    uint64_t mask_val = (bf->width_bits >= 64) ? ~0ULL : ((1ULL << bf->width_bits) - 1);
+    LLVMValueRef mask = LLVMConstInt(backing_type, mask_val, false);
+    if (op_kind == OP_ASSIGN)
+    {
+        LLVMValueRef old_backing = LLVMBuildLoad2(ctx->builder, backing_type, backing_ptr, "bf.old");
+        LLVMValueRef shifted_mask = mask;
+        if (bf->offset_bits > 0)
+        {
+            LLVMValueRef off = LLVMConstInt(backing_type, (unsigned)bf->offset_bits, false);
+            shifted_mask = LLVMBuildShl(ctx->builder, mask, off, "bf.smask");
+        }
+        LLVMValueRef cleared = LLVMBuildAnd(
+            ctx->builder, old_backing, LLVMBuildNot(ctx->builder, shifted_mask, "bf.nmask"), "bf.cleared"
+        );
+        LLVMValueRef rhs_cast = LLVMBuildIntCast(ctx->builder, rhs_val, backing_type, "bf.rhscast");
+        LLVMValueRef shifted_rhs = rhs_cast;
+        if (bf->offset_bits > 0)
+        {
+            LLVMValueRef off = LLVMConstInt(backing_type, (unsigned)bf->offset_bits, false);
+            shifted_rhs = LLVMBuildShl(ctx->builder, rhs_cast, off, "bf.shrhs");
+        }
+        LLVMBuildStore(ctx->builder, LLVMBuildOr(ctx->builder, cleared, shifted_rhs, "bf.new"), backing_ptr);
+    }
+    else
+    {
+        OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
+        LLVMValueRef old_backing = LLVMBuildLoad2(ctx->builder, backing_type, backing_ptr, "bf.old");
+        LLVMValueRef shifted_old = old_backing;
+        if (bf->offset_bits > 0)
+        {
+            LLVMValueRef off = LLVMConstInt(backing_type, (unsigned)bf->offset_bits, false);
+            shifted_old = LLVMBuildLShr(ctx->builder, old_backing, off, "bf.shiftold");
+        }
+        LLVMValueRef old_field_val = LLVMBuildAnd(ctx->builder, shifted_old, mask, "bf.oldfield");
+        LLVMValueRef old_field_cast = LLVMBuildIntCast(ctx->builder, old_field_val, bf->type->llvm_type, "bf.oldcast");
+        LLVMValueRef result = ir_gen_binary_op_by_kind(ctx, old_field_cast, rhs_val, bin_op);
+        LLVMValueRef result_cast = LLVMBuildIntCast(ctx->builder, result, backing_type, "bf.result");
+        LLVMValueRef shifted_mask = mask;
+        if (bf->offset_bits > 0)
+        {
+            LLVMValueRef off = LLVMConstInt(backing_type, (unsigned)bf->offset_bits, false);
+            shifted_mask = LLVMBuildShl(ctx->builder, mask, off, "bf.smask");
+        }
+        LLVMValueRef cleared = LLVMBuildAnd(
+            ctx->builder, old_backing, LLVMBuildNot(ctx->builder, shifted_mask, "bf.nmask"), "bf.cleared"
+        );
+        LLVMValueRef shifted_result = result_cast;
+        if (bf->offset_bits > 0)
+        {
+            LLVMValueRef off = LLVMConstInt(backing_type, (unsigned)bf->offset_bits, false);
+            shifted_result = LLVMBuildShl(ctx->builder, result_cast, off, "bf.shres");
+        }
+        LLVMBuildStore(ctx->builder, LLVMBuildOr(ctx->builder, cleared, shifted_result, "bf.new"), backing_ptr);
+    }
+    return true;
+}
+
 static LLVMValueRef
 ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -1691,6 +1789,9 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMValueRef rhs_val = ir_gen_node(ctx, node->list.children[2]);
     if (rhs_val == NULL)
         return NULL;
+
+    if (ir_gen_bit_field_write(ctx, node->list.children[0], rhs_val, op_kind))
+        return rhs_val;
 
     LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
     if (lhs_ptr == NULL)
@@ -1740,6 +1841,9 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMValueRef rhs_val = ir_gen_node(ctx, node->list.children[2]);
     if (rhs_val == NULL)
         return NULL;
+
+    if (ir_gen_bit_field_write(ctx, node->list.children[0], rhs_val, op_kind))
+        return rhs_val;
 
     LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
     if (lhs_ptr == NULL)
@@ -2961,7 +3065,29 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 break;
 
             if (cur_type == NULL || cur_type->kind != TD_KIND_STRUCT)
+            {
+                if (cur_type && cur_type->kind == TD_KIND_BIT_FIELD)
+                {
+                    char const * field_name = field_name_node->text;
+                    bit_field_field_info const * bf = type_descriptor_find_bit_field_field(cur_type, field_name);
+                    if (bf == NULL)
+                        break;
+
+                    LLVMValueRef backing = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "bf.backing");
+                    LLVMValueRef shifted = backing;
+                    if (bf->offset_bits > 0)
+                    {
+                        LLVMValueRef off = LLVMConstInt(cur_type->llvm_type, (unsigned)bf->offset_bits, false);
+                        shifted = LLVMBuildLShr(ctx->builder, backing, off, "bf.shifted");
+                    }
+                    uint64_t mask_val = (bf->width_bits >= 64) ? ~0ULL : ((1ULL << bf->width_bits) - 1);
+                    LLVMValueRef mask = LLVMConstInt(cur_type->llvm_type, mask_val, false);
+                    LLVMValueRef extracted = LLVMBuildAnd(ctx->builder, shifted, mask, "bf.extracted");
+                    val = LLVMBuildIntCast(ctx->builder, extracted, bf->type->llvm_type, "bf.val");
+                    cur_type = bf->type;
+                }
                 break;
+            }
 
             field_access_path_t path;
             if (!type_descriptor_find_struct_field_path(cur_type, field_name_node->text, &path))
@@ -3168,7 +3294,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_ARRAY && cur_type->kind != TD_KIND_SLICE
                 && cur_type->kind != TD_KIND_PROC && cur_type->kind != TD_KIND_DYNAMIC_ARRAY
-                && cur_type->kind != TD_KIND_MAP)
+                && cur_type->kind != TD_KIND_MAP && cur_type->kind != TD_KIND_BIT_FIELD)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }

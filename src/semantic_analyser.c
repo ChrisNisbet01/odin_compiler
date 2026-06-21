@@ -187,6 +187,78 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return map_type;
     }
 
+    case AST_NODE_BIT_FIELD_TYPE:
+    {
+        odin_grammar_node_t * field_list_node = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child && child->type == AST_NODE_BIT_FIELD_FIELD_LIST)
+            {
+                field_list_node = child;
+                break;
+            }
+        }
+        if (field_list_node == NULL)
+            return NULL;
+
+        int num_fields = 0;
+        for (size_t i = 0; i < field_list_node->list.count; i++)
+        {
+            if (field_list_node->list.children[i]
+                && field_list_node->list.children[i]->type == AST_NODE_BIT_FIELD_FIELD)
+                num_fields++;
+        }
+        if (num_fields == 0)
+            return NULL;
+
+        bit_field_field_info fields[64];
+        int offset = 0;
+        int field_idx = 0;
+        int total_bits = 0;
+
+        for (size_t i = 0; i < field_list_node->list.count; i++)
+        {
+            odin_grammar_node_t * field_node = field_list_node->list.children[i];
+            if (field_node == NULL || field_node->type != AST_NODE_BIT_FIELD_FIELD)
+                continue;
+            if (field_node->list.count < 3)
+                return NULL;
+
+            odin_grammar_node_t * name_node = field_node->list.children[0];
+            odin_grammar_node_t * type_node = field_node->list.children[1];
+            odin_grammar_node_t * width_node = field_node->list.children[2];
+
+            if (name_node == NULL || name_node->text == NULL || type_node == NULL || width_node == NULL)
+                return NULL;
+
+            TypeDescriptor const * field_type = sem_resolve_type_expr(ctx, type_node);
+            if (field_type == NULL)
+                return NULL;
+
+            int width = (int)strtol(width_node->text, NULL, 10);
+            if (width <= 0)
+            {
+                sem_error_list_add(&ctx->errors, width_node, "bit_field field width must be positive");
+                return NULL;
+            }
+
+            fields[field_idx].name = name_node->text;
+            fields[field_idx].type = field_type;
+            fields[field_idx].offset_bits = offset;
+            fields[field_idx].width_bits = width;
+            offset += width;
+            total_bits += width;
+            field_idx++;
+        }
+
+        TypeDescriptor const * bf_type
+            = get_or_create_bit_field_type(ctx->type_registry, fields, num_fields, total_bits);
+        if (bf_type)
+            node->resolved_type = (TypeDescriptor *)bf_type;
+        return bf_type;
+    }
+
     case AST_NODE_PROCEDURE_SIGNATURE:
     {
         TypeDescriptor const * return_type = NULL;
@@ -843,6 +915,16 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                             else
                                 cur_type = f->type_desc;
                         }
+                        op->resolved_type = (TypeDescriptor *)type;
+                    }
+                }
+                else if (type && type->kind == TD_KIND_BIT_FIELD && op->list.count >= 1 && op->list.children[0])
+                {
+                    char const * field_name = op->list.children[0]->text;
+                    bit_field_field_info const * bf = type_descriptor_find_bit_field_field(type, field_name);
+                    if (bf)
+                    {
+                        type = bf->type;
                         op->resolved_type = (TypeDescriptor *)type;
                     }
                 }

@@ -364,6 +364,76 @@ get_or_create_map_type(TypeDescriptors * registry, TypeDescriptor const * key_ty
 }
 
 TypeDescriptor const *
+get_or_create_bit_field_type(TypeDescriptors * registry, bit_field_field_info * fields, int num_fields, int total_bits)
+{
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_BIT_FIELD)
+            continue;
+        if (t->as.bit_field.num_fields != num_fields || t->as.bit_field.total_bits != total_bits)
+            continue;
+        bool match = true;
+        for (int j = 0; j < num_fields; j++)
+        {
+            if (strcmp(t->as.bit_field.fields[j].name, fields[j].name) != 0)
+            {
+                match = false;
+                break;
+            }
+            if (t->as.bit_field.fields[j].type != fields[j].type
+                || t->as.bit_field.fields[j].offset_bits != fields[j].offset_bits
+                || t->as.bit_field.fields[j].width_bits != fields[j].width_bits)
+            {
+                match = false;
+                break;
+            }
+        }
+        if (match)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_BIT_FIELD;
+
+    td->as.bit_field.fields = calloc((size_t)num_fields, sizeof(bit_field_field_info));
+    if (td->as.bit_field.fields == NULL)
+        return NULL;
+    for (int j = 0; j < num_fields; j++)
+    {
+        td->as.bit_field.fields[j] = fields[j];
+    }
+    td->as.bit_field.num_fields = num_fields;
+    td->as.bit_field.total_bits = total_bits;
+
+    if (total_bits <= 8)
+        td->llvm_type = LLVMInt8TypeInContext(registry->context);
+    else if (total_bits <= 16)
+        td->llvm_type = LLVMInt16TypeInContext(registry->context);
+    else if (total_bits <= 32)
+        td->llvm_type = LLVMInt32TypeInContext(registry->context);
+    else
+        td->llvm_type = LLVMInt64TypeInContext(registry->context);
+
+    return td;
+}
+
+bit_field_field_info const *
+type_descriptor_find_bit_field_field(TypeDescriptor const * desc, char const * name)
+{
+    if (desc == NULL || desc->kind != TD_KIND_BIT_FIELD || name == NULL)
+        return NULL;
+    for (int i = 0; i < desc->as.bit_field.num_fields; i++)
+    {
+        if (strcmp(desc->as.bit_field.fields[i].name, name) == 0)
+            return &desc->as.bit_field.fields[i];
+    }
+    return NULL;
+}
+
+TypeDescriptor const *
 get_or_create_proc_type(
     TypeDescriptors * registry,
     TypeDescriptor const * return_type,

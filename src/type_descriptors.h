@@ -49,6 +49,14 @@ typedef enum
     TD_KIND_RANGE,
 } td_kind_t;
 
+typedef struct
+{
+    char const * name;
+    TypeDescriptor const * type;
+    int offset_bits;
+    int width_bits;
+} bit_field_field_info;
+
 typedef struct TypeDescriptor
 {
     td_kind_t kind;
@@ -87,6 +95,12 @@ typedef struct TypeDescriptor
             TypeDescriptor const * key_type;
             TypeDescriptor const * value_type;
         } map;
+        struct
+        {
+            bit_field_field_info * fields;
+            int num_fields;
+            int total_bits;
+        } bit_field;
     } as;
 } TypeDescriptor;
 
@@ -112,6 +126,11 @@ TypeDescriptor const * get_or_create_enum_type(TypeDescriptors * registry, char 
 TypeDescriptor const * get_or_create_range_type(TypeDescriptors * registry, bool is_inclusive);
 TypeDescriptor const *
 get_or_create_map_type(TypeDescriptors * registry, TypeDescriptor const * key_type, TypeDescriptor const * value_type);
+
+TypeDescriptor const *
+get_or_create_bit_field_type(TypeDescriptors * registry, bit_field_field_info * fields, int num_fields, int total_bits);
+
+bit_field_field_info const * type_descriptor_find_bit_field_field(TypeDescriptor const * desc, char const * name);
 
 TypeDescriptor const * get_or_create_proc_type(
     TypeDescriptors * registry,

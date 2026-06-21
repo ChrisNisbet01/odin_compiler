@@ -239,7 +239,7 @@ UnionFieldList = delimited(UnionField, Semicolon) Semicolon? @AST_ACTION_UNION_F
 UnionType = KwUnion Directive? LBrace UnionFieldList RBrace @AST_ACTION_UNION_TYPE;
 
 BitFieldField = Identifier Colon TypePrefix PipeInType IntegerLiteral @AST_ACTION_BIT_FIELD_FIELD;
-BitFieldFieldList = delimited(BitFieldField, Semicolon) Semicolon? @AST_ACTION_BIT_FIELD_FIELD_LIST;
+BitFieldFieldList = delimited(BitFieldField, Comma) Comma? @AST_ACTION_BIT_FIELD_FIELD_LIST;
 BitFieldType = KwBitField Directive? LBrace BitFieldFieldList RBrace @AST_ACTION_BIT_FIELD_TYPE;
 
 BitSetType = KwBitSet LBracket (TypePrefix | DotDotLt | DotDot) RBracket @AST_ACTION_BIT_SET_TYPE;
