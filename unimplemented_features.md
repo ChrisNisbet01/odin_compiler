@@ -87,6 +87,10 @@ Dynamic arrays are now fully implemented. `make([dynamic]T, len)` allocates back
 
 **Affects**: `src/type_descriptors.c/h` (`get_or_create_dynamic_array_type`), `src/semantic_analyser.c` (make/len/cap validation accepts dynamic arrays), `src/llvm_ir_generator.c` (make: 3-field struct with cap; len/cap: field index selection; subscript: data pointer extraction; delete: field 0 extraction; identifier skip list; auto-deref exclusion). Test: `tests/test_dynamic_array.odin`.
 
+### Types
+- **`bit_set` type** – Implemented.
+
+
 ## Not Implemented
 
 ### Statements
@@ -99,7 +103,6 @@ Dynamic arrays are now fully implemented. `make([dynamic]T, len)` allocates back
 
 ### Types
 - **`union` type** – Parsed, no sem/IR.
-- **`bit_set` type** – Variable declarations (backing integer allocation) and `in`/`not_in` membership tests work. Missing: assignment operators (`incl`/`excl`, `+=`, `-=`), set operations (`|`, `&`, `-`, `~`), range-based `bit_set` (e.g. `bit_set[0..<32]`), iteration, `len`/`cap`.
 - **`soa` (structure-of-arrays) layout** – Parsed, no sem/IR.
 - **`any` type / RTTI** – Registered in type registry with correct `{i8*, i64}` layout. Variable declaration and assignment packing for integers, pointers, and struct/array values work. Type assertion `x.(T)` extracts values back. No runtime type identifiers (type_id always 0) or type switching.
 

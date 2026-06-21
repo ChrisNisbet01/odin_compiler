@@ -272,6 +272,7 @@ DEFINE_ACTION(ast_action_enum_type_ref_action, AST_NODE_ENUM_TYPE_REF)
 DEFINE_ACTION(ast_action_union_type_action, AST_NODE_UNION_TYPE)
 DEFINE_ACTION(ast_action_bit_field_type_action, AST_NODE_BIT_FIELD_TYPE)
 DEFINE_ACTION(ast_action_bit_set_type_action, AST_NODE_BIT_SET_TYPE)
+DEFINE_TERMINAL_ACTION(ast_action_bit_set_range_action, AST_NODE_BIT_SET_RANGE)
 DEFINE_ACTION(ast_action_struct_type_action, AST_NODE_STRUCT_TYPE)
 DEFINE_ACTION(ast_action_struct_type_ref_action, AST_NODE_STRUCT_TYPE_REF)
 DEFINE_ACTION(ast_action_distinct_type_action, AST_NODE_DISTINCT_TYPE)
@@ -380,6 +381,8 @@ DEFINE_ACTION(ast_action_cap_expr_action, AST_NODE_CAP_EXPR)
 DEFINE_ACTION(ast_action_make_expr_action, AST_NODE_MAKE_EXPR)
 DEFINE_ACTION(ast_action_new_expr_action, AST_NODE_NEW_EXPR)
 DEFINE_ACTION(ast_action_delete_expr_action, AST_NODE_DELETE_EXPR)
+DEFINE_ACTION(ast_action_incl_expr_action, AST_NODE_INCL_EXPR)
+DEFINE_ACTION(ast_action_excl_expr_action, AST_NODE_EXCL_EXPR)
 
 // --- Terminal nodes (text captured for semantic use) ---
 DEFINE_TERMINAL_ACTION(ast_action_identifier_action, AST_NODE_IDENTIFIER)
@@ -430,6 +433,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_UNION_TYPE, ast_action_union_type_action);
     REGISTER(AST_ACTION_BIT_FIELD_TYPE, ast_action_bit_field_type_action);
     REGISTER(AST_ACTION_BIT_SET_TYPE, ast_action_bit_set_type_action);
+    REGISTER(AST_ACTION_BIT_SET_RANGE, ast_action_bit_set_range_action);
     REGISTER(AST_ACTION_STRUCT_TYPE, ast_action_struct_type_action);
     REGISTER(AST_ACTION_STRUCT_TYPE_REF, ast_action_struct_type_ref_action);
     REGISTER(AST_ACTION_TYPE_NAME, ast_action_type_name_action);
@@ -531,6 +535,8 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_MAKE_EXPR, ast_action_make_expr_action);
     REGISTER(AST_ACTION_NEW_EXPR, ast_action_new_expr_action);
     REGISTER(AST_ACTION_DELETE_EXPR, ast_action_delete_expr_action);
+    REGISTER(AST_ACTION_INCL_EXPR, ast_action_incl_expr_action);
+    REGISTER(AST_ACTION_EXCL_EXPR, ast_action_excl_expr_action);
 
 #undef REGISTER
 }

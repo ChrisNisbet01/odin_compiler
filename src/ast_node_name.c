@@ -51,6 +51,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "BitFieldType";
     case AST_NODE_BIT_SET_TYPE:
         return "BitSetType";
+    case AST_NODE_BIT_SET_RANGE:
+        return "BitSetRange";
     case AST_NODE_STRUCT_TYPE:
         return "StructType";
     case AST_NODE_STRUCT_TYPE_REF:
@@ -229,6 +231,10 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "NewExpr";
     case AST_NODE_DELETE_EXPR:
         return "DeleteExpr";
+    case AST_NODE_INCL_EXPR:
+        return "InclExpr";
+    case AST_NODE_EXCL_EXPR:
+        return "ExclExpr";
     case AST_NODE_ELLIPSIS:
         return "Ellipsis";
     case AST_NODE_ENUMERATOR:

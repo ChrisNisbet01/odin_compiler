@@ -271,7 +271,96 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * backing_type = NULL;
         int num_bits = 0;
 
-        if (inner->type == AST_NODE_BASIC_TYPE)
+        if (inner->type == AST_NODE_BIT_SET_RANGE)
+        {
+            // Range-based bit_set: bit_set[low..high] or bit_set[low..<high]
+            // Collect integer values by walking descendants depth-first
+            odin_grammar_node_t * int_vals[2] = {NULL, NULL};
+            int int_count = 0;
+
+            // Use a simple stack-based traversal of the inner node's subtree
+            odin_grammar_node_t ** stack = NULL;
+            size_t stack_cap = 0;
+            size_t stack_size = 0;
+
+// Helper macro to push onto stack
+#define PUSH(n)                                                                                                        \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (stack_size >= stack_cap)                                                                                   \
+        {                                                                                                              \
+            stack_cap = stack_cap ? stack_cap * 2 : 16;                                                                \
+            stack = realloc(stack, stack_cap * sizeof(*stack));                                                        \
+        }                                                                                                              \
+        stack[stack_size++] = (n);                                                                                     \
+    } while (0)
+
+            for (size_t i = 0; i < inner->list.count; i++)
+            {
+                if (inner->list.children[i] != NULL)
+                    PUSH(inner->list.children[i]);
+            }
+
+            while (stack_size > 0 && int_count < 2)
+            {
+                odin_grammar_node_t * cur = stack[--stack_size];
+                if (cur->type == AST_NODE_INTEGER_VALUE)
+                {
+                    int_vals[int_count++] = cur;
+                }
+                else
+                {
+                    for (size_t i = 0; i < cur->list.count; i++)
+                    {
+                        if (cur->list.children[i] != NULL)
+                            PUSH(cur->list.children[i]);
+                    }
+                }
+            }
+
+            free(stack);
+#undef PUSH
+
+            if (int_count < 2 || int_vals[0]->text == NULL || int_vals[1]->text == NULL)
+                return NULL;
+
+            char * endptr = NULL;
+            unsigned long long low_val = strtoull(int_vals[0]->text, &endptr, 0);
+            unsigned long long high_val = strtoull(int_vals[1]->text, &endptr, 0);
+
+            // Determine inclusive/exclusive from captured text
+            bool is_inclusive = true;
+            if (inner->text != NULL)
+            {
+                char const * dotpos = strstr(inner->text, "..");
+                if (dotpos != NULL && dotpos[2] == '<')
+                    is_inclusive = false;
+            }
+
+            if (is_inclusive)
+                num_bits = (int)(high_val - low_val + 1);
+            else
+                num_bits = (int)(high_val - low_val);
+
+            if (num_bits < 1)
+                num_bits = 1;
+
+            // Pick backing type based on number of bits
+            char const * backing_name = "u8";
+            if (num_bits <= 8)
+                backing_name = "u8";
+            else if (num_bits <= 16)
+                backing_name = "u16";
+            else if (num_bits <= 32)
+                backing_name = "u32";
+            else
+                backing_name = "u64";
+
+            backing_type = get_basic_type_by_name(ctx->type_registry, backing_name);
+            if (backing_type == NULL)
+                return NULL;
+        }
+        else if (inner->type == AST_NODE_BASIC_TYPE)
         {
             backing_type = sem_resolve_type_expr(ctx, inner);
             if (backing_type == NULL || backing_type->kind != TD_KIND_BASIC || backing_type->as.basic.is_float)
@@ -735,6 +824,58 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
+    case AST_NODE_INCL_EXPR:
+    case AST_NODE_EXCL_EXPR:
+    {
+        if (node->list.count < 2)
+            return NULL;
+        TypeDescriptor const * ptr_type = sem_evaluate_expr(ctx, node->list.children[0]);
+        TypeDescriptor const * elem_type = sem_evaluate_expr(ctx, node->list.children[1]);
+        if (ptr_type == NULL)
+        {
+            sem_error_list_add(&ctx->errors, node, "incl/excl: first arg resolved to NULL type");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        if (ptr_type->kind != TD_KIND_POINTER)
+        {
+            char buf[256];
+            snprintf(
+                buf,
+                sizeof(buf),
+                "incl/excl: first arg is kind %d, not TD_KIND_POINTER (%d)",
+                ptr_type->kind,
+                TD_KIND_POINTER
+            );
+            sem_error_list_add(&ctx->errors, node, buf);
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        TypeDescriptor const * bs_type = ptr_type->pointee;
+        if (bs_type == NULL || bs_type->kind != TD_KIND_BIT_SET)
+        {
+            char buf[256];
+            snprintf(
+                buf,
+                sizeof(buf),
+                "incl/excl: element type is kind %d, not TD_KIND_BIT_SET (%d)",
+                bs_type ? bs_type->kind : -1,
+                TD_KIND_BIT_SET
+            );
+            sem_error_list_add(&ctx->errors, node, buf);
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        if (elem_type == NULL || !is_integer_kind(elem_type))
+        {
+            sem_error_list_add(&ctx->errors, node, "second argument to incl/excl must be an integer");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
     case AST_NODE_DISTINCT_TYPE:
     {
         TypeDescriptor const * td = sem_resolve_type_expr(ctx, node);
@@ -763,7 +904,34 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_UNARY_EXPRESSION:
     {
-        TypeDescriptor const * operand_type = sem_evaluate_expr(ctx, node->list.children[1]);
+        odin_grammar_node_t * op_node = node_find_child(node, AST_NODE_UNARY_OP);
+        // Find the operand (non-op child)
+        odin_grammar_node_t * operand_node = NULL;
+        for (size_t uei = 0; uei < node->list.count; uei++)
+        {
+            odin_grammar_node_t * child = node->list.children[uei];
+            if (child != NULL && (op_node == NULL || child != op_node))
+            {
+                operand_node = child;
+                break;
+            }
+        }
+        if (operand_node == NULL)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        TypeDescriptor const * operand_type = sem_evaluate_expr(ctx, operand_node);
+        if (op_node && op_node->metadata)
+        {
+            AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
+            if (op_md->kind == OP_UNARY_ADDR)
+            {
+                TypeDescriptor const * ptr_type = get_or_create_pointer_type(ctx->type_registry, operand_type);
+                node->resolved_type = (TypeDescriptor *)ptr_type;
+                return ptr_type;
+            }
+        }
         node->resolved_type = (TypeDescriptor *)operand_type;
         return operand_type;
     }

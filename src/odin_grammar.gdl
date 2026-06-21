@@ -79,6 +79,8 @@ KwType = lexeme("type" IdBoundary);
 
 KwBitField = lexeme("bit_field" IdBoundary);
 KwBitSet = lexeme("bit_set" IdBoundary);
+KwIncl = lexeme("incl" IdBoundary);
+KwExcl = lexeme("excl" IdBoundary);
 KwProcLiteral = KwProc;
 
 // Reserved words set (for identifier boundary checking)
@@ -98,7 +100,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwInt | KwI8 | KwI16 | KwI32 | KwI64
     | KwU8 | KwU16 | KwU32 | KwU64
     | KwF32 | KwF64 | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring | KwAny | KwType
-    | KwBitField | KwBitSet;
+    | KwBitField | KwBitSet | KwIncl | KwExcl;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
 
@@ -242,7 +244,8 @@ BitFieldField = Identifier Colon TypePrefix PipeInType IntegerLiteral @AST_ACTIO
 BitFieldFieldList = delimited(BitFieldField, Comma) Comma? @AST_ACTION_BIT_FIELD_FIELD_LIST;
 BitFieldType = KwBitField Directive? LBrace BitFieldFieldList RBrace @AST_ACTION_BIT_FIELD_TYPE;
 
-BitSetType = KwBitSet LBracket (TypePrefix | DotDotLt | DotDot) RBracket @AST_ACTION_BIT_SET_TYPE;
+BitSetRange = LogOrExpression (DotDotLt | DotDot) LogOrExpression @AST_ACTION_BIT_SET_RANGE;
+BitSetType = KwBitSet LBracket (TypePrefix | BitSetRange) RBracket @AST_ACTION_BIT_SET_TYPE;
 
 StructField = KwUsing? Identifier (Comma Identifier)* Colon TypePrefix @AST_ACTION_STRUCT_FIELD;
 StructFieldList = delimited(StructField, Semicolon) Semicolon? @AST_ACTION_STRUCT_FIELD_LIST;
@@ -309,7 +312,9 @@ CapExpr = KwCap LParen Expression RParen @AST_ACTION_CAP_EXPR;
 MakeExpr = KwMake LParen TypePrefix Comma Expression RParen @AST_ACTION_MAKE_EXPR;
 NewExpr = KwNew LParen TypePrefix RParen @AST_ACTION_NEW_EXPR;
 DeleteExpr = KwDelete LParen Expression RParen @AST_ACTION_DELETE_EXPR;
-UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | CastExpr | TransmuteExpr | UnaryPrefix | PostfixExpression;
+InclExpr = KwIncl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_INCL_EXPR;
+ExclExpr = KwExcl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_EXCL_EXPR;
+UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | UnaryPrefix | PostfixExpression;
 
 MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
 MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;

@@ -129,8 +129,7 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
         if (sym->value.type_info
             && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
                 || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY
-                || sym->value.type_info->kind == TD_KIND_MAP || sym->value.type_info->kind == TD_KIND_BIT_FIELD
-                || sym->value.type_info->kind == TD_KIND_BIT_SET))
+                || sym->value.type_info->kind == TD_KIND_MAP || sym->value.type_info->kind == TD_KIND_BIT_FIELD))
         {
             return sym->value.value;
         }
@@ -515,8 +514,17 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return is_float ? LLVMBuildFAdd(ctx->builder, lhs, rhs, "addtmp")
                         : LLVMBuildAdd(ctx->builder, lhs, rhs, "addtmp");
     case OP_SUB:
+    {
+        // bit_set - bit_set is AND-NOT (set difference), not integer subtraction
+        TypeDescriptor const * lhs_td = node->list.children[0]->resolved_type;
+        TypeDescriptor const * rhs_td = node->list.children[node->list.count - 1]->resolved_type;
+        if (lhs_td && lhs_td->kind == TD_KIND_BIT_SET && rhs_td && rhs_td->kind == TD_KIND_BIT_SET)
+        {
+            return LLVMBuildAnd(ctx->builder, lhs, LLVMBuildNot(ctx->builder, rhs, "bs.not"), "bs.diff");
+        }
         return is_float ? LLVMBuildFSub(ctx->builder, lhs, rhs, "subtmp")
                         : LLVMBuildSub(ctx->builder, lhs, rhs, "subtmp");
+    }
     case OP_MUL:
         return is_float ? LLVMBuildFMul(ctx->builder, lhs, rhs, "multmp")
                         : LLVMBuildMul(ctx->builder, lhs, rhs, "multmp");
@@ -1788,6 +1796,78 @@ ir_gen_bit_field_write(IrGenContext * ctx, odin_grammar_node_t * lhs_expr, LLVMV
     return true;
 }
 
+static bool
+ir_gen_bit_set_assign_expr(
+    IrGenContext * ctx,
+    odin_grammar_node_t * lhs_expr,
+    odin_grammar_node_t * rhs_node,
+    LLVMValueRef rhs_val,
+    OperatorKind op_kind
+)
+{
+    if (lhs_expr == NULL || rhs_node == NULL)
+        return false;
+    odin_grammar_node_t * t = lhs_expr;
+    while (t && t->list.count >= 1 && t->list.children[0])
+        t = t->list.children[0];
+    TypeDescriptor const * lhs_td = t ? t->resolved_type : NULL;
+    if (lhs_td == NULL || lhs_td->kind != TD_KIND_BIT_SET)
+        return false;
+
+    LLVMValueRef ptr = ir_gen_lvalue_ptr(ctx, lhs_expr);
+    if (ptr == NULL)
+        return true;
+
+    if (op_kind == OP_ASSIGN)
+    {
+        LLVMBuildStore(ctx->builder, rhs_val, ptr);
+        return true;
+    }
+
+    // Determine if RHS is also a bit_set
+    odin_grammar_node_t * rt = rhs_node;
+    while (rt && rt->list.count >= 1 && rt->list.children[0])
+        rt = rt->list.children[0];
+    TypeDescriptor const * rhs_td = rt ? rt->resolved_type : NULL;
+    bool rhs_is_bit_set = (rhs_td && rhs_td->kind == TD_KIND_BIT_SET);
+
+    LLVMValueRef backing = LLVMBuildLoad2(ctx->builder, lhs_td->llvm_type, ptr, "bs.load");
+    OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
+    if (bin_op == OP_INVALID)
+        return true;
+
+    if (rhs_is_bit_set && bin_op == OP_SUB)
+    {
+        LLVMValueRef result
+            = LLVMBuildAnd(ctx->builder, backing, LLVMBuildNot(ctx->builder, rhs_val, "bs.not"), "bs.diff");
+        LLVMBuildStore(ctx->builder, result, ptr);
+    }
+    else if (!rhs_is_bit_set && (bin_op == OP_ADD || bin_op == OP_BIT_OR))
+    {
+        LLVMValueRef elem_cast = LLVMBuildIntCast(ctx->builder, rhs_val, lhs_td->llvm_type, "bs.elem");
+        LLVMValueRef one = LLVMConstInt(lhs_td->llvm_type, 1, false);
+        LLVMValueRef mask = LLVMBuildShl(ctx->builder, one, elem_cast, "bs.mask");
+        LLVMValueRef result = LLVMBuildOr(ctx->builder, backing, mask, "bs.incl");
+        LLVMBuildStore(ctx->builder, result, ptr);
+    }
+    else if (!rhs_is_bit_set && bin_op == OP_SUB)
+    {
+        LLVMValueRef elem_cast = LLVMBuildIntCast(ctx->builder, rhs_val, lhs_td->llvm_type, "bs.elem");
+        LLVMValueRef one = LLVMConstInt(lhs_td->llvm_type, 1, false);
+        LLVMValueRef mask = LLVMBuildShl(ctx->builder, one, elem_cast, "bs.mask");
+        LLVMValueRef result
+            = LLVMBuildAnd(ctx->builder, backing, LLVMBuildNot(ctx->builder, mask, "bs.nmask"), "bs.excl");
+        LLVMBuildStore(ctx->builder, result, ptr);
+    }
+    else
+    {
+        // Generic: both bit_set (|, &, ~) or other cases
+        LLVMValueRef result = ir_gen_binary_op_by_kind(ctx, backing, rhs_val, bin_op);
+        LLVMBuildStore(ctx->builder, result, ptr);
+    }
+    return true;
+}
+
 static LLVMValueRef
 ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -1810,6 +1890,9 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
 
     if (ir_gen_bit_field_write(ctx, node->list.children[0], rhs_val, op_kind))
+        return rhs_val;
+
+    if (ir_gen_bit_set_assign_expr(ctx, node->list.children[0], node->list.children[2], rhs_val, op_kind))
         return rhs_val;
 
     LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
@@ -1862,6 +1945,9 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
 
     if (ir_gen_bit_field_write(ctx, node->list.children[0], rhs_val, op_kind))
+        return rhs_val;
+
+    if (ir_gen_bit_set_assign_expr(ctx, node->list.children[0], node->list.children[2], rhs_val, op_kind))
         return rhs_val;
 
     LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
@@ -3771,6 +3857,36 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
                 ir_gen_call_free(ctx, ptr);
             }
         }
+        return NULL;
+    }
+
+    case AST_NODE_INCL_EXPR:
+    case AST_NODE_EXCL_EXPR:
+    {
+        if (node->list.count < 2)
+            return NULL;
+        bool is_incl = (node->type == AST_NODE_INCL_EXPR);
+        LLVMValueRef bs_ptr = ir_gen_node(ctx, node->list.children[0]);
+        LLVMValueRef elem_val = ir_gen_node(ctx, node->list.children[1]);
+        if (bs_ptr == NULL || elem_val == NULL)
+            return NULL;
+        TypeDescriptor const * ptr_type = node->list.children[0]->resolved_type;
+        if (ptr_type == NULL || ptr_type->kind != TD_KIND_POINTER)
+            return NULL;
+        TypeDescriptor const * bs_type = ptr_type->pointee;
+        if (bs_type == NULL || bs_type->kind != TD_KIND_BIT_SET)
+            return NULL;
+        LLVMTypeRef backing_type = bs_type->llvm_type;
+        LLVMValueRef backing = LLVMBuildLoad2(ctx->builder, backing_type, bs_ptr, "bs.backing");
+        LLVMValueRef elem_cast = LLVMBuildIntCast(ctx->builder, elem_val, backing_type, "bs.elem");
+        LLVMValueRef one = LLVMConstInt(backing_type, 1, false);
+        LLVMValueRef mask = LLVMBuildShl(ctx->builder, one, elem_cast, "bs.mask");
+        LLVMValueRef result;
+        if (is_incl)
+            result = LLVMBuildOr(ctx->builder, backing, mask, "bs.incl");
+        else
+            result = LLVMBuildAnd(ctx->builder, backing, LLVMBuildNot(ctx->builder, mask, "bs.nmask"), "bs.excl");
+        LLVMBuildStore(ctx->builder, result, bs_ptr);
         return NULL;
     }
 
