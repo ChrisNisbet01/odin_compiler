@@ -129,7 +129,8 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
         if (sym->value.type_info
             && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
                 || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY
-                || sym->value.type_info->kind == TD_KIND_MAP || sym->value.type_info->kind == TD_KIND_BIT_FIELD))
+                || sym->value.type_info->kind == TD_KIND_MAP || sym->value.type_info->kind == TD_KIND_BIT_FIELD
+                || sym->value.type_info->kind == TD_KIND_BIT_SET))
         {
             return sym->value.value;
         }
@@ -380,6 +381,24 @@ ir_gen_in_expression(
             LLVMBuildStore(ctx->builder, rhs, data_ptr);
         }
         count_val = LLVMConstInt(i64, (unsigned long long)rhs_type->as.array.count, false);
+    }
+    else if (rhs_type->kind == TD_KIND_BIT_SET)
+    {
+        LLVMValueRef backing = rhs;
+        LLVMTypeRef backing_type = rhs_type->llvm_type;
+        if (LLVMGetTypeKind(LLVMTypeOf(rhs)) == LLVMPointerTypeKind)
+        {
+            backing = LLVMBuildLoad2(ctx->builder, backing_type, rhs, "bs.load");
+        }
+        LLVMValueRef lhs_cast = LLVMBuildIntCast(ctx->builder, lhs, backing_type, "bs.shift");
+        LLVMValueRef shifted = LLVMBuildLShr(ctx->builder, backing, lhs_cast, "bs.shifted");
+        LLVMValueRef result = LLVMBuildAnd(ctx->builder, shifted, LLVMConstInt(backing_type, 1, false), "bs.result");
+        if (is_not_in)
+            result = LLVMBuildICmp(ctx->builder, LLVMIntEQ, result, LLVMConstNull(backing_type), "bs.notin");
+        else
+            result = LLVMBuildICmp(ctx->builder, LLVMIntNE, result, LLVMConstNull(backing_type), "bs.in");
+        LLVMValueRef zext = LLVMBuildZExt(ctx->builder, result, LLVMInt64TypeInContext(ctx->context), "bs.ext");
+        return zext;
     }
     else
     {
@@ -3294,7 +3313,8 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_ARRAY && cur_type->kind != TD_KIND_SLICE
                 && cur_type->kind != TD_KIND_PROC && cur_type->kind != TD_KIND_DYNAMIC_ARRAY
-                && cur_type->kind != TD_KIND_MAP && cur_type->kind != TD_KIND_BIT_FIELD)
+                && cur_type->kind != TD_KIND_MAP && cur_type->kind != TD_KIND_BIT_FIELD
+                && cur_type->kind != TD_KIND_BIT_SET)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }

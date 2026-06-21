@@ -101,6 +101,11 @@ typedef struct TypeDescriptor
             int num_fields;
             int total_bits;
         } bit_field;
+        struct
+        {
+            TypeDescriptor const * element_type;
+            int num_bits;
+        } bit_set;
     } as;
 } TypeDescriptor;
 
@@ -131,6 +136,9 @@ TypeDescriptor const *
 get_or_create_bit_field_type(TypeDescriptors * registry, bit_field_field_info * fields, int num_fields, int total_bits);
 
 bit_field_field_info const * type_descriptor_find_bit_field_field(TypeDescriptor const * desc, char const * name);
+
+TypeDescriptor const *
+get_or_create_bit_set_type(TypeDescriptors * registry, TypeDescriptor const * element_type, int num_bits);
 
 TypeDescriptor const * get_or_create_proc_type(
     TypeDescriptors * registry,

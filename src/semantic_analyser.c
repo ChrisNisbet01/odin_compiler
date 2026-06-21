@@ -259,6 +259,52 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return bf_type;
     }
 
+    case AST_NODE_BIT_SET_TYPE:
+    {
+        if (node->list.count < 1)
+            return NULL;
+
+        odin_grammar_node_t * inner = node->list.children[0];
+        if (inner == NULL)
+            return NULL;
+
+        TypeDescriptor const * backing_type = NULL;
+        int num_bits = 0;
+
+        if (inner->type == AST_NODE_BASIC_TYPE)
+        {
+            backing_type = sem_resolve_type_expr(ctx, inner);
+            if (backing_type == NULL || backing_type->kind != TD_KIND_BASIC || backing_type->as.basic.is_float)
+                return NULL;
+            num_bits = backing_type->as.basic.width;
+        }
+        else
+        {
+            // Try to resolve as general type expression (e.g. enum type)
+            backing_type = sem_resolve_type_expr(ctx, inner);
+            if (backing_type == NULL)
+                return NULL;
+            if (backing_type->kind == TD_KIND_ENUM)
+            {
+                // For enum-based bit_set, determine backing from enum values
+                num_bits = 64; // conservative
+            }
+            else if (backing_type->kind == TD_KIND_BASIC && !backing_type->as.basic.is_float)
+            {
+                num_bits = backing_type->as.basic.width;
+            }
+            else
+            {
+                return NULL;
+            }
+        }
+
+        TypeDescriptor const * bs_type = get_or_create_bit_set_type(ctx->type_registry, backing_type, num_bits);
+        if (bs_type)
+            node->resolved_type = (TypeDescriptor *)bs_type;
+        return bs_type;
+    }
+
     case AST_NODE_PROCEDURE_SIGNATURE:
     {
         TypeDescriptor const * return_type = NULL;

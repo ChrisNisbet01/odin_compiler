@@ -434,6 +434,37 @@ type_descriptor_find_bit_field_field(TypeDescriptor const * desc, char const * n
 }
 
 TypeDescriptor const *
+get_or_create_bit_set_type(TypeDescriptors * registry, TypeDescriptor const * element_type, int num_bits)
+{
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_BIT_SET)
+            continue;
+        if (t->as.bit_set.element_type == element_type && t->as.bit_set.num_bits == num_bits)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_BIT_SET;
+    td->as.bit_set.element_type = element_type;
+    td->as.bit_set.num_bits = num_bits;
+
+    if (num_bits <= 8)
+        td->llvm_type = LLVMInt8TypeInContext(registry->context);
+    else if (num_bits <= 16)
+        td->llvm_type = LLVMInt16TypeInContext(registry->context);
+    else if (num_bits <= 32)
+        td->llvm_type = LLVMInt32TypeInContext(registry->context);
+    else
+        td->llvm_type = LLVMInt64TypeInContext(registry->context);
+
+    return td;
+}
+
+TypeDescriptor const *
 get_or_create_proc_type(
     TypeDescriptors * registry,
     TypeDescriptor const * return_type,
