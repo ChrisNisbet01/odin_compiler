@@ -82,6 +82,11 @@ typedef struct TypeDescriptor
         {
             bool is_inclusive;
         } range;
+        struct
+        {
+            TypeDescriptor const * key_type;
+            TypeDescriptor const * value_type;
+        } map;
     } as;
 } TypeDescriptor;
 
@@ -105,6 +110,8 @@ get_or_create_dynamic_array_type(TypeDescriptors * registry, TypeDescriptor cons
 TypeDescriptor const * get_or_create_enum_type(TypeDescriptors * registry, char const * tag, LLVMTypeRef llvm_type);
 
 TypeDescriptor const * get_or_create_range_type(TypeDescriptors * registry, bool is_inclusive);
+TypeDescriptor const *
+get_or_create_map_type(TypeDescriptors * registry, TypeDescriptor const * key_type, TypeDescriptor const * value_type);
 
 TypeDescriptor const * get_or_create_proc_type(
     TypeDescriptors * registry,

@@ -342,6 +342,28 @@ get_or_create_dynamic_array_type(TypeDescriptors * registry, TypeDescriptor cons
 }
 
 TypeDescriptor const *
+get_or_create_map_type(TypeDescriptors * registry, TypeDescriptor const * key_type, TypeDescriptor const * value_type)
+{
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind == TD_KIND_MAP && t->as.map.key_type == key_type && t->as.map.value_type == value_type)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_MAP;
+    td->as.map.key_type = key_type;
+    td->as.map.value_type = value_type;
+
+    LLVMTypeRef elems[1] = {LLVMPointerType(LLVMInt8TypeInContext(registry->context), 0)};
+    td->llvm_type = LLVMStructTypeInContext(registry->context, elems, 1, false);
+    return td;
+}
+
+TypeDescriptor const *
 get_or_create_proc_type(
     TypeDescriptors * registry,
     TypeDescriptor const * return_type,

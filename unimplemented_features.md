@@ -69,7 +69,18 @@ Two-variable for-range is now supported. Both `i` and `val` receive the same loo
 
 **Affects**: `src/odin_grammar.gdl` (MakeExpr, NewExpr, DeleteExpr rules), `src/semantic_analyser.c` (lines 517-562), `src/llvm_ir_generator.c` (ir_gen_call_malloc/free helpers, LenExpr opaque pointer fix, MakeExpr/NewExpr/DeleteExpr handlers, delete handler lvalue fix). Test: `tests/test_make_new_delete.odin`.
 
-### All 43 tests pass.
+### `map[K]V` type
+Maps are fully implemented. `make(map[K]V, cap)` allocates a heap-backed map via `calloc`. The runtime data layout is self-contained (no separate runtime library): header fields (count, capacity, key_size, value_size: each i64) are packed into a single `calloc`'d region, followed by inline entries (occupied byte + key bytes + value bytes per slot). `len(m)` reads count from offset 0; `cap(m)` reads capacity from offset 8. `delete(m)` extracts the data pointer from the map struct and frees it.
+
+**Map subscript read** (`x = m[key]`): Emits a linear scan loop with LLVM IR (loop → body → key-check → found/continue → notfound → merge with phi). For integer keys, the stored key is loaded and compared directly against the lookup key. Missing keys return zero.
+
+**Map subscript write** (`m[key] = val`): Emits an upsert loop with LLVM IR. The lvalue handler performs a linear scan tracking both key matches and the first empty slot. If a matching key is found, the value slot pointer is returned. If no match but an empty slot exists, the entry is claimed (occupied byte = 1, key stored, count incremented) and the value slot pointer is returned. If no empty slot exists (overflow), a temporary stack slot is returned.
+
+**Limitations**: Only integer keys are currently supported (direct integer comparison). Non-integer keys would need `memcmp`/`memcpy` extern declarations. Map growth is not implemented — capacity is fixed at `make` time.
+
+**Affects**: `src/type_descriptors.c/h` (`get_or_create_map_type`, `{key_type, value_type}` in union), `src/semantic_analyser.c` (AST_NODE_MAP_TYPE handler, len/cap/make/subscript validation for maps), `src/llvm_ir_generator.c` (identifier skip list, auto-deref exclusion, `ir_gen_call_calloc` helper, map make/len/cap/delete handlers, map subscript lvalue+rvalue in `ir_gen_lvalue`/`ir_gen_postfix_expression`). Test: `tests/test_map.odin`.
+
+### All 44 tests pass.
 
 ### `dynamic_array` (`[dynamic]T`)
 Dynamic arrays are now fully implemented. `make([dynamic]T, len)` allocates backing memory via `malloc` and returns a 3-field struct `{T*, i64, i64}` (data, length, capacity). Subscript operations use the same data pointer extraction logic as slices. `len(da)` extracts field 1; `cap(da)` extracts field 2. `delete(da)` extracts the data pointer from field 0 and frees it. Type descriptor factory `get_or_create_dynamic_array_type()` creates the `{T*, i64, i64}` LLVM struct type. Semantic analysis validates dynamic arrays for `make`, `len`, `cap`, `delete`, and subscript operations.
@@ -87,7 +98,6 @@ Dynamic arrays are now fully implemented. `make([dynamic]T, len)` allocates back
 - **Type assertion `.(Type)` for union types** – Currently only works for `any` type. Union type assertions need RTTI.
 
 ### Types
-- **`map` type** – Parsed, no sem/IR.
 - **`union` type** – Parsed, no sem/IR.
 - **`bit_field` type** – Parsed, no sem/IR.
 - **`bit_set` type** – Parsed, no sem/IR.

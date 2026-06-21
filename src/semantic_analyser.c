@@ -156,6 +156,37 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return da_type;
     }
 
+    case AST_NODE_MAP_TYPE:
+    {
+        // Grammar: MapType = KwMap LBracket TypePrefix RBracket TypePrefix
+        // Children: key_type_node, value_type_node
+        odin_grammar_node_t * key_type_node = NULL;
+        odin_grammar_node_t * val_type_node = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child && is_type_node(child))
+            {
+                if (key_type_node == NULL)
+                    key_type_node = child;
+                else
+                    val_type_node = child;
+            }
+        }
+        if (key_type_node == NULL || val_type_node == NULL)
+            return NULL;
+
+        TypeDescriptor const * key_type = sem_resolve_type_expr(ctx, key_type_node);
+        TypeDescriptor const * val_type = sem_resolve_type_expr(ctx, val_type_node);
+        if (key_type == NULL || val_type == NULL)
+            return NULL;
+
+        TypeDescriptor const * map_type = get_or_create_map_type(ctx->type_registry, key_type, val_type);
+        if (map_type)
+            node->resolved_type = (TypeDescriptor *)map_type;
+        return map_type;
+    }
+
     case AST_NODE_PROCEDURE_SIGNATURE:
     {
         TypeDescriptor const * return_type = NULL;
@@ -521,7 +552,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
         // Validate: valid for arrays, slices, strings (len only for strings)
         bool valid = (operand_type->kind == TD_KIND_ARRAY) || (operand_type->kind == TD_KIND_SLICE)
-                     || (operand_type->kind == TD_KIND_DYNAMIC_ARRAY)
+                     || (operand_type->kind == TD_KIND_DYNAMIC_ARRAY) || (operand_type->kind == TD_KIND_MAP)
                      || (operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name != NULL
                          && strcmp(operand_type->as.basic.name, "string") == 0 && node->type == AST_NODE_LEN_EXPR);
         if (!valid)
@@ -551,9 +582,9 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             sem_error_list_add(&ctx->errors, node, "invalid type argument to make");
             return NULL;
         }
-        if (td->kind != TD_KIND_SLICE && td->kind != TD_KIND_DYNAMIC_ARRAY)
+        if (td->kind != TD_KIND_SLICE && td->kind != TD_KIND_DYNAMIC_ARRAY && td->kind != TD_KIND_MAP)
         {
-            sem_error_list_add(&ctx->errors, node, "make only supports slice and dynamic array types");
+            sem_error_list_add(&ctx->errors, node, "make only supports slice, dynamic array, and map types");
             return NULL;
         }
         sem_evaluate_expr(ctx, len_node);
@@ -821,6 +852,11 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (type && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE))
                 {
                     type = type->element_type;
+                    op->resolved_type = (TypeDescriptor *)type;
+                }
+                else if (type && type->kind == TD_KIND_MAP)
+                {
+                    type = type->as.map.value_type;
                     op->resolved_type = (TypeDescriptor *)type;
                 }
                 break;
