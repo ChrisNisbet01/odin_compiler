@@ -15,3 +15,10 @@
 - **Fixed `ir_gen_bit_field_write` unwrapping**: `is_expression_wrapper_type` includes `AST_NODE_POSTFIX_EXPRESSION`, causing the while loop to over-unwrap past PostfixExpression into its children. Added `lhs_expr->type != AST_NODE_POSTFIX_EXPRESSION` guard.
 - **Fixed zero-initialization**: Odin semantics require all local variables to be zero-initialized by default (`x: T` = `x: T = 0`). Added `LLVMBuildStore(LLVMConstNull)` after `LLVMBuildAlloca` in `ir_gen_variable_decl` to prevent garbage reads from uninitialized bit_field backing storage.
 - **All 45 tests pass** (test_bit_field.odin added with 10 subtests covering basic write/read, field isolation, multi-field, overwrite, and 64-bit backing).
+
+## Accomplishments (session 2026-06-22)
+- **Fixed `incl`/`excl` pointer field access bug**: Both `semantic_analyser.c` and `llvm_ir_generator.c` used `ptr_type->element_type` instead of `ptr_type->pointee` (the latter is the correct field for `TD_KIND_POINTER`). Fixed both locations.
+- **Fixed bit_set value loading**: `ir_gen_identifier` treated `TD_KIND_BIT_SET` as a "composite type" that returns the alloca pointer instead of loading the integer backing value. This caused `LLVMBuildNot` (in the `-`/AND-NOT operator) to crash on pointer types. Removed `TD_KIND_BIT_SET` from the composite type list so bit_set variables are properly loaded as integer values.
+- **Implemented range-based bit_set (`bit_set[0..<32]`)**: Added `AST_NODE_BIT_SET_RANGE` node type, `BitSetRange` grammar rule (`LogOrExpression (DotDotLt | DotDot) LogOrExpression`), `DEFINE_TERMINAL_ACTION` to capture range text, and semantic handling that extracts low/high bounds, determines inclusive/exclusive from the text, calculates bit count, and selects the smallest backing integer (u8/u16/u32/u64).
+- **All 49 tests pass** (test_incl_minimal.odin, test_bit_set_ops.odin with 12 subtests, test_bit_set_range.odin with 5 subtests added).
+- **Saved CLI redesign analysis** to `cli_redesign_notes.md` for future reference.
