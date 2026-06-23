@@ -2624,7 +2624,13 @@ ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, L
     if (params == NULL || params->type != AST_NODE_PARAMETERS)
         return;
 
+    // If calling convention is ODIN, param 0 is the implicit context pointer
     unsigned param_index = 0;
+    if (proc_literal->resolved_type && proc_literal->resolved_type->kind == TD_KIND_PROC
+        && proc_literal->resolved_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
+    {
+        param_index = 1;
+    }
     for (size_t k = 0; k < params->list.count; k++)
     {
         odin_grammar_node_t * param = params->list.children[k];
@@ -2709,6 +2715,29 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
         generator_push_scope(ctx->gen_ctx);
         ir_gen_register_params(ctx, value_node, func);
+
+        // Inject implicit context parameter for ODIN calling convention
+        if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
+        {
+            LLVMValueRef context_param = LLVMGetParam(func, 0);
+            TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
+            if (ctx_type)
+            {
+                LLVMValueRef context_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
+                LLVMValueRef size_val = LLVMConstInt(
+                    LLVMInt64TypeInContext(ctx->context),
+                    (long long)LLVMABISizeOfType(ctx->data_layout, ctx_type->llvm_type),
+                    false
+                );
+                LLVMBuildMemCpy(ctx->builder, context_alloca, 0, context_param, 0, size_val);
+
+                symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+                if (ctx_sym)
+                {
+                    ctx_sym->value.value = context_alloca;
+                }
+            }
+        }
 
         if (body_node)
         {
@@ -2833,6 +2862,29 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
     generator_push_scope(ctx->gen_ctx);
     ir_gen_register_params(ctx, value_node, func);
+
+    // Inject implicit context parameter for ODIN calling convention
+    if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
+    {
+        LLVMValueRef context_param = LLVMGetParam(func, 0);
+        TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
+        if (ctx_type)
+        {
+            LLVMValueRef context_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
+            LLVMValueRef size_val = LLVMConstInt(
+                LLVMInt64TypeInContext(ctx->context),
+                (long long)LLVMABISizeOfType(ctx->data_layout, ctx_type->llvm_type),
+                false
+            );
+            LLVMBuildMemCpy(ctx->builder, context_alloca, 0, context_param, 0, size_val);
+
+            symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+            if (ctx_sym)
+            {
+                ctx_sym->value.value = context_alloca;
+            }
+        }
+    }
 
     odin_grammar_node_t * body_node = node_find_child(value_node, AST_NODE_COMPOUND_STATEMENT);
     if (body_node)
@@ -2960,6 +3012,37 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 if (arg_expr->type == AST_NODE_ARGUMENT_LIST && arg_expr->list.count > 0)
                     arg_expr = arg_expr->list.children[0];
                 arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, 128);
+            }
+
+            // Phase 4: Prepend implicit context parameter for ODIN calling convention
+            if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
+            {
+                if (arg_count < 128)
+                {
+                    for (int j = arg_count; j > 0; j--)
+                        args[j] = args[j - 1];
+                    symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+                    if (ctx_sym)
+                    {
+                        args[0] = ctx_sym->value.value;
+                    }
+                    else
+                    {
+                        TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
+                        if (ctx_type)
+                        {
+                            LLVMValueRef ctx_alloca
+                                = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context.temp");
+                            LLVMBuildStore(ctx->builder, LLVMConstNull(ctx_type->llvm_type), ctx_alloca);
+                            args[0] = ctx_alloca;
+                        }
+                        else
+                        {
+                            args[0] = LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+                        }
+                    }
+                    arg_count++;
+                }
             }
 
             val = LLVMBuildCall2(ctx->builder, func_type, val, args, (unsigned)arg_count, "calltmp");
@@ -3897,6 +3980,17 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_IDENTIFIER:
         return ir_gen_identifier(ctx, node);
 
+    case AST_NODE_CONTEXT_EXPR:
+    {
+        symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+        if (ctx_sym && ctx_sym->value.value)
+        {
+            return ctx_sym->value.value;
+        }
+        ir_gen_error_collection_add(&ctx->errors, node, "'context' not available here");
+        return NULL;
+    }
+
     // Assignment expression — may contain an assignment operator
     case AST_NODE_ASSIGN_EXPRESSION:
         return ir_gen_assign_expression(ctx, node);
@@ -4043,6 +4137,48 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
             {
                 ir_gen_top_level_variable(ctx, top_decl);
             }
+        }
+    }
+
+    // Phase 5: Generate entry point wrapper for Odin main with hidden context param
+    LLVMValueRef odin_main = LLVMGetNamedFunction(ctx->module, "main");
+    if (odin_main != NULL && LLVMCountParams(odin_main) > 0)
+    {
+        LLVMSetValueName(odin_main, "__odin_main");
+        LLVMSetLinkage(odin_main, LLVMPrivateLinkage);
+
+        LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->context);
+        LLVMTypeRef main_type = LLVMFunctionType(i32t, NULL, 0, false);
+        LLVMValueRef c_main = LLVMAddFunction(ctx->module, "main", main_type);
+
+        LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, c_main, "entry");
+        LLVMPositionBuilderAtEnd(ctx->builder, entry);
+
+        TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
+        LLVMValueRef context_ptr;
+        if (ctx_type)
+        {
+            LLVMValueRef ctx_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
+            LLVMBuildStore(ctx->builder, LLVMConstNull(ctx_type->llvm_type), ctx_alloca);
+            context_ptr = ctx_alloca;
+        }
+        else
+        {
+            context_ptr = LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+        }
+
+        LLVMTypeRef odin_main_func_type = LLVMGlobalGetValueType(odin_main);
+        LLVMValueRef odin_main_args[] = {context_ptr};
+        LLVMValueRef result = LLVMBuildCall2(ctx->builder, odin_main_func_type, odin_main, odin_main_args, 1, "");
+
+        if (LLVMGetTypeKind(LLVMGetReturnType(odin_main_func_type)) == LLVMVoidTypeKind)
+        {
+            LLVMBuildRet(ctx->builder, LLVMConstInt(i32t, 0, false));
+        }
+        else
+        {
+            LLVMValueRef ret_val = LLVMBuildTrunc(ctx->builder, result, i32t, "");
+            LLVMBuildRet(ctx->builder, ret_val);
         }
     }
 

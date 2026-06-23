@@ -137,6 +137,8 @@ typedef enum
     AST_NODE_BIT_SET_RANGE,
     AST_NODE_STRUCT_FIELD,
     AST_NODE_STRUCT_FIELD_LIST,
+    AST_NODE_CALLING_CONVENTION,
+    AST_NODE_CONTEXT_EXPR,
 } odin_grammar_node_type_t;
 
 typedef struct

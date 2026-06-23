@@ -22,3 +22,9 @@
 - **Implemented range-based bit_set (`bit_set[0..<32]`)**: Added `AST_NODE_BIT_SET_RANGE` node type, `BitSetRange` grammar rule (`LogOrExpression (DotDotLt | DotDot) LogOrExpression`), `DEFINE_TERMINAL_ACTION` to capture range text, and semantic handling that extracts low/high bounds, determines inclusive/exclusive from the text, calculates bit count, and selects the smallest backing integer (u8/u16/u32/u64).
 - **All 49 tests pass** (test_incl_minimal.odin, test_bit_set_ops.odin with 12 subtests, test_bit_set_range.odin with 5 subtests added).
 - **Saved CLI redesign analysis** to `cli_redesign_notes.md` for future reference.
+
+## Accomplishments (session 2026-06-23)
+- **Phase 4: Caller context threading**: Modified `AST_NODE_POSTFIX_CALL` in `ir_gen_postfix_expression` to prepend the caller's context alloca as the first arg to ODIN-convention calls. Falls back to a fresh zero-initialized context alloca when `context` is not in scope (top-level init code).
+- **Phase 5: Entry point wrapper**: `ir_generate()` detects `main` with hidden context param, renames it to `__odin_main` (private linkage), creates C-compatible `int main()` that allocates zero-initialized Context, calls `__odin_main(ctx_ptr)`, truncates `i64`→`i32`, returns.
+- **Fixed LLVM 18 opaque pointer issue**: Used `LLVMGlobalGetValueType()` instead of `LLVMTypeOf()` to get function type from a function value (LLVM 15+ opaque pointers make function value types return `ptr`, not function type).
+- **All 49 tests pass**.

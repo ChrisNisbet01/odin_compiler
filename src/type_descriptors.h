@@ -10,6 +10,16 @@
 
 typedef struct TypeDescriptors TypeDescriptors;
 
+typedef enum
+{
+    CALLING_CONV_ODIN,
+    CALLING_CONV_CONTEXTLESS,
+    CALLING_CONV_C,
+    CALLING_CONV_STDCALL,
+    CALLING_CONV_FASTCALL,
+    CALLING_CONV_NONE,
+} calling_convention_t;
+
 typedef struct
 {
     TypeDescriptor const * return_type;
@@ -19,6 +29,7 @@ typedef struct
     TypeDescriptor const ** returns;
     bool is_variadic;
     bool is_void_return;
+    calling_convention_t calling_convention;
     LLVMTypeRef func_type;
 } ProcMetadata;
 
@@ -147,7 +158,8 @@ TypeDescriptor const * get_or_create_proc_type(
     int param_count,
     TypeDescriptor const ** returns,
     int return_count,
-    bool is_variadic
+    bool is_variadic,
+    calling_convention_t calling_convention
 );
 
 TypeDescriptor const * register_struct_type(
@@ -172,6 +184,8 @@ TypeDescriptor const * type_descriptor_get_float64_type(TypeDescriptors * regist
 
 TypeDescriptor const * type_descriptor_get_ptr_type(TypeDescriptors * registry);
 
+TypeDescriptor const * type_descriptor_get_context_type(TypeDescriptors * registry);
+
 bool is_integer_kind(TypeDescriptor const * desc);
 
 bool is_floating_kind(TypeDescriptor const * desc);
@@ -189,3 +203,5 @@ typedef struct
 } field_access_path_t;
 
 bool type_descriptor_find_struct_field_path(TypeDescriptor const * desc, char const * name, field_access_path_t * path);
+
+void register_builtin_context_types(TypeDescriptors * registry);

@@ -9,6 +9,24 @@
 #include <stdlib.h>
 #include <string.h>
 
+static calling_convention_t
+parse_calling_convention(char const * text)
+{
+    if (text == NULL)
+        return CALLING_CONV_ODIN;
+    if (strcmp(text, "odin") == 0)
+        return CALLING_CONV_ODIN;
+    if (strcmp(text, "contextless") == 0)
+        return CALLING_CONV_CONTEXTLESS;
+    if (strcmp(text, "c") == 0 || strcmp(text, "cdecl") == 0)
+        return CALLING_CONV_C;
+    if (strcmp(text, "stdcall") == 0 || strcmp(text, "std") == 0)
+        return CALLING_CONV_STDCALL;
+    if (strcmp(text, "fastcall") == 0 || strcmp(text, "fast") == 0)
+        return CALLING_CONV_FASTCALL;
+    return CALLING_CONV_NONE;
+}
+
 void
 sem_context_init(
     SemContext * ctx, odin_grammar_node_t * ast, TypeDescriptors * type_registry, GeneratorContext * gen_ctx
@@ -18,6 +36,7 @@ sem_context_init(
     ctx->type_registry = type_registry;
     ctx->gen_ctx = gen_ctx;
     sem_error_list_init(&ctx->errors);
+    register_builtin_context_types(type_registry);
 }
 
 // --- Forward declarations ---
@@ -401,13 +420,20 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const ** params = NULL;
         size_t param_cap = 0;
         bool is_variadic = false;
+        calling_convention_t cc = CALLING_CONV_ODIN;
 
         for (size_t i = 0; i < node->list.count; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
             if (child == NULL)
                 continue;
-            if (child->type == AST_NODE_RETURNS && child->list.count > 0)
+            if (child->type == AST_NODE_CALLING_CONVENTION && child->list.count > 0)
+            {
+                odin_grammar_node_t * str_child = child->list.children[0];
+                if (str_child && str_child->text)
+                    cc = parse_calling_convention(str_child->text);
+            }
+            else if (child->type == AST_NODE_RETURNS && child->list.count > 0)
             {
                 return_type = sem_resolve_type_expr(ctx, child->list.children[0]);
             }
@@ -474,7 +500,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
 
         TypeDescriptor const * proc_type
-            = get_or_create_proc_type(ctx->type_registry, return_type, params, param_count, NULL, 0, is_variadic);
+            = get_or_create_proc_type(ctx->type_registry, return_type, params, param_count, NULL, 0, is_variadic, cc);
         free((void *)params);
         if (proc_type)
             node->resolved_type = (TypeDescriptor *)proc_type;
@@ -889,6 +915,19 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
+    case AST_NODE_CONTEXT_EXPR:
+    {
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+        if (sym)
+        {
+            node->resolved_symbol = sym;
+            node->resolved_type = (TypeDescriptor *)sym->value.type_info;
+            return sym->value.type_info;
+        }
+        sem_error_list_add(&ctx->errors, node, "'context' used outside of a procedure scope");
+        return NULL;
+    }
+
     case AST_NODE_IDENTIFIER:
     {
         symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
@@ -1262,6 +1301,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
     int param_count = 0;
     TypeDescriptor const ** param_types = NULL;
     size_t param_cap = 0;
+    calling_convention_t cc = CALLING_CONV_ODIN;
 
     odin_grammar_node_t * param_list_node = NULL;
     odin_grammar_node_t * param_node = NULL; // single "Parameters" child of param_list_node
@@ -1279,7 +1319,13 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
                 odin_grammar_node_t * sig_child = child->list.children[j];
                 if (sig_child == NULL)
                     continue;
-                if (sig_child->type == AST_NODE_RETURNS && sig_child->list.count > 0)
+                if (sig_child->type == AST_NODE_CALLING_CONVENTION && sig_child->list.count > 0)
+                {
+                    odin_grammar_node_t * str_child = sig_child->list.children[0];
+                    if (str_child && str_child->text)
+                        cc = parse_calling_convention(str_child->text);
+                }
+                else if (sig_child->type == AST_NODE_RETURNS && sig_child->list.count > 0)
                 {
                     odin_grammar_node_t * type_node = sig_child->list.children[0];
                     TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
@@ -1373,6 +1419,16 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
     // Push a new scope, register parameters, analyse body
     generator_push_scope(ctx->gen_ctx);
 
+    // Register implicit 'context' variable in every procedure scope
+    {
+        TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
+        if (ctx_type)
+        {
+            TypedValue ctx_tv = create_typed_value(NULL, ctx_type, true);
+            generator_add_symbol(ctx->gen_ctx, "context", ctx_tv);
+        }
+    }
+
     if (param_list_node != NULL && param_list_node->list.count > 0)
     {
         odin_grammar_node_t * params = param_list_node->list.children[0];
@@ -1430,7 +1486,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
     // Set resolved_type on the procedure literal
     {
         TypeDescriptor const * proc_type
-            = get_or_create_proc_type(ctx->type_registry, return_type, param_types, param_count, NULL, 0, false);
+            = get_or_create_proc_type(ctx->type_registry, return_type, param_types, param_count, NULL, 0, false, cc);
         node->resolved_type = (TypeDescriptor *)proc_type;
     }
 

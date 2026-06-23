@@ -284,6 +284,8 @@ DEFINE_ACTION(ast_action_named_return_action, AST_NODE_NAMED_RETURN)
 DEFINE_ACTION(ast_action_return_list_action, AST_NODE_RETURN_LIST)
 DEFINE_ACTION(ast_action_returns_action, AST_NODE_RETURNS)
 DEFINE_ACTION(ast_action_where_clause_action, AST_NODE_WHERE_CLAUSE)
+DEFINE_ACTION(ast_action_calling_convention_action, AST_NODE_CALLING_CONVENTION)
+DEFINE_ACTION(ast_action_context_expr_action, AST_NODE_CONTEXT_EXPR)
 DEFINE_ACTION(ast_action_primary_expression_action, AST_NODE_PRIMARY_EXPRESSION)
 DEFINE_ACTION(ast_action_postfix_call_action, AST_NODE_POSTFIX_CALL)
 DEFINE_ACTION(ast_action_postfix_subscript_action, AST_NODE_POSTFIX_SUBSCRIPT)
@@ -446,6 +448,8 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_RETURN_LIST, ast_action_return_list_action);
     REGISTER(AST_ACTION_RETURNS, ast_action_returns_action);
     REGISTER(AST_ACTION_WHERE_CLAUSE, ast_action_where_clause_action);
+    REGISTER(AST_ACTION_CALLING_CONVENTION, ast_action_calling_convention_action);
+    REGISTER(AST_ACTION_CONTEXT_EXPR, ast_action_context_expr_action);
     REGISTER(AST_ACTION_PRIMARY_EXPRESSION, ast_action_primary_expression_action);
     REGISTER(AST_ACTION_POSTFIX_CALL, ast_action_postfix_call_action);
     REGISTER(AST_ACTION_POSTFIX_SUBSCRIPT, ast_action_postfix_subscript_action);

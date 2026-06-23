@@ -25,6 +25,9 @@ struct TypeDescriptors
 
     TypeDescriptor * basic_types[64];
     int basic_count;
+
+    TypeDescriptor * context_type;
+    TypeDescriptor * allocator_type;
 };
 
 static TypeDescriptor *
@@ -244,6 +247,58 @@ type_descriptors_destroy_registry(TypeDescriptors * registry)
         free(registry->types[i]);
     }
     free(registry);
+}
+
+void
+register_builtin_context_types(TypeDescriptors * registry)
+{
+    // Allocator struct: { procedure: rawptr, data: rawptr }
+    LLVMTypeRef allocator_fields[2];
+    allocator_fields[0] = registry->ptr_type->llvm_type;
+    allocator_fields[1] = registry->ptr_type->llvm_type;
+    LLVMTypeRef allocator_llvm = LLVMStructTypeInContext(registry->context, allocator_fields, 2, false);
+
+    struct_or_union_members_st allocator_members;
+    allocator_members.count = 2;
+    allocator_members.fields = malloc(2 * sizeof(struct_field_t));
+    allocator_members.fields[0].name = "procedure";
+    allocator_members.fields[0].type_desc = registry->ptr_type;
+    allocator_members.fields[0].is_using = false;
+    allocator_members.fields[1].name = "data";
+    allocator_members.fields[1].type_desc = registry->ptr_type;
+    allocator_members.fields[1].is_using = false;
+
+    registry->allocator_type
+        = (TypeDescriptor *)register_struct_type(registry, allocator_llvm, true, &allocator_members);
+    free(allocator_members.fields);
+
+    // Context struct (minimal, 4 fields):
+    // { allocator: Allocator, temp_allocator: Allocator, user_ptr: rawptr, user_index: int }
+    LLVMTypeRef context_fields[4];
+    context_fields[0] = registry->allocator_type->llvm_type;
+    context_fields[1] = registry->allocator_type->llvm_type;
+    context_fields[2] = registry->ptr_type->llvm_type;
+    context_fields[3] = registry->i64_type->llvm_type;
+    LLVMTypeRef context_llvm = LLVMStructTypeInContext(registry->context, context_fields, 4, false);
+
+    struct_or_union_members_st context_members;
+    context_members.count = 4;
+    context_members.fields = malloc(4 * sizeof(struct_field_t));
+    context_members.fields[0].name = "allocator";
+    context_members.fields[0].type_desc = registry->allocator_type;
+    context_members.fields[0].is_using = false;
+    context_members.fields[1].name = "temp_allocator";
+    context_members.fields[1].type_desc = registry->allocator_type;
+    context_members.fields[1].is_using = false;
+    context_members.fields[2].name = "user_ptr";
+    context_members.fields[2].type_desc = registry->ptr_type;
+    context_members.fields[2].is_using = false;
+    context_members.fields[3].name = "user_index";
+    context_members.fields[3].type_desc = registry->i64_type;
+    context_members.fields[3].is_using = false;
+
+    registry->context_type = (TypeDescriptor *)register_struct_type(registry, context_llvm, true, &context_members);
+    free(context_members.fields);
 }
 
 TypeDescriptor const *
@@ -472,7 +527,8 @@ get_or_create_proc_type(
     int param_count,
     TypeDescriptor const ** returns,
     int return_count,
-    bool is_variadic
+    bool is_variadic,
+    calling_convention_t calling_convention
 )
 {
     (void)returns;
@@ -488,6 +544,8 @@ get_or_create_proc_type(
         if (t->proc_metadata.param_count != param_count)
             continue;
         if (t->proc_metadata.return_type != return_type)
+            continue;
+        if (t->proc_metadata.calling_convention != calling_convention)
             continue;
         bool match = true;
         for (int j = 0; j < param_count; j++)
@@ -510,6 +568,7 @@ get_or_create_proc_type(
     td->proc_metadata.param_count = param_count;
     td->proc_metadata.is_variadic = is_variadic;
     td->proc_metadata.is_void_return = (return_type == NULL || return_type == registry->void_type);
+    td->proc_metadata.calling_convention = calling_convention;
 
     if (param_count > 0)
     {
@@ -517,17 +576,25 @@ get_or_create_proc_type(
         memcpy((void *)td->proc_metadata.params, params, (size_t)param_count * sizeof(*td->proc_metadata.params));
     }
 
+    bool has_context_param = (calling_convention == CALLING_CONV_ODIN && registry->context_type != NULL);
+    int llvm_param_count = param_count + (has_context_param ? 1 : 0);
+
     LLVMTypeRef * llvm_params = NULL;
-    if (param_count > 0)
+    if (llvm_param_count > 0)
     {
-        llvm_params = malloc((size_t)param_count * sizeof(*llvm_params));
+        llvm_params = malloc((size_t)llvm_param_count * sizeof(*llvm_params));
+        int idx = 0;
+        if (has_context_param)
+        {
+            llvm_params[idx++] = LLVMPointerType(registry->context_type->llvm_type, 0);
+        }
         for (int i = 0; i < param_count; i++)
         {
-            llvm_params[i] = params[i]->llvm_type;
+            llvm_params[idx++] = params[i]->llvm_type;
         }
     }
     LLVMTypeRef ret_llvm = return_type ? return_type->llvm_type : LLVMVoidTypeInContext(registry->context);
-    td->proc_metadata.func_type = LLVMFunctionType(ret_llvm, llvm_params, (unsigned)param_count, is_variadic);
+    td->proc_metadata.func_type = LLVMFunctionType(ret_llvm, llvm_params, (unsigned)llvm_param_count, is_variadic);
     td->llvm_type = LLVMPointerType(td->proc_metadata.func_type, 0);
     free(llvm_params);
 
@@ -608,6 +675,12 @@ get_or_create_range_type(TypeDescriptors * registry, bool is_inclusive)
     LLVMTypeRef elems[2] = {LLVMInt64TypeInContext(registry->context), LLVMInt64TypeInContext(registry->context)};
     td->llvm_type = LLVMStructTypeInContext(registry->context, elems, 2, false);
     return td;
+}
+
+TypeDescriptor const *
+type_descriptor_get_context_type(TypeDescriptors * registry)
+{
+    return registry->context_type;
 }
 
 TypeDescriptor const *

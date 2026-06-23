@@ -260,7 +260,9 @@ NamedReturn = Identifier Colon TypePrefix @AST_ACTION_NAMED_RETURN;
 ReturnList = delimited(NamedReturn, Comma) Comma? @AST_ACTION_RETURN_LIST;
 Returns = Arrow (ReturnList | TypePrefix) @AST_ACTION_RETURNS;
 WhereClause = KwWhere Expression @AST_ACTION_WHERE_CLAUSE;
-ProcedureSignature = KwProc Directive? ParameterList Returns? WhereClause? @AST_ACTION_PROCEDURE_SIGNATURE;
+CallingConvention = StringLiteral @AST_ACTION_CALLING_CONVENTION;
+ContextExpr = KwContext @AST_ACTION_CONTEXT_EXPR;
+ProcedureSignature = KwProc CallingConvention? Directive? ParameterList Returns? WhereClause? @AST_ACTION_PROCEDURE_SIGNATURE;
 
 DistinctType = KwDistinct TypePrefix @AST_ACTION_DISTINCT_TYPE;
 
@@ -279,6 +281,7 @@ TypeName = TypePrefix (PipeInType TypePrefix)* @AST_ACTION_TYPE_NAME;
 PrimaryExpression = StringLiteral | RawStringLiteral | RuneLiteral
                   | FloatLiteral | IntegerLiteral
                   | BoolLiteral | NilLiteral | NoneLiteral
+                  | ContextExpr
                   | Identifier | PolyIdent
                   | LParen Expression RParen
                   | DirectiveWithArgs | Directive

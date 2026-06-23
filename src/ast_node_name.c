@@ -77,6 +77,10 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "Returns";
     case AST_NODE_WHERE_CLAUSE:
         return "WhereClause";
+    case AST_NODE_CALLING_CONVENTION:
+        return "CallingConvention";
+    case AST_NODE_CONTEXT_EXPR:
+        return "ContextExpr";
     case AST_NODE_PRIMARY_EXPRESSION:
         return "PrimaryExpression";
     case AST_NODE_POSTFIX_CALL:
