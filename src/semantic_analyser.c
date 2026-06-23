@@ -1652,10 +1652,29 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
+    // Detect variadic (...)
+    bool is_variadic = false;
+    if (param_list_node != NULL && param_list_node->list.count > 0)
+    {
+        odin_grammar_node_t * params = param_list_node->list.children[0];
+        if (params != NULL && params->type == AST_NODE_PARAMETERS)
+        {
+            for (size_t k = 0; k < params->list.count; k++)
+            {
+                if (params->list.children[k] != NULL && params->list.children[k]->type == AST_NODE_ELLIPSIS)
+                {
+                    is_variadic = true;
+                    break;
+                }
+            }
+        }
+    }
+
     // Set resolved_type on the procedure literal
     {
-        TypeDescriptor const * proc_type
-            = get_or_create_proc_type(ctx->type_registry, return_type, param_types, param_count, NULL, 0, false, cc);
+        TypeDescriptor const * proc_type = get_or_create_proc_type(
+            ctx->type_registry, return_type, param_types, param_count, NULL, 0, is_variadic, cc
+        );
         node->resolved_type = (TypeDescriptor *)proc_type;
     }
 

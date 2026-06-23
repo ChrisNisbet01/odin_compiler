@@ -254,7 +254,7 @@ StructType = KwStruct (SoaType | (Directive? StructRawBody)) @AST_ACTION_STRUCT_
 StructTypeRef = KwStruct Identifier @AST_ACTION_STRUCT_TYPE_REF;
 
 Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon TypePrefix @AST_ACTION_PARAMETER;
-Parameters = delimited(Parameter, Comma) (Comma Ellipsis)? @AST_ACTION_PARAMETERS;
+Parameters = Ellipsis | (Parameter (Comma Parameter)* (Comma Ellipsis)?) @AST_ACTION_PARAMETERS;
 ParameterList = LParen Parameters? RParen @AST_ACTION_PARAMETER_LIST;
 NamedReturn = Identifier Colon TypePrefix @AST_ACTION_NAMED_RETURN;
 ReturnList = delimited(NamedReturn, Comma) Comma? @AST_ACTION_RETURN_LIST;
