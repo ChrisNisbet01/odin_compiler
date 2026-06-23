@@ -4129,6 +4129,13 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             return ir_gen_nested_procedure_decl(ctx, node);
         return ir_gen_top_level_decl(ctx, node);
 
+    case AST_NODE_DIRECTIVE_WITH_ARGS:
+    case AST_NODE_DIRECTIVE:
+        return NULL;
+
+    case AST_NODE_WHERE_CLAUSE:
+        return NULL;
+
     default:
         return NULL;
     }

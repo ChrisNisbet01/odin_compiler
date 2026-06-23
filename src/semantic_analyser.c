@@ -43,6 +43,149 @@ sem_context_init(
 static TypeDescriptor const * sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node);
 static void sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type);
 
+// --- Compile-time constant evaluation ---
+// Returns:  1 = true, 0 = false, -1 = unknown (can't evaluate at compile time)
+static int
+sem_evaluate_constant_bool(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node == NULL)
+        return -1;
+
+    switch (node->type)
+    {
+    case AST_NODE_BOOL_TRUE:
+        return 1;
+    case AST_NODE_BOOL_FALSE:
+        return 0;
+
+    case AST_NODE_INTEGER_VALUE:
+    {
+        if (node->text == NULL)
+            return -1;
+        char * end = NULL;
+        long long val = strtoll(node->text, &end, 0);
+        if (end == node->text)
+            return -1;
+        return (val != 0) ? 1 : 0;
+    }
+
+    case AST_NODE_UNARY_EXPRESSION:
+    {
+        odin_grammar_node_t * op_node = node_find_op(node);
+        if (op_node == NULL)
+            return -1;
+        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
+        if (md == NULL || md->kind != OP_UNARY_NOT)
+            return -1;
+        if (node->list.count < 1)
+            return -1;
+        int inner = sem_evaluate_constant_bool(ctx, node->list.children[0]);
+        if (inner < 0)
+            return -1;
+        return inner ? 0 : 1;
+    }
+
+    case AST_NODE_COMP_EXPRESSION:
+    {
+        odin_grammar_node_t * op_node = node_find_op(node);
+        if (op_node == NULL)
+            return -1;
+        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
+        if (md == NULL)
+            return -1;
+        if (node->list.count < 3)
+            return -1;
+        // For equality/inequality, evaluate both sides as integers
+        if (md->kind != OP_EQ && md->kind != OP_NE)
+            return -1;
+
+        odin_grammar_node_t * lhs = node->list.children[0];
+        odin_grammar_node_t * rhs = node->list.children[2];
+        if (lhs == NULL || rhs == NULL)
+            return -1;
+
+        // Use integer evaluation for comparison
+        long long lv = 0, rv = 0;
+        bool l_ok = false, r_ok = false;
+
+        if (lhs->type == AST_NODE_INTEGER_VALUE && lhs->text)
+        {
+            char * end = NULL;
+            lv = strtoll(lhs->text, &end, 0);
+            l_ok = (end != lhs->text);
+        }
+        if (rhs->type == AST_NODE_INTEGER_VALUE && rhs->text)
+        {
+            char * end = NULL;
+            rv = strtoll(rhs->text, &end, 0);
+            r_ok = (end != rhs->text);
+        }
+
+        if (!l_ok || !r_ok)
+        {
+            // Try bool evaluation
+            int lb = sem_evaluate_constant_bool(ctx, lhs);
+            int rb = sem_evaluate_constant_bool(ctx, rhs);
+            if (lb < 0 || rb < 0)
+                return -1;
+            lv = lb;
+            rv = rb;
+        }
+
+        if (md->kind == OP_EQ)
+            return (lv == rv) ? 1 : 0;
+        else
+            return (lv != rv) ? 1 : 0;
+    }
+
+    case AST_NODE_LOG_AND_EXPRESSION:
+    {
+        if (node->list.count < 3)
+            return -1;
+        int lval = sem_evaluate_constant_bool(ctx, node->list.children[0]);
+        if (lval <= 0)
+            return (lval < 0) ? -1 : 0;
+        return sem_evaluate_constant_bool(ctx, node->list.children[2]);
+    }
+
+    case AST_NODE_LOG_OR_EXPRESSION:
+    {
+        if (node->list.count < 3)
+            return -1;
+        int lval = sem_evaluate_constant_bool(ctx, node->list.children[0]);
+        if (lval < 0)
+            return -1;
+        if (lval > 0)
+            return 1;
+        return sem_evaluate_constant_bool(ctx, node->list.children[2]);
+    }
+
+    // Expression wrapper nodes - recurse on first child
+    case AST_NODE_ASSIGN_EXPRESSION:
+    case AST_NODE_EXPRESSION:
+    case AST_NODE_PRIMARY_EXPRESSION:
+    case AST_NODE_POSTFIX_EXPRESSION:
+    case AST_NODE_TERNARY_EXPRESSION:
+    case AST_NODE_OR_ELSE:
+    case AST_NODE_OR_RETURN:
+    case AST_NODE_MUL_EXPRESSION:
+    case AST_NODE_ADD_EXPRESSION:
+    case AST_NODE_SHIFT_EXPRESSION:
+    case AST_NODE_BIT_AND_EXPRESSION:
+    case AST_NODE_BIT_XOR_EXPRESSION:
+    case AST_NODE_BIT_OR_EXPRESSION:
+    case AST_NODE_RANGE_EXPRESSION:
+    {
+        if (node->list.count > 0 && node->list.children[0] != NULL)
+            return sem_evaluate_constant_bool(ctx, node->list.children[0]);
+        return -1;
+    }
+
+    default:
+        return -1;
+    }
+}
+
 // --- Type expression resolution ---
 
 static TypeDescriptor const *
@@ -1249,6 +1392,32 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return type;
     }
 
+    case AST_NODE_DIRECTIVE_WITH_ARGS:
+    {
+        if (node->text && strncmp(node->text, "#assert", 7) == 0)
+        {
+            for (size_t i = 0; i < node->list.count; i++)
+            {
+                odin_grammar_node_t * child = node->list.children[i];
+                if (child == NULL)
+                    continue;
+                // Skip the identifier child from lexeme("#" DirectiveName)
+                if (child->type == AST_NODE_IDENTIFIER)
+                    continue;
+
+                sem_evaluate_expr(ctx, child);
+                if (child->resolved_type == NULL)
+                    continue;
+
+                int result = sem_evaluate_constant_bool(ctx, child);
+                if (result == 0)
+                    sem_error_list_add(&ctx->errors, node, "#assert failed");
+                break;
+            }
+        }
+        return NULL;
+    }
+
     default:
         return NULL;
     }
@@ -1857,6 +2026,13 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         {
             sem_pass2_node(ctx, node->list.children[0], expected_return_type);
         }
+        break;
+
+    case AST_NODE_DIRECTIVE_WITH_ARGS:
+    case AST_NODE_DIRECTIVE:
+        break;
+
+    case AST_NODE_WHERE_CLAUSE:
         break;
 
     default:
