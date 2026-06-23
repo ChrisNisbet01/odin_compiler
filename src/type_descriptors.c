@@ -294,7 +294,10 @@ register_builtin_context_types(TypeDescriptors * registry)
     context_members.fields[2].type_desc = registry->ptr_type;
     context_members.fields[2].is_using = false;
     context_members.fields[3].name = "user_index";
-    context_members.fields[3].type_desc = registry->i64_type;
+    {
+        TypeDescriptor const * int_type = get_basic_type_by_name(registry, "int");
+        context_members.fields[3].type_desc = int_type ? int_type : registry->i64_type;
+    }
     context_members.fields[3].is_using = false;
 
     registry->context_type = (TypeDescriptor *)register_struct_type(registry, context_llvm, true, &context_members);

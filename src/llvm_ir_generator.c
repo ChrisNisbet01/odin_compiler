@@ -1076,6 +1076,14 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
+    case AST_NODE_CONTEXT_EXPR:
+    {
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+        if (sym && sym->value.is_lvalue)
+            return sym->value.value;
+        return NULL;
+    }
+
     case AST_NODE_POSTFIX_EXPRESSION:
     {
         if (node->list.count < 2)
@@ -2736,6 +2744,11 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 {
                     ctx_sym->value.value = context_alloca;
                 }
+                else
+                {
+                    TypedValue ctx_tv = create_typed_value(context_alloca, ctx_type, true);
+                    generator_add_symbol(ctx->gen_ctx, "context", ctx_tv);
+                }
             }
         }
 
@@ -2883,6 +2896,11 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             {
                 ctx_sym->value.value = context_alloca;
             }
+            else
+            {
+                TypedValue ctx_tv = create_typed_value(context_alloca, ctx_type, true);
+                generator_add_symbol(ctx->gen_ctx, "context", ctx_tv);
+            }
         }
     }
 
@@ -2890,6 +2908,15 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     if (body_node)
     {
         ir_gen_node(ctx, body_node);
+    }
+    else
+    {
+        // No body — this is a declaration without definition, return early
+        generator_pop_scope(ctx->gen_ctx);
+        ctx->current_function = outer_func;
+        ctx->current_return_type = outer_ret_type;
+        LLVMPositionBuilderAtEnd(ctx->builder, outer_block);
+        return func;
     }
 
     LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
