@@ -93,6 +93,38 @@ ir_gen_context_destroy(IrGenContext * ctx)
     free(ctx);
 }
 
+// --- Function context stack ---
+
+static void
+func_push(IrGenContext * ctx, LLVMValueRef func, TypeDescriptor const * return_type)
+{
+    if (ctx->func_depth < MAX_FUNC_DEPTH)
+    {
+        ctx->func_stack[ctx->func_depth].function = func;
+        ctx->func_stack[ctx->func_depth].return_type = return_type;
+        ctx->func_depth++;
+    }
+}
+
+static void
+func_pop(IrGenContext * ctx)
+{
+    if (ctx->func_depth > 0)
+        ctx->func_depth--;
+}
+
+static LLVMValueRef
+func_current_function(IrGenContext * ctx)
+{
+    return ctx->func_depth > 0 ? ctx->func_stack[ctx->func_depth - 1].function : NULL;
+}
+
+static TypeDescriptor const *
+func_current_return_type(IrGenContext * ctx)
+{
+    return ctx->func_depth > 0 ? ctx->func_stack[ctx->func_depth - 1].return_type : NULL;
+}
+
 // --- Expression codegen ---
 
 static LLVMValueRef
@@ -287,8 +319,8 @@ ir_gen_logical_short_circuit(IrGenContext * ctx, odin_grammar_node_t * node, Ope
         lhs_bool = LLVMBuildICmp(ctx->builder, LLVMIntNE, lhs, LLVMConstNull(lhs_type), "log_lhs");
 
     LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(ctx->builder);
-    LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "logrhs");
-    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "logmerge");
+    LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "logrhs");
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "logmerge");
 
     if (op_kind == OP_LOG_AND)
         LLVMBuildCondBr(ctx->builder, lhs_bool, rhs_bb, merge_bb);
@@ -407,7 +439,7 @@ ir_gen_in_expression(
     if (elem_type == NULL || data_ptr == NULL || count_val == NULL)
         return NULL;
 
-    LLVMValueRef func = ctx->current_function;
+    LLVMValueRef func = func_current_function(ctx);
 
     LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(ctx->builder);
 
@@ -1246,23 +1278,23 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
 
                     LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(ctx->builder);
                     LLVMBasicBlockRef loop_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "m.loop");
+                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.loop");
                     LLVMBasicBlockRef body_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "m.body");
+                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.body");
                     LLVMBasicBlockRef kchk_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "m.kchk");
+                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.kchk");
                     LLVMBasicBlockRef found_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "m.found");
+                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.found");
                     LLVMBasicBlockRef next_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "m.next");
+                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.next");
                     LLVMBasicBlockRef empty_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "m.empty");
+                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.empty");
                     LLVMBasicBlockRef after_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "m.after");
+                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.after");
                     LLVMBasicBlockRef claim_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "m.claim");
+                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.claim");
                     LLVMBasicBlockRef merge_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "m.merge");
+                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.merge");
 
                     LLVMBuildBr(ctx->builder, loop_bb);
                     LLVMPositionBuilderAtEnd(ctx->builder, loop_bb);
@@ -1564,8 +1596,8 @@ ir_gen_or_else_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return lhs;
 
     LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(ctx->builder);
-    LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "or.rhs");
-    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "or.merge");
+    LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "or.rhs");
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "or.merge");
 
     LLVMBuildCondBr(ctx->builder, is_zero, rhs_bb, merge_bb);
 
@@ -1607,17 +1639,17 @@ ir_gen_or_return_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     else
         return val;
 
-    LLVMBasicBlockRef ret_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "or.ret");
-    LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "or.cont");
+    LLVMBasicBlockRef ret_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "or.ret");
+    LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "or.cont");
 
     LLVMBuildCondBr(ctx->builder, is_zero, ret_bb, cont_bb);
 
     LLVMPositionBuilderAtEnd(ctx->builder, ret_bb);
     ir_gen_emit_all_defers(ctx);
-    if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
+    if (func_current_return_type(ctx) == type_descriptor_get_void_type(ctx->type_registry))
         LLVMBuildRetVoid(ctx->builder);
     else
-        LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
+        LLVMBuildRet(ctx->builder, LLVMConstNull(func_current_return_type(ctx)->llvm_type));
 
     LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
     return val;
@@ -1656,9 +1688,9 @@ ir_gen_ternary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         is_truthy = cond;
     }
 
-    LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "tern.then");
-    LLVMBasicBlockRef else_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "tern.else");
-    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "tern.merge");
+    LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "tern.then");
+    LLVMBasicBlockRef else_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "tern.else");
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "tern.merge");
 
     LLVMBuildCondBr(ctx->builder, is_truthy, then_bb, else_bb);
 
@@ -2149,10 +2181,10 @@ ir_gen_if_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         bool_cond = LLVMBuildICmp(ctx->builder, LLVMIntNE, cond_val, zero, "ifcond");
     }
 
-    LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "then");
+    LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "then");
     LLVMBasicBlockRef else_bb
-        = else_node ? LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "else") : NULL;
-    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "ifmerge");
+        = else_node ? LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "else") : NULL;
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "ifmerge");
 
     if (else_bb)
     {
@@ -2276,10 +2308,10 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         }
 
         // 4. Build loop blocks
-        LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "forcond");
-        LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "forbody");
-        LLVMBasicBlockRef inc_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "forinc");
-        LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "forend");
+        LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forcond");
+        LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forbody");
+        LLVMBasicBlockRef inc_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forinc");
+        LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forend");
 
         // Push loop context (continue goes to inc block)
         if (ctx->loop_depth < MAX_LOOP_DEPTH)
@@ -2358,9 +2390,9 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-    LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "forcond");
-    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "forbody");
-    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "forend");
+    LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forcond");
+    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forbody");
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forend");
 
     // Push loop context for break/continue
     if (ctx->loop_depth < MAX_LOOP_DEPTH)
@@ -2468,7 +2500,7 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     if (switch_val == NULL)
         return NULL;
 
-    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "swend");
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "swend");
 
     // Push loop context for break in switch
     if (ctx->loop_depth < MAX_LOOP_DEPTH)
@@ -2485,11 +2517,11 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
 
     for (int i = 0; i < case_count; i++)
     {
-        case_bbs[i] = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "case");
+        case_bbs[i] = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "case");
     }
     if (default_case)
     {
-        default_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "default");
+        default_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "default");
     }
 
     // Build compare-and-branch chain (like if-else)
@@ -2534,7 +2566,7 @@ ir_gen_switch_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMBasicBlockRef case_bb = case_bbs[i];
         LLVMBasicBlockRef miss_bb;
         if (i < case_count - 1)
-            miss_bb = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "swnext");
+            miss_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "swnext");
         else if (default_bb)
             miss_bb = default_bb;
         else
@@ -2737,8 +2769,7 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
             LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
-            ctx->current_function = func;
-            ctx->current_return_type = proc_type->proc_metadata.return_type;
+            func_push(ctx, func, proc_type->proc_metadata.return_type);
 
             generator_push_scope(ctx->gen_ctx);
             ir_gen_register_params(ctx, value_node, func);
@@ -2778,20 +2809,19 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
             {
                 ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
-                if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
+                if (func_current_return_type(ctx) == type_descriptor_get_void_type(ctx->type_registry))
                 {
                     LLVMBuildRetVoid(ctx->builder);
                 }
                 else
                 {
-                    LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
+                    LLVMBuildRet(ctx->builder, LLVMConstNull(func_current_return_type(ctx)->llvm_type));
                 }
             }
 
             generator_pop_scope(ctx->gen_ctx);
 
-            ctx->current_function = NULL;
-            ctx->current_return_type = NULL;
+            func_pop(ctx);
         }
 
         TypedValue tv = create_typed_value(func, proc_type, false);
@@ -2877,9 +2907,7 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
         return NULL;
 
-    // Save outer function context
-    LLVMValueRef outer_func = ctx->current_function;
-    TypeDescriptor const * outer_ret_type = ctx->current_return_type;
+    // Save outer insertion block
     LLVMBasicBlockRef outer_block = LLVMGetInsertBlock(ctx->builder);
 
     // Build nested function
@@ -2887,8 +2915,7 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
     LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
-    ctx->current_function = func;
-    ctx->current_return_type = proc_type->proc_metadata.return_type;
+    func_push(ctx, func, proc_type->proc_metadata.return_type);
 
     generator_push_scope(ctx->gen_ctx);
     ir_gen_register_params(ctx, value_node, func);
@@ -2930,8 +2957,7 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         // No body — this is a declaration without definition, return early
         generator_pop_scope(ctx->gen_ctx);
-        ctx->current_function = outer_func;
-        ctx->current_return_type = outer_ret_type;
+        func_pop(ctx);
         LLVMPositionBuilderAtEnd(ctx->builder, outer_block);
         return func;
     }
@@ -2941,13 +2967,13 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
     {
         ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
-        if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
+        if (func_current_return_type(ctx) == type_descriptor_get_void_type(ctx->type_registry))
         {
             LLVMBuildRetVoid(ctx->builder);
         }
         else
         {
-            LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
+            LLVMBuildRet(ctx->builder, LLVMConstNull(func_current_return_type(ctx)->llvm_type));
         }
     }
 
@@ -2958,8 +2984,7 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
 
     // Restore outer function context
-    ctx->current_function = outer_func;
-    ctx->current_return_type = outer_ret_type;
+    func_pop(ctx);
     if (outer_block != NULL)
     {
         LLVMPositionBuilderAtEnd(ctx->builder, outer_block);
@@ -3224,19 +3249,19 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
                 LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(ctx->builder);
                 LLVMBasicBlockRef loop_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "mr.loop");
+                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.loop");
                 LLVMBasicBlockRef body_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "mr.body");
+                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.body");
                 LLVMBasicBlockRef kchk_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "mr.kchk");
+                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.kchk");
                 LLVMBasicBlockRef found_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "mr.found");
+                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.found");
                 LLVMBasicBlockRef next_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "mr.next");
+                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.next");
                 LLVMBasicBlockRef notfound_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "mr.notfound");
+                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.notfound");
                 LLVMBasicBlockRef merge_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, ctx->current_function, "mr.merge");
+                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.merge");
 
                 LLVMBuildBr(ctx->builder, loop_bb);
                 LLVMPositionBuilderAtEnd(ctx->builder, loop_bb);
@@ -4158,7 +4183,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
 
     case AST_NODE_CONSTANT_DECL:
-        if (ctx->current_function != NULL)
+        if (func_current_function(ctx) != NULL)
             return ir_gen_nested_procedure_decl(ctx, node);
         return ir_gen_top_level_decl(ctx, node);
 

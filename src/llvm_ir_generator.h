@@ -11,6 +11,7 @@
 #include <stdbool.h>
 
 #define MAX_LOOP_DEPTH 64
+#define MAX_FUNC_DEPTH 64
 #define MAX_DEFERS 128
 
 typedef struct
@@ -28,6 +29,12 @@ typedef struct
 
 typedef struct
 {
+    LLVMValueRef function;
+    TypeDescriptor const * return_type;
+} FuncContext;
+
+typedef struct
+{
     LLVMContextRef context;
     LLVMModuleRef module;
     LLVMTargetDataRef data_layout;
@@ -36,8 +43,8 @@ typedef struct
     TypeDescriptors * type_registry;
     GeneratorContext * gen_ctx;
 
-    LLVMValueRef current_function;
-    TypeDescriptor const * current_return_type;
+    FuncContext func_stack[MAX_FUNC_DEPTH];
+    int func_depth;
 
     IrGenErrorCollection errors;
 
@@ -53,7 +60,8 @@ typedef struct
     int current_scope_depth;
 } IrGenContext;
 
-IrGenContext * ir_gen_context_create(char const * module_name, TypeDescriptors * type_registry, GeneratorContext * gen_ctx);
+IrGenContext *
+ir_gen_context_create(char const * module_name, TypeDescriptors * type_registry, GeneratorContext * gen_ctx);
 
 void ir_gen_context_destroy(IrGenContext * ctx);
 
