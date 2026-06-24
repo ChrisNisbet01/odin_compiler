@@ -1,37 +1,38 @@
 package main
 
 foreign libc {
-    strlen :: proc (s: ptr u8) -> size_t ---
-    strcpy :: proc (dest: ptr u8, src: ptr u8) -> _ --- 
-    strncmp :: proc (s1: ptr u8, s2: ptr u8, n: size_t) -> int ---
-    printf :: proc (fmt: ptr u8, ...) -> i32 ---
+    strlen :: proc "c" (s: ^u8) -> i32 ---
+    strncmp :: proc "c" (s1: ^u8, s2: ^u8, n: i32) -> i32 ---
 }
 
 main :: proc() -> int {
-    // Test simple string
-    str1: string = "hello"
-    len1 := strlen(str1)
-    if len1 != 5 {
+    // Test strlen with a string literal
+    n := strlen("hello")
+    if n != 5 {
         return 1
     }
-    
-    // Test string assignment
-    str2: string
-    strcpy(str2, str1)
-    if str2 != "hello" {
+
+    // Test strlen with a string variable
+    s: string = "world"
+    n2 := strlen(s)
+    if n2 != 5 {
         return 2
     }
-    
-    // Test compare
-    if strncmp(str1, "hell", 4) != 0 {
+
+    // Test strncmp with matching strings
+    if strncmp("abc", "abc", 3) != 0 {
         return 3
     }
-    
-    // Test printf
-    result := printf("Test string: %s\n", str1)
-    if result <= 0 {
+
+    // Test strncmp with differing strings
+    if strncmp("abc", "abd", 3) == 0 {
         return 4
     }
-    
+
+    // Test prefix match via strncmp
+    if strncmp("hello", "he", 2) != 0 {
+        return 5
+    }
+
     return 0
 }

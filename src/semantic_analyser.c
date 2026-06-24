@@ -14,6 +14,15 @@ parse_calling_convention(char const * text)
 {
     if (text == NULL)
         return CALLING_CONV_ODIN;
+    // StringLiteral text includes surrounding quotes like "c" — strip them
+    size_t len = strlen(text);
+    if (len >= 2 && (text[0] == '"' || text[0] == '`') && (text[len - 1] == '"' || text[len - 1] == '`'))
+    {
+        char * inner = strndup(text + 1, len - 2);
+        calling_convention_t result = parse_calling_convention(inner);
+        free(inner);
+        return result;
+    }
     if (strcmp(text, "odin") == 0)
         return CALLING_CONV_ODIN;
     if (strcmp(text, "contextless") == 0)

@@ -3058,6 +3058,22 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, 128);
             }
 
+            // Coerce Odin string struct arguments to ptr u8 for C calls
+            if (proc_type->proc_metadata.calling_convention == CALLING_CONV_C)
+            {
+                int param_count = proc_type->proc_metadata.param_count;
+                for (int pi = 0; pi < arg_count && pi < param_count; pi++)
+                {
+                    TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
+                    if (param_type == NULL || param_type->kind != TD_KIND_POINTER)
+                        continue;
+                    LLVMTypeRef arg_llvm_type = LLVMTypeOf(args[pi]);
+                    if (arg_llvm_type == NULL || LLVMGetTypeKind(arg_llvm_type) != LLVMStructTypeKind)
+                        continue;
+                    args[pi] = LLVMBuildExtractValue(ctx->builder, args[pi], 0, "str.ptr");
+                }
+            }
+
             // Phase 4: Prepend implicit context parameter for ODIN calling convention
             if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
             {
