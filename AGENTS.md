@@ -28,3 +28,8 @@
 - **Phase 5: Entry point wrapper**: `ir_generate()` detects `main` with hidden context param, renames it to `__odin_main` (private linkage), creates C-compatible `int main()` that allocates zero-initialized Context, calls `__odin_main(ctx_ptr)`, truncates `i64`→`i32`, returns.
 - **Fixed LLVM 18 opaque pointer issue**: Used `LLVMGlobalGetValueType()` instead of `LLVMTypeOf()` to get function type from a function value (LLVM 15+ opaque pointers make function value types return `ptr`, not function type).
 - **All 49 tests pass**.
+
+## Accomplishments (session 2026-06-24)
+- **Fixed foreign block test**: `test_foreign.odin` had a type mismatch — `abs` returns `i32` but `main` returns `int` (i64). Added `cast(int) (result - 5)`.
+- **Fixed implicit integer coercion in binary expressions**: `ir_gen_binary_expression` now inserts `LLVMBuildIntCast2` when RHS type differs from LHS type for arithmetic/comparison ops (skips `in`/`not_in`/`range` where types naturally differ). Fixes the `sub i32, i64` crash with foreign libc calls.
+- **All 55 tests pass**.

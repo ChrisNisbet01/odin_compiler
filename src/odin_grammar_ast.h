@@ -139,6 +139,7 @@ typedef enum
     AST_NODE_STRUCT_FIELD_LIST,
     AST_NODE_CALLING_CONVENTION,
     AST_NODE_CONTEXT_EXPR,
+    AST_NODE_TRIPLE_DASH,
 } odin_grammar_node_type_t;
 
 typedef struct

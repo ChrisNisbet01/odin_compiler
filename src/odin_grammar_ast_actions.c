@@ -403,6 +403,7 @@ DEFINE_TERMINAL_ACTION(ast_action_bool_false_action, AST_NODE_BOOL_FALSE)
 DEFINE_TERMINAL_ACTION(ast_action_nil_action, AST_NODE_NIL)
 DEFINE_TERMINAL_ACTION(ast_action_none_action, AST_NODE_NONE)
 DEFINE_TERMINAL_ACTION(ast_action_ellipsis_action, AST_NODE_ELLIPSIS)
+DEFINE_TERMINAL_ACTION(ast_action_triple_dash_action, AST_NODE_TRIPLE_DASH)
 DEFINE_TERMINAL_ACTION(ast_action_directive_action, AST_NODE_DIRECTIVE)
 DEFINE_TERMINAL_ACTION(ast_action_directive_with_args_action, AST_NODE_DIRECTIVE_WITH_ARGS)
 
@@ -524,6 +525,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_NIL, ast_action_nil_action);
     REGISTER(AST_ACTION_NONE, ast_action_none_action);
     REGISTER(AST_ACTION_ELLIPSIS, ast_action_ellipsis_action);
+    REGISTER(AST_ACTION_TRIPLE_DASH, ast_action_triple_dash_action);
     REGISTER(AST_ACTION_ENUMERATOR, ast_action_enumerator_action);
     REGISTER(AST_ACTION_ENUMERATOR_LIST, ast_action_enumerator_list_action);
     REGISTER(AST_ACTION_UNION_FIELD, ast_action_union_field_action);

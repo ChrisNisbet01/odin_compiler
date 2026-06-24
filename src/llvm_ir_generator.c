@@ -502,6 +502,23 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
 
     LLVMTypeRef lhs_type = LLVMTypeOf(lhs);
+    LLVMTypeRef rhs_type = LLVMTypeOf(rhs);
+
+    // Implicit type coercion for arithmetic/comparison ops only
+    if (lhs_type != rhs_type && op_md->kind != OP_IN && op_md->kind != OP_NOT_IN && op_md->kind != OP_RANGE
+        && op_md->kind != OP_RANGE_HALF)
+    {
+        LLVMTypeKind lhs_tk = LLVMGetTypeKind(lhs_type);
+        LLVMTypeKind rhs_tk = LLVMGetTypeKind(rhs_type);
+        if (lhs_tk == LLVMIntegerTypeKind && rhs_tk == LLVMIntegerTypeKind)
+        {
+            unsigned lhs_bits = LLVMGetIntTypeWidth(lhs_type);
+            unsigned rhs_bits = LLVMGetIntTypeWidth(rhs_type);
+            bool sign_extend = (rhs_bits < lhs_bits);
+            rhs = LLVMBuildIntCast2(ctx->builder, rhs, lhs_type, sign_extend, "coerce");
+        }
+    }
+
     LLVMTypeKind type_kind = LLVMGetTypeKind(lhs_type);
     bool is_float = (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
 
@@ -2713,72 +2730,72 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
         LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, proc_type->proc_metadata.func_type);
 
-        LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
-        LLVMPositionBuilderAtEnd(ctx->builder, entry);
-
-        ctx->current_function = func;
-        ctx->current_return_type = proc_type->proc_metadata.return_type;
-
         odin_grammar_node_t * body_node = node_find_child(value_node, AST_NODE_COMPOUND_STATEMENT);
-
-        generator_push_scope(ctx->gen_ctx);
-        ir_gen_register_params(ctx, value_node, func);
-
-        // Inject implicit context parameter for ODIN calling convention
-        if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
-        {
-            LLVMValueRef context_param = LLVMGetParam(func, 0);
-            TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
-            if (ctx_type)
-            {
-                LLVMValueRef context_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
-                LLVMValueRef size_val = LLVMConstInt(
-                    LLVMInt64TypeInContext(ctx->context),
-                    (long long)LLVMABISizeOfType(ctx->data_layout, ctx_type->llvm_type),
-                    false
-                );
-                LLVMBuildMemCpy(ctx->builder, context_alloca, 0, context_param, 0, size_val);
-
-                symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
-                if (ctx_sym)
-                {
-                    ctx_sym->value.value = context_alloca;
-                }
-                else
-                {
-                    TypedValue ctx_tv = create_typed_value(context_alloca, ctx_type, true);
-                    generator_add_symbol(ctx->gen_ctx, "context", ctx_tv);
-                }
-            }
-        }
 
         if (body_node)
         {
+            LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
+            LLVMPositionBuilderAtEnd(ctx->builder, entry);
+
+            ctx->current_function = func;
+            ctx->current_return_type = proc_type->proc_metadata.return_type;
+
+            generator_push_scope(ctx->gen_ctx);
+            ir_gen_register_params(ctx, value_node, func);
+
+            // Inject implicit context parameter for ODIN calling convention
+            if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
+            {
+                LLVMValueRef context_param = LLVMGetParam(func, 0);
+                TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
+                if (ctx_type)
+                {
+                    LLVMValueRef context_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
+                    LLVMValueRef size_val = LLVMConstInt(
+                        LLVMInt64TypeInContext(ctx->context),
+                        (long long)LLVMABISizeOfType(ctx->data_layout, ctx_type->llvm_type),
+                        false
+                    );
+                    LLVMBuildMemCpy(ctx->builder, context_alloca, 0, context_param, 0, size_val);
+
+                    symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+                    if (ctx_sym)
+                    {
+                        ctx_sym->value.value = context_alloca;
+                    }
+                    else
+                    {
+                        TypedValue ctx_tv = create_typed_value(context_alloca, ctx_type, true);
+                        generator_add_symbol(ctx->gen_ctx, "context", ctx_tv);
+                    }
+                }
+            }
+
             ir_gen_node(ctx, body_node);
-        }
 
-        LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
-        LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);
-        if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
-        {
-            ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
-            if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
+            LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
+            LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);
+            if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
             {
-                LLVMBuildRetVoid(ctx->builder);
+                ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
+                if (ctx->current_return_type == type_descriptor_get_void_type(ctx->type_registry))
+                {
+                    LLVMBuildRetVoid(ctx->builder);
+                }
+                else
+                {
+                    LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
+                }
             }
-            else
-            {
-                LLVMBuildRet(ctx->builder, LLVMConstNull(ctx->current_return_type->llvm_type));
-            }
-        }
 
-        generator_pop_scope(ctx->gen_ctx);
+            generator_pop_scope(ctx->gen_ctx);
+
+            ctx->current_function = NULL;
+            ctx->current_return_type = NULL;
+        }
 
         TypedValue tv = create_typed_value(func, proc_type, false);
         generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
-
-        ctx->current_function = NULL;
-        ctx->current_return_type = NULL;
 
         return func;
     }
@@ -4136,6 +4153,37 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_WHERE_CLAUSE:
         return NULL;
 
+    case AST_NODE_FOREIGN_BLOCK:
+    {
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_CONSTANT_DECL)
+                ir_gen_top_level_decl(ctx, child);
+        }
+        return NULL;
+    }
+
+    case AST_NODE_FOREIGN_IMPORT:
+        return NULL;
+
+    case AST_NODE_USING_DECL:
+    {
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_CONSTANT_DECL)
+                ir_gen_top_level_decl(ctx, child);
+            else if (child->type == AST_NODE_VARIABLE_DECL)
+                ir_gen_top_level_variable(ctx, child);
+        }
+        return NULL;
+    }
+
     default:
         return NULL;
     }
@@ -4170,6 +4218,29 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
             else if (top_decl->type == AST_NODE_VARIABLE_DECL)
             {
                 ir_gen_top_level_variable(ctx, top_decl);
+            }
+            else if (top_decl->type == AST_NODE_FOREIGN_BLOCK)
+            {
+                for (size_t k = 0; k < top_decl->list.count; k++)
+                {
+                    odin_grammar_node_t * fb_child = top_decl->list.children[k];
+                    if (fb_child == NULL || fb_child->type != AST_NODE_CONSTANT_DECL)
+                        continue;
+                    ir_gen_top_level_decl(ctx, fb_child);
+                }
+            }
+            else if (top_decl->type == AST_NODE_USING_DECL)
+            {
+                for (size_t k = 0; k < top_decl->list.count; k++)
+                {
+                    odin_grammar_node_t * inner = top_decl->list.children[k];
+                    if (inner == NULL)
+                        continue;
+                    if (inner->type == AST_NODE_CONSTANT_DECL)
+                        ir_gen_top_level_decl(ctx, inner);
+                    else if (inner->type == AST_NODE_VARIABLE_DECL)
+                        ir_gen_top_level_variable(ctx, inner);
+                }
             }
         }
     }

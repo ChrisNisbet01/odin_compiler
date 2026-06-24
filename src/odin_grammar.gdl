@@ -175,6 +175,7 @@ Question = lexeme('?');
 DotDot = lexeme(".." not('.'));
 DotDotLt = lexeme("..<");
 Ellipsis = lexeme("...") @AST_ACTION_ELLIPSIS;
+TripleDash = lexeme("---") @AST_ACTION_TRIPLE_DASH;
 
 Plus = lexeme('+' not('+') not('='));
 Minus = lexeme('-' not('-') not('=') not('>'));
@@ -400,7 +401,7 @@ FallthroughStatement = KwFallthrough @AST_ACTION_FALLTHROUGH_STATEMENT;
 AssignStatement = Expression (AssignOp | ColonAssign) Expression @AST_ACTION_ASSIGN_STATEMENT;
 ExpressionStatement = Expression @AST_ACTION_EXPRESSION_STATEMENT;
 
-ProcBody = CompoundStatement;
+ProcBody = CompoundStatement | TripleDash;
 ProcedureLiteral = ProcedureSignature ProcBody @AST_ACTION_PROCEDURE_LITERAL;
 
 Statement = DeferStatement

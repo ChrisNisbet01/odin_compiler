@@ -241,6 +241,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "ExclExpr";
     case AST_NODE_ELLIPSIS:
         return "Ellipsis";
+    case AST_NODE_TRIPLE_DASH:
+        return "TripleDash";
     case AST_NODE_ENUMERATOR:
         return "Enumerator";
     case AST_NODE_ENUMERATOR_LIST:

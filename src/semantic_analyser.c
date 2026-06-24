@@ -1747,6 +1747,30 @@ sem_pass1_register_top_level(SemContext * ctx)
                 {
                     sem_register_top_level_variable(ctx, top_decl);
                 }
+                else if (top_decl->type == AST_NODE_FOREIGN_BLOCK)
+                {
+                    for (size_t k = 0; k < top_decl->list.count; k++)
+                    {
+                        odin_grammar_node_t * fb_child = top_decl->list.children[k];
+                        if (fb_child == NULL)
+                            continue;
+                        if (fb_child->type == AST_NODE_CONSTANT_DECL)
+                            sem_register_top_level_declaration(ctx, fb_child);
+                    }
+                }
+                else if (top_decl->type == AST_NODE_USING_DECL)
+                {
+                    for (size_t k = 0; k < top_decl->list.count; k++)
+                    {
+                        odin_grammar_node_t * inner = top_decl->list.children[k];
+                        if (inner == NULL)
+                            continue;
+                        if (inner->type == AST_NODE_VARIABLE_DECL)
+                            sem_register_top_level_variable(ctx, inner);
+                        else if (inner->type == AST_NODE_CONSTANT_DECL)
+                            sem_register_top_level_declaration(ctx, inner);
+                    }
+                }
             }
         }
     }
@@ -2054,6 +2078,35 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
     case AST_NODE_WHERE_CLAUSE:
         break;
 
+    case AST_NODE_FOREIGN_BLOCK:
+    {
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_CONSTANT_DECL || child->type == AST_NODE_VARIABLE_DECL)
+                sem_pass2_node(ctx, child, NULL);
+        }
+        break;
+    }
+
+    case AST_NODE_FOREIGN_IMPORT:
+        break;
+
+    case AST_NODE_USING_DECL:
+    {
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_CONSTANT_DECL || child->type == AST_NODE_VARIABLE_DECL)
+                sem_pass2_node(ctx, child, NULL);
+        }
+        break;
+    }
+
     default:
         break;
     }
@@ -2081,6 +2134,28 @@ sem_pass2_analyse_bodies(SemContext * ctx)
             if (top_decl->type == AST_NODE_CONSTANT_DECL || top_decl->type == AST_NODE_VARIABLE_DECL)
             {
                 sem_pass2_node(ctx, top_decl, NULL);
+            }
+            else if (top_decl->type == AST_NODE_FOREIGN_BLOCK)
+            {
+                for (size_t k = 0; k < top_decl->list.count; k++)
+                {
+                    odin_grammar_node_t * fb_child = top_decl->list.children[k];
+                    if (fb_child == NULL)
+                        continue;
+                    if (fb_child->type == AST_NODE_CONSTANT_DECL || fb_child->type == AST_NODE_VARIABLE_DECL)
+                        sem_pass2_node(ctx, fb_child, NULL);
+                }
+            }
+            else if (top_decl->type == AST_NODE_USING_DECL)
+            {
+                for (size_t k = 0; k < top_decl->list.count; k++)
+                {
+                    odin_grammar_node_t * inner = top_decl->list.children[k];
+                    if (inner == NULL)
+                        continue;
+                    if (inner->type == AST_NODE_CONSTANT_DECL || inner->type == AST_NODE_VARIABLE_DECL)
+                        sem_pass2_node(ctx, inner, NULL);
+                }
             }
         }
     }
