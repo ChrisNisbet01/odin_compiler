@@ -41,6 +41,14 @@ typedef struct
     uint32_t alignment;
 } StructMetaData;
 
+typedef struct
+{
+    bool is_complete;
+    struct_or_union_members_st members;
+    uint64_t max_field_size;
+    uint32_t max_alignment;
+} UnionMetaData;
+
 typedef enum
 {
     TD_KIND_BASIC,
@@ -80,6 +88,7 @@ typedef struct TypeDescriptor
 
     ProcMetadata proc_metadata;
     StructMetaData struct_metadata;
+    UnionMetaData union_metadata;
 
     union
     {
@@ -166,6 +175,12 @@ TypeDescriptor const * get_or_create_proc_type(
 TypeDescriptor const * register_struct_type(
     TypeDescriptors * registry, LLVMTypeRef llvm_struct, bool is_complete, struct_or_union_members_st const * members
 );
+
+TypeDescriptor const * get_or_create_union_type(TypeDescriptors * registry, struct_or_union_members_st const * members);
+
+int type_descriptor_find_union_field_index(TypeDescriptor const * desc, char const * name);
+
+struct_field_t const * type_descriptor_get_union_field(TypeDescriptor const * desc, int index);
 
 TypeDescriptor const * get_basic_type_by_name(TypeDescriptors * registry, char const * name);
 

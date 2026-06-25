@@ -220,7 +220,8 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
         if (sym->value.type_info
             && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
                 || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY
-                || sym->value.type_info->kind == TD_KIND_MAP || sym->value.type_info->kind == TD_KIND_BIT_FIELD))
+                || sym->value.type_info->kind == TD_KIND_MAP || sym->value.type_info->kind == TD_KIND_BIT_FIELD
+                || sym->value.type_info->kind == TD_KIND_UNION))
         {
             return sym->value.value;
         }
@@ -1250,6 +1251,16 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
             return NULL;
 
         TypeDescriptor const * cur_type = base ? base->resolved_type : NULL;
+        if (cur_type == NULL && base != NULL)
+        {
+            odin_grammar_node_t * ident = expression_unwrap_to_identifier(base);
+            if (ident && ident->text)
+            {
+                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
+                if (sym && sym->value.type_info)
+                    cur_type = sym->value.type_info;
+            }
+        }
 
         for (size_t i = 0; i < postfix_ops->list.count; i++)
         {
@@ -1509,7 +1520,45 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 if (field_name_node == NULL || field_name_node->text == NULL)
                     return NULL;
 
-                if (cur_type == NULL || cur_type->kind != TD_KIND_STRUCT)
+                if (cur_type == NULL)
+                    return NULL;
+
+                if (cur_type->kind == TD_KIND_UNION)
+                {
+                    int field_idx = type_descriptor_find_union_field_index(cur_type, field_name_node->text);
+                    if (field_idx < 0)
+                        return NULL;
+                    struct_field_t const * field = type_descriptor_get_union_field(cur_type, field_idx);
+                    if (field == NULL)
+                        return NULL;
+
+                    // Set tag field
+                    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                    LLVMValueRef tag_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+                    LLVMValueRef tag_ptr = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->llvm_type, ptr, tag_indices, 2, "union.tag.gep"
+                    );
+                    LLVMValueRef tag_val
+                        = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)field_idx, false);
+                    LLVMBuildStore(ctx->builder, tag_val, tag_ptr);
+
+                    // Bitcast payload pointer to field type
+                    LLVMValueRef payload_indices[2]
+                        = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+                    LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->llvm_type, ptr, payload_indices, 2, "union.payload.gep"
+                    );
+                    ptr = LLVMBuildPointerCast(
+                        ctx->builder,
+                        payload_ptr,
+                        LLVMPointerType(field->type_desc->llvm_type, 0),
+                        field_name_node->text
+                    );
+                    cur_type = field->type_desc;
+                    break;
+                }
+
+                if (cur_type->kind != TD_KIND_STRUCT)
                     return NULL;
 
                 field_access_path_t path;
@@ -3184,7 +3233,19 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     if (postfix_ops == NULL || postfix_ops->type != AST_NODE_POSTFIX_OPS)
         return val;
 
-    TypeDescriptor const * cur_type = node->list.children[0] ? node->list.children[0]->resolved_type : NULL;
+    odin_grammar_node_t * pe_child = node->list.children[0];
+    TypeDescriptor const * cur_type = pe_child ? pe_child->resolved_type : NULL;
+
+    if (cur_type == NULL && pe_child != NULL)
+    {
+        odin_grammar_node_t * ident = expression_unwrap_to_identifier(pe_child);
+        if (ident && ident->text)
+        {
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
+            if (sym && sym->value.type_info)
+                cur_type = sym->value.type_info;
+        }
+    }
 
     for (size_t i = 0; i < postfix_ops->list.count; i++)
     {
@@ -3489,7 +3550,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             if (field_name_node == NULL || field_name_node->text == NULL)
                 break;
 
-            if (cur_type == NULL || cur_type->kind != TD_KIND_STRUCT)
+            if (cur_type == NULL || (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_UNION))
             {
                 if (cur_type && cur_type->kind == TD_KIND_BIT_FIELD)
                 {
@@ -3511,6 +3572,28 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                     val = LLVMBuildIntCast(ctx->builder, extracted, bf->type->llvm_type, "bf.val");
                     cur_type = bf->type;
                 }
+                break;
+            }
+
+            if (cur_type->kind == TD_KIND_UNION)
+            {
+                int field_idx = type_descriptor_find_union_field_index(cur_type, field_name_node->text);
+                if (field_idx < 0)
+                    break;
+                struct_field_t const * field = type_descriptor_get_union_field(cur_type, field_idx);
+                if (field == NULL)
+                    break;
+
+                // Bitcast payload pointer to field type
+                LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                LLVMValueRef payload_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+                LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(
+                    ctx->builder, cur_type->llvm_type, val, payload_indices, 2, "union.payload.gep"
+                );
+                val = LLVMBuildPointerCast(
+                    ctx->builder, payload_ptr, LLVMPointerType(field->type_desc->llvm_type, 0), field_name_node->text
+                );
+                cur_type = field->type_desc;
                 break;
             }
 
@@ -3756,7 +3839,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_ARRAY && cur_type->kind != TD_KIND_SLICE
                 && cur_type->kind != TD_KIND_PROC && cur_type->kind != TD_KIND_DYNAMIC_ARRAY
                 && cur_type->kind != TD_KIND_MAP && cur_type->kind != TD_KIND_BIT_FIELD
-                && cur_type->kind != TD_KIND_BIT_SET)
+                && cur_type->kind != TD_KIND_BIT_SET && cur_type->kind != TD_KIND_UNION)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }

@@ -899,6 +899,80 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return struct_td;
     }
 
+    case AST_NODE_UNION_TYPE:
+    {
+        odin_grammar_node_t * field_list = node_find_child(node, AST_NODE_UNION_FIELD_LIST);
+        if (field_list == NULL || field_list->list.count == 0)
+            return NULL;
+
+        int field_count = 0;
+        for (size_t i = 0; i < field_list->list.count; i++)
+        {
+            if (field_list->list.children[i] && field_list->list.children[i]->type == AST_NODE_UNION_FIELD)
+                field_count++;
+        }
+        if (field_count == 0)
+            return NULL;
+
+        struct_or_union_members_st members;
+        members.count = 0;
+        members.fields = malloc((size_t)field_count * sizeof(struct_field_t));
+        if (members.fields == NULL)
+            return NULL;
+
+        int fi = 0;
+        for (size_t i = 0; i < field_list->list.count && fi < field_count; i++)
+        {
+            odin_grammar_node_t * field = field_list->list.children[i];
+            if (field == NULL || field->type != AST_NODE_UNION_FIELD)
+                continue;
+
+            odin_grammar_node_t * name_node = NULL;
+            odin_grammar_node_t * type_node = NULL;
+            for (size_t ci = 0; ci < field->list.count; ci++)
+            {
+                odin_grammar_node_t * child = field->list.children[ci];
+                if (child == NULL)
+                    continue;
+                if (child->type == AST_NODE_IDENTIFIER && name_node == NULL)
+                    name_node = child;
+                else if (is_type_node(child))
+                    type_node = child;
+            }
+
+            if (name_node == NULL || name_node->text == NULL || type_node == NULL)
+                continue;
+
+            TypeDescriptor const * ftype = sem_resolve_type_expr(ctx, type_node);
+            if (ftype == NULL)
+                continue;
+
+            members.fields[fi].name = name_node->text;
+            members.fields[fi].type_desc = ftype;
+            members.fields[fi].is_using = false;
+            members.fields[fi].offset = 0;
+            members.fields[fi].bit_offset = 0;
+            members.fields[fi].bit_width = 0;
+            members.fields[fi].storage_index = 0;
+            fi++;
+        }
+
+        if (fi == 0)
+        {
+            free(members.fields);
+            return NULL;
+        }
+        members.count = fi;
+
+        TypeDescriptor const * union_td = get_or_create_union_type(ctx->type_registry, &members);
+
+        free(members.fields);
+
+        if (union_td)
+            node->resolved_type = (TypeDescriptor *)union_td;
+        return union_td;
+    }
+
     default:
         return NULL;
     }
@@ -1329,7 +1403,9 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         {
             TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
             if (inner_type)
+            {
                 node->resolved_type = (TypeDescriptor *)inner_type;
+            }
             return inner_type;
         }
         return NULL;
@@ -1394,6 +1470,20 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 cur_type = f->type_desc;
                         }
                         op->resolved_type = (TypeDescriptor *)type;
+                    }
+                }
+                else if (type && type->kind == TD_KIND_UNION && op->list.count >= 1 && op->list.children[0])
+                {
+                    char const * field_name = op->list.children[0]->text;
+                    int field_idx = type_descriptor_find_union_field_index(type, field_name);
+                    if (field_idx >= 0)
+                    {
+                        struct_field_t const * field = type_descriptor_get_union_field(type, field_idx);
+                        if (field)
+                        {
+                            type = field->type_desc;
+                            op->resolved_type = (TypeDescriptor *)type;
+                        }
                     }
                 }
                 else if (type && type->kind == TD_KIND_BIT_FIELD && op->list.count >= 1 && op->list.children[0])

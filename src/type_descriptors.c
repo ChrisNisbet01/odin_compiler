@@ -237,6 +237,10 @@ type_descriptors_destroy_registry(TypeDescriptors * registry)
         {
             free(registry->types[i]->struct_metadata.members.fields);
         }
+        if (registry->types[i]->union_metadata.members.fields)
+        {
+            free(registry->types[i]->union_metadata.members.fields);
+        }
         if (registry->types[i]->proc_metadata.params)
         {
             free((void *)registry->types[i]->proc_metadata.params);
@@ -668,6 +672,107 @@ register_struct_type(
     }
 
     return td;
+}
+
+TypeDescriptor const *
+get_or_create_union_type(TypeDescriptors * registry, struct_or_union_members_st const * members)
+{
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_UNION)
+            continue;
+        if (t->union_metadata.members.count != members->count)
+            continue;
+        bool match = true;
+        for (int j = 0; j < members->count; j++)
+        {
+            if (strcmp(t->union_metadata.members.fields[j].name, members->fields[j].name) != 0
+                || t->union_metadata.members.fields[j].type_desc != members->fields[j].type_desc)
+            {
+                match = false;
+                break;
+            }
+        }
+        if (match)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_UNION;
+    td->union_metadata.is_complete = true;
+
+    if (members && members->count > 0)
+    {
+        td->union_metadata.members.fields = malloc((size_t)members->count * sizeof(*td->union_metadata.members.fields));
+        memcpy(
+            td->union_metadata.members.fields,
+            members->fields,
+            (size_t)members->count * sizeof(*td->union_metadata.members.fields)
+        );
+        td->union_metadata.members.count = members->count;
+
+        uint64_t max_size = 0;
+        uint32_t max_align = 1;
+        if (registry->data_layout)
+        {
+            for (int j = 0; j < members->count; j++)
+            {
+                if (members->fields[j].type_desc && members->fields[j].type_desc->llvm_type)
+                {
+                    uint64_t sz = LLVMABISizeOfType(registry->data_layout, members->fields[j].type_desc->llvm_type);
+                    uint32_t al
+                        = LLVMABIAlignmentOfType(registry->data_layout, members->fields[j].type_desc->llvm_type);
+                    if (sz > max_size)
+                        max_size = sz;
+                    if (al > max_align)
+                        max_align = al;
+                }
+            }
+        }
+        if (max_size == 0)
+            max_size = 1;
+
+        td->union_metadata.max_field_size = max_size;
+        td->union_metadata.max_alignment = max_align;
+
+        LLVMTypeRef i8_type = LLVMInt8TypeInContext(registry->context);
+        LLVMTypeRef i64_type = LLVMInt64TypeInContext(registry->context);
+        LLVMTypeRef payload_type = LLVMArrayType(i8_type, (unsigned)max_size);
+        LLVMTypeRef fields[2] = {i64_type, payload_type};
+        td->llvm_type = LLVMStructTypeInContext(registry->context, fields, 2, false);
+    }
+    else
+    {
+        td->llvm_type = LLVMStructTypeInContext(registry->context, NULL, 0, false);
+    }
+
+    return td;
+}
+
+int
+type_descriptor_find_union_field_index(TypeDescriptor const * desc, char const * name)
+{
+    if (desc == NULL || desc->kind != TD_KIND_UNION)
+        return -1;
+    for (int i = 0; i < desc->union_metadata.members.count; i++)
+    {
+        if (strcmp(desc->union_metadata.members.fields[i].name, name) == 0)
+            return i;
+    }
+    return -1;
+}
+
+struct_field_t const *
+type_descriptor_get_union_field(TypeDescriptor const * desc, int index)
+{
+    if (desc == NULL || desc->kind != TD_KIND_UNION)
+        return NULL;
+    if (index < 0 || index >= desc->union_metadata.members.count)
+        return NULL;
+    return &desc->union_metadata.members.fields[index];
 }
 
 TypeDescriptor const *
