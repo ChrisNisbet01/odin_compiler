@@ -18,7 +18,3 @@ Tier 5: Very Complex
 13. soa layout (Structure of Arrays) — Grammar + AST + is_type_node all in place. But this is a major memory layout optimization affecting: type creation, member access GEP computation, array/slice indexing through SOA fields, and struct type representation. No existing infrastructure.
 Tier 6: Architecture-Altering
 14. Polymorphic procedures / monomorphisation — Full generics system. Complete template-like type parameter substitution, procedure instantiation with concrete types, duplicating LLVM functions per unique instantiation, caching. Zero infrastructure exists beyond the AST_NODE_POLY_IDENT parser token. By far the largest and most complex item.
-
-
-Ongoing:
-Next step: introduce a dynamic context stack for nested functions as outlined in the analysis
