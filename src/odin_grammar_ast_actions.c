@@ -282,6 +282,7 @@ DEFINE_ACTION(ast_action_parameters_action, AST_NODE_PARAMETERS)
 DEFINE_ACTION(ast_action_parameter_list_action, AST_NODE_PARAMETER_LIST)
 DEFINE_ACTION(ast_action_named_return_action, AST_NODE_NAMED_RETURN)
 DEFINE_ACTION(ast_action_return_list_action, AST_NODE_RETURN_LIST)
+DEFINE_ACTION(ast_action_return_type_list_action, AST_NODE_RETURN_TYPE_LIST)
 DEFINE_ACTION(ast_action_returns_action, AST_NODE_RETURNS)
 DEFINE_ACTION(ast_action_where_clause_action, AST_NODE_WHERE_CLAUSE)
 DEFINE_ACTION(ast_action_calling_convention_action, AST_NODE_CALLING_CONVENTION)
@@ -340,6 +341,7 @@ DEFINE_ACTION(ast_action_fallthrough_statement_action, AST_NODE_FALLTHROUGH_STAT
 DEFINE_ACTION(ast_action_assign_statement_action, AST_NODE_ASSIGN_STATEMENT)
 DEFINE_ACTION(ast_action_expression_statement_action, AST_NODE_EXPRESSION_STATEMENT)
 DEFINE_ACTION(ast_action_procedure_literal_action, AST_NODE_PROCEDURE_LITERAL)
+DEFINE_ACTION(ast_action_identifier_list_action, AST_NODE_IDENTIFIER_LIST)
 DEFINE_ACTION(ast_action_variable_decl_action, AST_NODE_VARIABLE_DECL)
 DEFINE_ACTION(ast_action_constant_decl_action, AST_NODE_CONSTANT_DECL)
 DEFINE_ACTION(ast_action_foreign_import_action, AST_NODE_FOREIGN_IMPORT)
@@ -447,6 +449,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_PARAMETER_LIST, ast_action_parameter_list_action);
     REGISTER(AST_ACTION_NAMED_RETURN, ast_action_named_return_action);
     REGISTER(AST_ACTION_RETURN_LIST, ast_action_return_list_action);
+    REGISTER(AST_ACTION_RETURN_TYPE_LIST, ast_action_return_type_list_action);
     REGISTER(AST_ACTION_RETURNS, ast_action_returns_action);
     REGISTER(AST_ACTION_WHERE_CLAUSE, ast_action_where_clause_action);
     REGISTER(AST_ACTION_CALLING_CONVENTION, ast_action_calling_convention_action);
@@ -505,6 +508,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_ASSIGN_STATEMENT, ast_action_assign_statement_action);
     REGISTER(AST_ACTION_EXPRESSION_STATEMENT, ast_action_expression_statement_action);
     REGISTER(AST_ACTION_PROCEDURE_LITERAL, ast_action_procedure_literal_action);
+    REGISTER(AST_ACTION_IDENTIFIER_LIST, ast_action_identifier_list_action);
     REGISTER(AST_ACTION_VARIABLE_DECL, ast_action_variable_decl_action);
     REGISTER(AST_ACTION_CONSTANT_DECL, ast_action_constant_decl_action);
     REGISTER(AST_ACTION_FOREIGN_IMPORT, ast_action_foreign_import_action);

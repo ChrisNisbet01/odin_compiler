@@ -259,7 +259,8 @@ Parameters = Ellipsis | (Parameter (Comma Parameter)* (Comma Ellipsis)?) @AST_AC
 ParameterList = LParen Parameters? RParen @AST_ACTION_PARAMETER_LIST;
 NamedReturn = Identifier Colon TypePrefix @AST_ACTION_NAMED_RETURN;
 ReturnList = delimited(NamedReturn, Comma) Comma? @AST_ACTION_RETURN_LIST;
-Returns = Arrow (ReturnList | TypePrefix) @AST_ACTION_RETURNS;
+ReturnTypeList = delimited(TypePrefix, Comma) Comma? @AST_ACTION_RETURN_TYPE_LIST;
+Returns = Arrow (LParen (ReturnList | ReturnTypeList) RParen | TypePrefix) @AST_ACTION_RETURNS;
 WhereClause = KwWhere Expression @AST_ACTION_WHERE_CLAUSE;
 CallingConvention = StringLiteral @AST_ACTION_CALLING_CONVENTION;
 ContextExpr = KwContext @AST_ACTION_CONTEXT_EXPR;
@@ -393,7 +394,7 @@ SwitchDefaultClause = KwCase Colon Statement* @AST_ACTION_SWITCH_DEFAULT;
 SwitchBody = LBrace (SwitchCaseClause | SwitchDefaultClause)* RBrace;
 SwitchStatement = KwSwitch Directive? Expression? SwitchBody @AST_ACTION_SWITCH_STATEMENT;
 
-ReturnStatement = KwReturn Expression? @AST_ACTION_RETURN_STATEMENT;
+ReturnStatement = KwReturn (AssignExpression (Comma AssignExpression)*)? @AST_ACTION_RETURN_STATEMENT;
 BreakStatement = KwBreak @AST_ACTION_BREAK_STATEMENT;
 ContinueStatement = KwContinue @AST_ACTION_CONTINUE_STATEMENT;
 FallthroughStatement = KwFallthrough @AST_ACTION_FALLTHROUGH_STATEMENT;
@@ -426,7 +427,8 @@ ImportNamed = KwImport Identifier StringLiteral @AST_ACTION_IMPORT_NAMED;
 ImportSimple = KwImport KwUsing? StringLiteral @AST_ACTION_IMPORT;
 ImportDecl = ImportNamed | ImportSimple;
 
-VariableDecl = Identifier (Colon TypePrefix (Assign Expression)? | ColonAssign Expression) @AST_ACTION_VARIABLE_DECL;
+IdentifierList = delimited(Identifier, Comma) Comma? @AST_ACTION_IDENTIFIER_LIST;
+VariableDecl = IdentifierList (Colon TypePrefix (Assign Expression)? | ColonAssign Expression) @AST_ACTION_VARIABLE_DECL;
 
 ConstantDecl = Identifier DoubleColon (ProcedureLiteral | Expression) @AST_ACTION_CONSTANT_DECL;
 

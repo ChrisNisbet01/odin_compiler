@@ -568,6 +568,8 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_PROCEDURE_SIGNATURE:
     {
         TypeDescriptor const * return_type = NULL;
+        TypeDescriptor const ** return_types = NULL;
+        int return_count = 0;
         int param_count = 0;
         TypeDescriptor const ** params = NULL;
         size_t param_cap = 0;
@@ -587,7 +589,55 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             }
             else if (child->type == AST_NODE_RETURNS && child->list.count > 0)
             {
-                return_type = sem_resolve_type_expr(ctx, child->list.children[0]);
+                odin_grammar_node_t * ret_child = child->list.children[0];
+                if (ret_child->type == AST_NODE_RETURN_TYPE_LIST)
+                {
+                    return_count = 0;
+                    return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+                    for (size_t ri = 0; ri < ret_child->list.count; ri++)
+                    {
+                        odin_grammar_node_t * type_node = ret_child->list.children[ri];
+                        if (type_node == NULL)
+                            continue;
+                        TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+                        type_node->resolved_type = (TypeDescriptor *)td;
+                        if (td)
+                            return_types[return_count++] = td;
+                    }
+                }
+                else if (ret_child->type == AST_NODE_RETURN_LIST)
+                {
+                    return_count = 0;
+                    return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+                    for (size_t ri = 0; ri < ret_child->list.count; ri++)
+                    {
+                        odin_grammar_node_t * named = ret_child->list.children[ri];
+                        if (named == NULL || named->type != AST_NODE_NAMED_RETURN)
+                            continue;
+                        odin_grammar_node_t * type_node = NULL;
+                        for (size_t ci = 0; ci < named->list.count; ci++)
+                        {
+                            if (named->list.children[ci] != NULL)
+                                type_node = named->list.children[ci];
+                        }
+                        if (type_node == NULL)
+                            continue;
+                        TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+                        type_node->resolved_type = (TypeDescriptor *)td;
+                        if (td)
+                            return_types[return_count++] = td;
+                    }
+                }
+                else
+                {
+                    return_type = sem_resolve_type_expr(ctx, ret_child);
+                    if (return_type)
+                    {
+                        return_types = malloc(sizeof(TypeDescriptor const *));
+                        return_types[0] = return_type;
+                        return_count = 1;
+                    }
+                }
             }
             else if (child->type == AST_NODE_PARAMETER_LIST)
             {
@@ -651,9 +701,15 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             }
         }
 
-        TypeDescriptor const * proc_type
-            = get_or_create_proc_type(ctx->type_registry, return_type, params, param_count, NULL, 0, is_variadic, cc);
+        if (return_count == 0)
+        {
+            return_types = NULL;
+        }
+        TypeDescriptor const * proc_type = get_or_create_proc_type(
+            ctx->type_registry, return_type, params, param_count, return_types, return_count, is_variadic, cc
+        );
         free((void *)params);
+        free((void *)return_types);
         if (proc_type)
             node->resolved_type = (TypeDescriptor *)proc_type;
         return proc_type;
@@ -1170,6 +1226,11 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * callee_type = sem_evaluate_expr(ctx, node->list.children[0]);
         if (callee_type && callee_type->kind == TD_KIND_PROC)
         {
+            if (callee_type->proc_metadata.return_count > 1)
+            {
+                node->resolved_type = (TypeDescriptor *)callee_type;
+                return callee_type;
+            }
             TypeDescriptor const * ret_type = callee_type->proc_metadata.return_type;
             node->resolved_type = (TypeDescriptor *)ret_type;
             return ret_type;
@@ -1297,6 +1358,11 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             case AST_NODE_POSTFIX_CALL:
                 if (type && type->kind == TD_KIND_PROC)
                 {
+                    if (type->proc_metadata.return_count > 1)
+                    {
+                        op->resolved_type = (TypeDescriptor *)type;
+                        break;
+                    }
                     type = type->proc_metadata.return_type;
                     op->resolved_type = (TypeDescriptor *)type;
                 }
@@ -1437,6 +1503,42 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 static void
 sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type)
 {
+    if (expected_return_type != NULL && expected_return_type->kind == TD_KIND_PROC)
+    {
+        ProcMetadata const * pm = &expected_return_type->proc_metadata;
+        if (pm->return_count > 1)
+        {
+            size_t expr_count = node->list.count;
+            if ((int)expr_count != pm->return_count)
+            {
+                sem_error_list_add(&ctx->errors, node, "wrong number of return values");
+                return;
+            }
+            for (size_t i = 0; i < expr_count; i++)
+            {
+                odin_grammar_node_t * expr = node->list.children[i];
+                if (expr == NULL)
+                    continue;
+                TypeDescriptor const * expr_type = sem_evaluate_expr(ctx, expr);
+                if (expr_type != pm->returns[i])
+                {
+                    sem_error_list_add(&ctx->errors, node, "return type mismatch");
+                }
+            }
+            return;
+        }
+        else if (pm->return_count == 1)
+        {
+            expected_return_type = pm->returns[0];
+        }
+        else
+        {
+            if (node->list.count > 0)
+                sem_error_list_add(&ctx->errors, node, "unexpected return value in void procedure");
+            return;
+        }
+    }
+
     if (node->list.count == 0)
     {
         if (expected_return_type != NULL && expected_return_type != type_descriptor_get_void_type(ctx->type_registry))
@@ -1476,6 +1578,8 @@ static void
 sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
 {
     TypeDescriptor const * return_type = NULL;
+    TypeDescriptor const ** return_types = NULL;
+    int return_count = 0;
     int param_count = 0;
     TypeDescriptor const ** param_types = NULL;
     size_t param_cap = 0;
@@ -1505,10 +1609,57 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
                 }
                 else if (sig_child->type == AST_NODE_RETURNS && sig_child->list.count > 0)
                 {
-                    odin_grammar_node_t * type_node = sig_child->list.children[0];
-                    TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
-                    type_node->resolved_type = (TypeDescriptor *)td;
-                    return_type = td;
+                    odin_grammar_node_t * ret_child = sig_child->list.children[0];
+                    if (ret_child->type == AST_NODE_RETURN_TYPE_LIST)
+                    {
+                        return_type = NULL;
+                        return_count = 0;
+                        return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+                        for (size_t ri = 0; ri < ret_child->list.count; ri++)
+                        {
+                            odin_grammar_node_t * tn = ret_child->list.children[ri];
+                            if (tn == NULL)
+                                continue;
+                            TypeDescriptor const * td = sem_resolve_type_expr(ctx, tn);
+                            tn->resolved_type = (TypeDescriptor *)td;
+                            if (td)
+                                return_types[return_count++] = td;
+                        }
+                    }
+                    else if (ret_child->type == AST_NODE_RETURN_LIST)
+                    {
+                        return_type = NULL;
+                        return_count = 0;
+                        return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+                        for (size_t ri = 0; ri < ret_child->list.count; ri++)
+                        {
+                            odin_grammar_node_t * named = ret_child->list.children[ri];
+                            if (named == NULL || named->type != AST_NODE_NAMED_RETURN)
+                                continue;
+                            odin_grammar_node_t * tn = NULL;
+                            for (size_t ci = 0; ci < named->list.count; ci++)
+                            {
+                                if (named->list.children[ci] != NULL)
+                                    tn = named->list.children[ci];
+                            }
+                            if (tn == NULL)
+                                continue;
+                            TypeDescriptor const * td = sem_resolve_type_expr(ctx, tn);
+                            tn->resolved_type = (TypeDescriptor *)td;
+                            if (td)
+                                return_types[return_count++] = td;
+                        }
+                    }
+                    else
+                    {
+                        return_type = sem_resolve_type_expr(ctx, ret_child);
+                        if (return_type)
+                        {
+                            return_types = malloc(sizeof(TypeDescriptor const *));
+                            return_types[0] = return_type;
+                            return_count = 1;
+                        }
+                    }
                 }
                 else if (sig_child->type == AST_NODE_PARAMETER_LIST)
                 {
@@ -1681,17 +1832,27 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
 
     // Set resolved_type on the procedure literal
     {
+        if (return_count == 0)
+        {
+            return_types = NULL;
+        }
         TypeDescriptor const * proc_type = get_or_create_proc_type(
-            ctx->type_registry, return_type, param_types, param_count, NULL, 0, is_variadic, cc
+            ctx->type_registry, return_type, param_types, param_count, return_types, return_count, is_variadic, cc
         );
         node->resolved_type = (TypeDescriptor *)proc_type;
     }
 
     free(param_types);
+    free((void *)return_types);
 
     if (comp_stmt_node)
     {
-        sem_analyse_compound_statement(ctx, comp_stmt_node, return_type);
+        TypeDescriptor const * expected_ret = node->resolved_type;
+        if (expected_ret == NULL || (return_count == 0))
+        {
+            expected_ret = type_descriptor_get_void_type(ctx->type_registry);
+        }
+        sem_analyse_compound_statement(ctx, comp_stmt_node, expected_ret);
     }
 
     generator_pop_scope(ctx->gen_ctx);
@@ -1706,11 +1867,22 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         return;
 
     odin_grammar_node_t * name_node = node->list.children[0];
-    if (name_node->type != AST_NODE_IDENTIFIER)
-        return;
-
-    TypedValue tv = create_typed_value(NULL, NULL, false);
-    scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+    if (name_node->type == AST_NODE_IDENTIFIER)
+    {
+        TypedValue tv = create_typed_value(NULL, NULL, false);
+        scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+    }
+    else if (name_node->type == AST_NODE_IDENTIFIER_LIST)
+    {
+        for (size_t i = 0; i < name_node->list.count; i++)
+        {
+            odin_grammar_node_t * id = name_node->list.children[i];
+            if (id == NULL || id->type != AST_NODE_IDENTIFIER)
+                continue;
+            TypedValue tv = create_typed_value(NULL, NULL, false);
+            scope_add_symbol(generator_current_scope(ctx->gen_ctx), id->text, tv);
+        }
+    }
 }
 
 static void
@@ -1719,12 +1891,18 @@ sem_register_top_level_variable(SemContext * ctx, odin_grammar_node_t * node)
     if (node == NULL || node->list.count < 1)
         return;
 
-    odin_grammar_node_t * name_node = node->list.children[0];
-    if (name_node->type != AST_NODE_IDENTIFIER)
+    odin_grammar_node_t * id_list = node->list.children[0];
+    if (id_list->type != AST_NODE_IDENTIFIER_LIST)
         return;
 
-    TypedValue tv = create_typed_value(NULL, NULL, true);
-    scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+    for (size_t i = 0; i < id_list->list.count; i++)
+    {
+        odin_grammar_node_t * name_node = id_list->list.children[i];
+        if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
+            continue;
+        TypedValue tv = create_typed_value(NULL, NULL, true);
+        scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+    }
 }
 
 static void
@@ -1823,15 +2001,15 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
     {
         if (node->list.count < 1)
             break;
-        odin_grammar_node_t * name_node = node->list.children[0];
-        if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
+        odin_grammar_node_t * id_list = node->list.children[0];
+        if (id_list == NULL || id_list->type != AST_NODE_IDENTIFIER_LIST)
             break;
 
+        size_t id_count = id_list->list.count;
         TypeDescriptor const * var_type = NULL;
         odin_grammar_node_t * type_node = NULL;
         odin_grammar_node_t * init_node = NULL;
 
-        // Find type and init children (accounting for NULL terminal children)
         for (size_t i = 1; i < node->list.count; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
@@ -1842,13 +2020,12 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             else if (child->type != AST_NODE_IDENTIFIER)
                 init_node = child;
         }
-        // For short decl `x := expr`, the expr may be the only non-NULL, non-name child
         if (type_node == NULL && init_node == NULL)
         {
             for (size_t i = 1; i < node->list.count; i++)
             {
                 odin_grammar_node_t * child = node->list.children[i];
-                if (child != NULL && child != name_node)
+                if (child != NULL && child != id_list)
                 {
                     init_node = child;
                     break;
@@ -1862,19 +2039,40 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             if (type_node)
                 type_node->resolved_type = (TypeDescriptor *)var_type;
         }
-        if (init_node && type_node == NULL)
+
+        if (init_node)
         {
-            var_type = sem_evaluate_expr(ctx, init_node);
-        }
-        else if (init_node)
-        {
-            sem_evaluate_expr(ctx, init_node);
+            TypeDescriptor const * init_type = sem_evaluate_expr(ctx, init_node);
+
+            if (type_node == NULL)
+            {
+                var_type = init_type;
+            }
+
+            // Multi-return destructuring: a, b := foo()
+            if (id_count > 1 && init_type != NULL && init_type->kind == TD_KIND_PROC)
+            {
+                ProcMetadata const * pm = &init_type->proc_metadata;
+                for (size_t vi = 0; vi < id_count && vi < (size_t)pm->return_count; vi++)
+                {
+                    odin_grammar_node_t * name_node = id_list->list.children[vi];
+                    if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
+                        continue;
+                    TypedValue tv = create_typed_value(NULL, pm->returns[vi], true);
+                    scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+                }
+                break;
+            }
         }
 
-        if (var_type && name_node)
+        if (var_type && id_count == 1)
         {
-            TypedValue tv = create_typed_value(NULL, var_type, true);
-            scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+            odin_grammar_node_t * name_node = id_list->list.children[0];
+            if (name_node && name_node->type == AST_NODE_IDENTIFIER)
+            {
+                TypedValue tv = create_typed_value(NULL, var_type, true);
+                scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+            }
         }
         break;
     }

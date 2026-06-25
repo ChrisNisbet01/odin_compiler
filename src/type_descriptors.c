@@ -535,9 +535,6 @@ get_or_create_proc_type(
     calling_convention_t calling_convention
 )
 {
-    (void)returns;
-    (void)return_count;
-
     for (int i = 0; i < registry->count; i++)
     {
         TypeDescriptor * t = registry->types[i];
@@ -546,6 +543,8 @@ get_or_create_proc_type(
         if (t->proc_metadata.is_variadic != is_variadic)
             continue;
         if (t->proc_metadata.param_count != param_count)
+            continue;
+        if (t->proc_metadata.return_count != return_count)
             continue;
         if (t->proc_metadata.return_type != return_type)
             continue;
@@ -560,6 +559,17 @@ get_or_create_proc_type(
                 break;
             }
         }
+        if (match && return_count > 0)
+        {
+            for (int j = 0; j < return_count; j++)
+            {
+                if (t->proc_metadata.returns[j] != returns[j])
+                {
+                    match = false;
+                    break;
+                }
+            }
+        }
         if (match)
             return t;
     }
@@ -570,14 +580,22 @@ get_or_create_proc_type(
     td->kind = TD_KIND_PROC;
     td->proc_metadata.return_type = return_type;
     td->proc_metadata.param_count = param_count;
+    td->proc_metadata.return_count = return_count;
     td->proc_metadata.is_variadic = is_variadic;
-    td->proc_metadata.is_void_return = (return_type == NULL || return_type == registry->void_type);
+    td->proc_metadata.is_void_return
+        = (return_count == 0 && (return_type == NULL || return_type == registry->void_type));
     td->proc_metadata.calling_convention = calling_convention;
 
     if (param_count > 0)
     {
         td->proc_metadata.params = malloc((size_t)param_count * sizeof(*td->proc_metadata.params));
         memcpy((void *)td->proc_metadata.params, params, (size_t)param_count * sizeof(*td->proc_metadata.params));
+    }
+
+    if (return_count > 0)
+    {
+        td->proc_metadata.returns = malloc((size_t)return_count * sizeof(*td->proc_metadata.returns));
+        memcpy((void *)td->proc_metadata.returns, returns, (size_t)return_count * sizeof(*td->proc_metadata.returns));
     }
 
     bool has_context_param = (calling_convention == CALLING_CONV_ODIN && registry->context_type != NULL);
@@ -597,7 +615,21 @@ get_or_create_proc_type(
             llvm_params[idx++] = params[i]->llvm_type;
         }
     }
-    LLVMTypeRef ret_llvm = return_type ? return_type->llvm_type : LLVMVoidTypeInContext(registry->context);
+
+    LLVMTypeRef ret_llvm;
+    if (return_count > 1)
+    {
+        LLVMTypeRef * ret_types = malloc((size_t)return_count * sizeof(*ret_types));
+        for (int i = 0; i < return_count; i++)
+            ret_types[i] = returns[i]->llvm_type;
+        ret_llvm = LLVMStructTypeInContext(registry->context, ret_types, (unsigned)return_count, false);
+        free(ret_types);
+    }
+    else
+    {
+        ret_llvm = return_type ? return_type->llvm_type : LLVMVoidTypeInContext(registry->context);
+    }
+
     td->proc_metadata.func_type = LLVMFunctionType(ret_llvm, llvm_params, (unsigned)llvm_param_count, is_variadic);
     td->llvm_type = LLVMPointerType(td->proc_metadata.func_type, 0);
     free(llvm_params);
