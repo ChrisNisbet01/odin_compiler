@@ -929,7 +929,9 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                         LLVMBuildStore(ctx->builder, init_val, tmp);
                         data_ptr = LLVMBuildBitCast(ctx->builder, tmp, i8ptr, "anydata");
                     }
-                    LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+                    int64_t init_tid
+                        = (init_node->resolved_type != NULL) ? (int64_t)init_node->resolved_type->type_id : 0;
+                    LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), init_tid, false);
                     LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
                     LLVMValueRef gep0[2] = {zero_idx, idx1};
                     LLVMValueRef data_field
@@ -1726,7 +1728,13 @@ ir_gen_ternary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 // Pack a value into an 'any' struct {i8* data, i64 type_id}.
 // lhs_ptr must be a pointer to an any struct alloca.
 static void
-ir_gen_pack_any(IrGenContext * ctx, LLVMValueRef lhs_ptr, LLVMValueRef rhs_val, LLVMTypeRef any_struct_type)
+ir_gen_pack_any(
+    IrGenContext * ctx,
+    LLVMValueRef lhs_ptr,
+    LLVMValueRef rhs_val,
+    LLVMTypeRef any_struct_type,
+    TypeDescriptor const * source_type
+)
 {
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
     LLVMValueRef zero_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
@@ -1747,7 +1755,8 @@ ir_gen_pack_any(IrGenContext * ctx, LLVMValueRef lhs_ptr, LLVMValueRef rhs_val, 
         LLVMBuildStore(ctx->builder, rhs_val, tmp);
         data_ptr = LLVMBuildBitCast(ctx->builder, tmp, i8ptr, "anydata");
     }
-    LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+    int64_t tid = (source_type != NULL) ? (int64_t)source_type->type_id : 0;
+    LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), tid, false);
     LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
     LLVMValueRef gep0[2] = {zero_idx, idx1};
     LLVMValueRef data_field = LLVMBuildInBoundsGEP2(ctx->builder, any_struct_type, lhs_ptr, gep0, 2, "any.data");
@@ -1967,7 +1976,9 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
         && strcmp(lhs_type_desc->as.basic.name, "any") == 0)
     {
-        ir_gen_pack_any(ctx, lhs_ptr, rhs_val, lhs_type_desc->llvm_type);
+        TypeDescriptor const * rhs_type
+            = (node->list.count > 2 && node->list.children[2]) ? node->list.children[2]->resolved_type : NULL;
+        ir_gen_pack_any(ctx, lhs_ptr, rhs_val, lhs_type_desc->llvm_type, rhs_type);
         return rhs_val;
     }
 
@@ -2022,7 +2033,9 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
         && strcmp(lhs_type_desc->as.basic.name, "any") == 0)
     {
-        ir_gen_pack_any(ctx, lhs_ptr, rhs_val, lhs_type_desc->llvm_type);
+        TypeDescriptor const * rhs_type
+            = (node->list.count > 2 && node->list.children[2]) ? node->list.children[2]->resolved_type : NULL;
+        ir_gen_pack_any(ctx, lhs_ptr, rhs_val, lhs_type_desc->llvm_type, rhs_type);
         return rhs_val;
     }
 
@@ -3415,20 +3428,36 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             TypeDescriptor const * target_type = op->resolved_type;
             if (target_type == NULL)
                 break;
-            // Use alloca+store+GEP+Load to extract field 0 (data pointer) from the any struct
+            // Store the any struct to alloca so we can GEP into it
             LLVMValueRef tmp_alloca = LLVMBuildAlloca(ctx->builder, cur_type->llvm_type, "assert.tmp");
             LLVMBuildStore(ctx->builder, val, tmp_alloca);
             LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+            LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+            // Extract type_id field (field 1) for runtime type check
+            LLVMValueRef gep_id[2] = {idx0, idx1};
+            LLVMValueRef id_field
+                = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, tmp_alloca, gep_id, 2, "assert.typeid.ptr");
+            LLVMValueRef stored_type_id
+                = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), id_field, "assert.typeid");
+            int64_t expected_tid = (int64_t)target_type->type_id;
+            LLVMValueRef expected_type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), expected_tid, false);
+            LLVMValueRef type_match
+                = LLVMBuildICmp(ctx->builder, LLVMIntEQ, stored_type_id, expected_type_id, "assert.match");
+            // Create blocks for match/fail/continue
+            LLVMBasicBlockRef current_bb = LLVMGetInsertBlock(ctx->builder);
+            LLVMValueRef current_func = LLVMGetBasicBlockParent(current_bb);
+            LLVMBasicBlockRef match_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "assert.match");
+            LLVMBasicBlockRef fail_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "assert.fail");
+            LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "assert.cont");
+            LLVMBuildCondBr(ctx->builder, type_match, match_bb, fail_bb);
+            // --- Match block: extract data ---
+            LLVMPositionBuilderAtEnd(ctx->builder, match_bb);
             LLVMValueRef gep_data[2] = {idx0, idx0};
             LLVMValueRef data_field
                 = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, tmp_alloca, gep_data, 2, "assert.data.ptr");
             LLVMValueRef data_ptr = LLVMBuildLoad2(
                 ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_field, "assert.data"
             );
-            // Extract according to target type:
-            // - integer: data was packed via inttoptr, so ptrtoint back
-            // - pointer: data was packed via bitcast, so bitcast back
-            // - struct/array: data was packed via alloca+store+bitcast, so load through
             if (target_type->kind == TD_KIND_BASIC && !target_type->as.basic.is_float && target_type->as.basic.width > 0
                 && target_type->as.basic.width <= 64)
             {
@@ -3446,6 +3475,26 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 val = LLVMBuildLoad2(ctx->builder, target_type->llvm_type, typed_ptr, "assert.val");
             }
             cur_type = target_type;
+            LLVMBuildBr(ctx->builder, cont_bb);
+            // --- Fail block: trap ---
+            LLVMPositionBuilderAtEnd(ctx->builder, fail_bb);
+            {
+                LLVMValueRef trap_func = LLVMGetNamedFunction(ctx->module, "llvm.trap");
+                LLVMTypeRef trap_ftype;
+                if (trap_func == NULL)
+                {
+                    trap_ftype = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), NULL, 0, false);
+                    trap_func = LLVMAddFunction(ctx->module, "llvm.trap", trap_ftype);
+                }
+                else
+                {
+                    trap_ftype = LLVMGlobalGetValueType(trap_func);
+                }
+                LLVMBuildCall2(ctx->builder, trap_ftype, trap_func, NULL, 0, "");
+            }
+            LLVMBuildUnreachable(ctx->builder);
+            // --- Continue block ---
+            LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
             break;
         }
 

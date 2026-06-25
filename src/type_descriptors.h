@@ -71,6 +71,7 @@ typedef struct
 typedef struct TypeDescriptor
 {
     td_kind_t kind;
+    int type_id;
     LLVMTypeRef llvm_type;
 
     TypeDescriptor const * pointee;

@@ -38,6 +38,7 @@ type_descriptor_alloc(TypeDescriptors * registry)
     TypeDescriptor * td = calloc(1, sizeof(*td));
     if (td == NULL)
         return NULL;
+    td->type_id = registry->count;
     registry->types[registry->count++] = td;
     return td;
 }
