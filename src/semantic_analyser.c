@@ -966,6 +966,13 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return bool_type;
     }
 
+    case AST_NODE_AUTO_CAST_EXPR:
+    {
+        if (node->list.count >= 1)
+            sem_evaluate_expr(ctx, node->list.children[0]);
+        return NULL;
+    }
+
     case AST_NODE_CAST_EXPR:
     case AST_NODE_TRANSMUTE_EXPR:
     {
@@ -1520,6 +1527,25 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
                 if (expr == NULL)
                     continue;
                 TypeDescriptor const * expr_type = sem_evaluate_expr(ctx, expr);
+                {
+                    odin_grammar_node_t * inner = expr;
+                    while (
+                        inner != NULL && inner->list.count > 0
+                        && (inner->type == AST_NODE_ASSIGN_EXPRESSION || inner->type == AST_NODE_OR_ELSE
+                            || inner->type == AST_NODE_TERNARY_EXPRESSION || inner->type == AST_NODE_RANGE_EXPRESSION
+                            || inner->type == AST_NODE_LOG_OR_EXPRESSION || inner->type == AST_NODE_LOG_AND_EXPRESSION
+                            || inner->type == AST_NODE_COMP_EXPRESSION || inner->type == AST_NODE_BIT_OR_EXPRESSION
+                            || inner->type == AST_NODE_BIT_XOR_EXPRESSION || inner->type == AST_NODE_BIT_AND_EXPRESSION
+                            || inner->type == AST_NODE_SHIFT_EXPRESSION || inner->type == AST_NODE_ADD_EXPRESSION
+                            || inner->type == AST_NODE_MUL_EXPRESSION || inner->type == AST_NODE_UNARY_EXPRESSION
+                            || inner->type == AST_NODE_POSTFIX_EXPRESSION || inner->type == AST_NODE_PRIMARY_EXPRESSION)
+                    )
+                    {
+                        inner = inner->list.children[0];
+                    }
+                    if (inner != NULL && inner->type == AST_NODE_AUTO_CAST_EXPR)
+                        continue;
+                }
                 if (expr_type != pm->returns[i])
                 {
                     sem_error_list_add(&ctx->errors, node, "return type mismatch");
@@ -1555,6 +1581,30 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
     {
         sem_error_list_add(&ctx->errors, node, "unexpected return value in void procedure");
         return;
+    }
+
+    // Check if expression contains an auto_cast at any depth
+    {
+        bool has_auto_cast = false;
+        odin_grammar_node_t * queue[32];
+        int q_head = 0, q_tail = 0;
+        queue[q_tail++] = expr;
+        while (q_head < q_tail && !has_auto_cast)
+        {
+            odin_grammar_node_t * n = queue[q_head++];
+            if (n->type == AST_NODE_AUTO_CAST_EXPR)
+            {
+                has_auto_cast = true;
+                break;
+            }
+            for (size_t ci = 0; ci < n->list.count && (q_tail < 32); ci++)
+            {
+                if (n->list.children[ci] != NULL)
+                    queue[q_tail++] = n->list.children[ci];
+            }
+        }
+        if (has_auto_cast)
+            return;
     }
 
     if (expr_type != expected_return_type)
@@ -2383,3 +2433,5 @@ sem_analyse(SemContext * ctx)
 
     return true;
 }
+
+#include <stdio.h>

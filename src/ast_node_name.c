@@ -95,6 +95,12 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "UnionField";
     case AST_NODE_UNION_FIELD_LIST:
         return "UnionFieldList";
+    case AST_NODE_AUTO_CAST_EXPR:
+        return "AutoCastExpr";
+    case AST_NODE_CAST_EXPR:
+        return "CastExpr";
+    case AST_NODE_TRANSMUTE_EXPR:
+        return "TransmuteExpr";
     case AST_NODE_BIT_FIELD_FIELD:
         return "BitFieldField";
     case AST_NODE_BIT_FIELD_FIELD_LIST:

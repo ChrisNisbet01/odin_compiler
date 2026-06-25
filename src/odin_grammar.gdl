@@ -310,6 +310,7 @@ UnaryOpXor = Caret @AST_ACTION_UNARY_OP;
 UnaryOpAddr = Amp @AST_ACTION_UNARY_OP;
 UnaryOp = UnaryOpNot | UnaryOpNeg | UnaryOpPos | UnaryOpXor | UnaryOpAddr;
 UnaryPrefix = (UnaryOp UnaryExpression) @AST_ACTION_UNARY_PREFIX;
+AutoCastExpr = KwAutoCast UnaryExpression @AST_ACTION_AUTO_CAST_EXPR;
 CastExpr = KwCast LParen TypeName RParen UnaryExpression @AST_ACTION_CAST_EXPR;
 TransmuteExpr = KwTransmute LParen TypeName RParen UnaryExpression @AST_ACTION_TRANSMUTE_EXPR;
 LenExpr = KwLen LParen Expression RParen @AST_ACTION_LEN_EXPR;
@@ -319,7 +320,7 @@ NewExpr = KwNew LParen TypePrefix RParen @AST_ACTION_NEW_EXPR;
 DeleteExpr = KwDelete LParen Expression RParen @AST_ACTION_DELETE_EXPR;
 InclExpr = KwIncl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_INCL_EXPR;
 ExclExpr = KwExcl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_EXCL_EXPR;
-UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | UnaryPrefix | PostfixExpression;
+UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | UnaryPrefix | PostfixExpression;
 
 MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
 MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;

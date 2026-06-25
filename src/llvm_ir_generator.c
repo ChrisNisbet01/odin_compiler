@@ -21,6 +21,7 @@ static odin_grammar_node_t * expression_unwrap_to_identifier(odin_grammar_node_t
 static void ir_gen_emit_defers_at_depth(IrGenContext * ctx, int depth);
 static void ir_gen_emit_defers_from_depth(IrGenContext * ctx, int min_depth);
 static void ir_gen_emit_all_defers(IrGenContext * ctx);
+static bool ir_gen_node_contains_auto_cast(odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_or_else_expression(IrGenContext * ctx, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_or_return_expression(IrGenContext * ctx, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_ternary_expression(IrGenContext * ctx, odin_grammar_node_t * node);
@@ -135,6 +136,52 @@ ir_gen_implicit_return(IrGenContext * ctx)
     {
         LLVMBuildRet(ctx->builder, LLVMConstNull(ret_type));
     }
+}
+
+// --- Auto-cast helper ---
+
+static LLVMValueRef
+ir_gen_auto_cast_value(IrGenContext * ctx, LLVMValueRef src_val, LLVMTypeRef target_type)
+{
+    if (src_val == NULL || target_type == NULL)
+        return src_val;
+
+    LLVMTypeRef src_llvm_type = LLVMTypeOf(src_val);
+    LLVMTypeKind src_kind = LLVMGetTypeKind(src_llvm_type);
+    LLVMTypeKind dest_kind = LLVMGetTypeKind(target_type);
+
+    if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMIntegerTypeKind)
+    {
+        unsigned src_w = LLVMGetIntTypeWidth(src_llvm_type);
+        unsigned dst_w = LLVMGetIntTypeWidth(target_type);
+        if (dst_w > src_w)
+            return LLVMBuildIntCast2(ctx->builder, src_val, target_type, false, "auto.zext");
+        else if (dst_w < src_w)
+            return LLVMBuildIntCast2(ctx->builder, src_val, target_type, false, "auto.trunc");
+        return src_val;
+    }
+    else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
+             && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
+    {
+        return LLVMBuildFPCast(ctx->builder, src_val, target_type, "auto.fpcast");
+    }
+    else if (src_kind == LLVMIntegerTypeKind && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
+    {
+        return LLVMBuildSIToFP(ctx->builder, src_val, target_type, "auto.sitofp");
+    }
+    else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind) && dest_kind == LLVMIntegerTypeKind)
+    {
+        return LLVMBuildFPToSI(ctx->builder, src_val, target_type, "auto.fptosi");
+    }
+    else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMIntegerTypeKind)
+    {
+        return LLVMBuildPtrToInt(ctx->builder, src_val, target_type, "auto.ptrint");
+    }
+    else if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMPointerTypeKind)
+    {
+        return LLVMBuildIntToPtr(ctx->builder, src_val, target_type, "auto.intptr");
+    }
+    return src_val;
 }
 
 // --- Expression codegen ---
@@ -609,36 +656,48 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOEQ, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntEQ, lhs, rhs, "cmptmp");
+        if (is_float)
+            return cmp;
         return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
     }
     case OP_NE:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealONE, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntNE, lhs, rhs, "cmptmp");
+        if (is_float)
+            return cmp;
         return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
     }
     case OP_LT:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOLT, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntSLT, lhs, rhs, "cmptmp");
+        if (is_float)
+            return cmp;
         return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
     }
     case OP_GT:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOGT, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntSGT, lhs, rhs, "cmptmp");
+        if (is_float)
+            return cmp;
         return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
     }
     case OP_LE:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOLE, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntSLE, lhs, rhs, "cmptmp");
+        if (is_float)
+            return cmp;
         return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
     }
     case OP_GE:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOGE, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntSGE, lhs, rhs, "cmptmp");
+        if (is_float)
+            return cmp;
         return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
     }
     case OP_LOG_AND:
@@ -928,7 +987,6 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         if (struct_val == NULL)
             return NULL;
 
-        LLVMTypeRef struct_type = LLVMTypeOf(struct_val);
         for (size_t i = 0; i < id_count; i++)
         {
             odin_grammar_node_t * name_node = id_list->list.children[i];
@@ -964,7 +1022,10 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
     if (init_node)
     {
+        if (ir_gen_node_contains_auto_cast(init_node))
+            ctx->auto_cast_target_type = var_type->llvm_type;
         LLVMValueRef init_val = ir_gen_node(ctx, init_node);
+        ctx->auto_cast_target_type = NULL;
         if (init_val)
         {
             if (var_type && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
@@ -2149,6 +2210,21 @@ ir_gen_emit_all_defers(IrGenContext * ctx)
     ctx->defer_count = 0;
 }
 
+static bool
+ir_gen_node_contains_auto_cast(odin_grammar_node_t * node)
+{
+    if (node == NULL)
+        return false;
+    if (node->type == AST_NODE_AUTO_CAST_EXPR)
+        return true;
+    for (size_t ci = 0; ci < node->list.count; ci++)
+    {
+        if (ir_gen_node_contains_auto_cast(node->list.children[ci]))
+            return true;
+    }
+    return false;
+}
+
 // --- Statement codegen ---
 
 static LLVMValueRef
@@ -2170,7 +2246,14 @@ ir_gen_return_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMValueRef vals[16];
     for (int i = 0; i < expr_count; i++)
     {
+        if (expr_count == 1 && ir_gen_node_contains_auto_cast(exprs[i]))
+        {
+            LLVMValueRef func = func_current_function(ctx);
+            LLVMTypeRef func_type = LLVMGlobalGetValueType(func);
+            ctx->auto_cast_target_type = LLVMGetReturnType(func_type);
+        }
         vals[i] = ir_gen_node(ctx, exprs[i]);
+        ctx->auto_cast_target_type = NULL;
         if (vals[i] == NULL && expr_count > 0)
             return NULL;
     }
@@ -3754,6 +3837,21 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_BOOL_TRUE:
     case AST_NODE_BOOL_FALSE:
         return ir_gen_bool_value(ctx, node);
+
+    case AST_NODE_AUTO_CAST_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        LLVMValueRef src_val = ir_gen_node(ctx, node->list.children[0]);
+        if (src_val == NULL)
+            return NULL;
+
+        LLVMTypeRef target = ctx->auto_cast_target_type;
+        ctx->auto_cast_target_type = NULL;
+        if (target == NULL)
+            return src_val;
+        return ir_gen_auto_cast_value(ctx, src_val, target);
+    }
 
     case AST_NODE_CAST_EXPR:
     {

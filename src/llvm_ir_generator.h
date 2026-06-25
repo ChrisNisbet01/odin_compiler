@@ -58,6 +58,8 @@ typedef struct
     DeferEntry defer_stack[MAX_DEFERS];
     int defer_count;
     int current_scope_depth;
+
+    LLVMTypeRef auto_cast_target_type;
 } IrGenContext;
 
 IrGenContext *
