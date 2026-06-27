@@ -49,5 +49,26 @@ main :: proc() -> int {
         result = result + 64
     }
 
+    // Test type assertion on union (unique field types)
+    ut: union { a: i32; b: i64 }
+    ut.a = 42
+    va := ut.(i32)
+    if va != 42 {
+        result = result + 128
+    }
+
+    ut.b = 1234567890123
+    vb := ut.(i64)
+    if vb != 1234567890123 {
+        result = result + 256
+    }
+
+    // Write i32 field again, then assert i32
+    ut.a = 77
+    vc := ut.(i32)
+    if vc != 77 {
+        result = result + 512
+    }
+
     return result
 }

@@ -3643,80 +3643,144 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
         case AST_NODE_POSTFIX_ASSERTION:
         {
-            // Type assertion x.(T) for 'any': extract data pointer, bitcast, load
-            if (cur_type == NULL || cur_type->kind != TD_KIND_BASIC || cur_type->as.basic.name == NULL
-                || strcmp(cur_type->as.basic.name, "any") != 0)
-                break;
             TypeDescriptor const * target_type = op->resolved_type;
             if (target_type == NULL)
                 break;
-            // Store the any struct to alloca so we can GEP into it
-            LLVMValueRef tmp_alloca = LLVMBuildAlloca(ctx->builder, cur_type->llvm_type, "assert.tmp");
-            LLVMBuildStore(ctx->builder, val, tmp_alloca);
-            LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-            LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
-            // Extract type_id field (field 1) for runtime type check
-            LLVMValueRef gep_id[2] = {idx0, idx1};
-            LLVMValueRef id_field
-                = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, tmp_alloca, gep_id, 2, "assert.typeid.ptr");
-            LLVMValueRef stored_type_id
-                = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), id_field, "assert.typeid");
-            int64_t expected_tid = (int64_t)target_type->type_id;
-            LLVMValueRef expected_type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), expected_tid, false);
-            LLVMValueRef type_match
-                = LLVMBuildICmp(ctx->builder, LLVMIntEQ, stored_type_id, expected_type_id, "assert.match");
-            // Create blocks for match/fail/continue
-            LLVMBasicBlockRef current_bb = LLVMGetInsertBlock(ctx->builder);
-            LLVMValueRef current_func = LLVMGetBasicBlockParent(current_bb);
-            LLVMBasicBlockRef match_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "assert.match");
-            LLVMBasicBlockRef fail_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "assert.fail");
-            LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "assert.cont");
-            LLVMBuildCondBr(ctx->builder, type_match, match_bb, fail_bb);
-            // --- Match block: extract data ---
-            LLVMPositionBuilderAtEnd(ctx->builder, match_bb);
-            LLVMValueRef gep_data[2] = {idx0, idx0};
-            LLVMValueRef data_field
-                = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, tmp_alloca, gep_data, 2, "assert.data.ptr");
-            LLVMValueRef data_ptr = LLVMBuildLoad2(
-                ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_field, "assert.data"
-            );
-            if (target_type->kind == TD_KIND_BASIC && !target_type->as.basic.is_float && target_type->as.basic.width > 0
-                && target_type->as.basic.width <= 64)
+
+            // Type assertion x.(T) for 'any': extract data pointer, bitcast, load
+            if (cur_type && cur_type->kind == TD_KIND_BASIC && cur_type->as.basic.name
+                && strcmp(cur_type->as.basic.name, "any") == 0)
             {
-                val = LLVMBuildPtrToInt(ctx->builder, data_ptr, target_type->llvm_type, "assert.val");
-            }
-            else if (target_type->kind == TD_KIND_POINTER)
-            {
-                val = LLVMBuildBitCast(ctx->builder, data_ptr, target_type->llvm_type, "assert.val");
-            }
-            else
-            {
-                LLVMValueRef typed_ptr = LLVMBuildBitCast(
-                    ctx->builder, data_ptr, LLVMPointerType(target_type->llvm_type, 0), "assert.typed"
+                // Store the any struct to alloca so we can GEP into it
+                LLVMValueRef tmp_alloca = LLVMBuildAlloca(ctx->builder, cur_type->llvm_type, "assert.tmp");
+                LLVMBuildStore(ctx->builder, val, tmp_alloca);
+                LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+                // Extract type_id field (field 1) for runtime type check
+                LLVMValueRef gep_id[2] = {idx0, idx1};
+                LLVMValueRef id_field = LLVMBuildInBoundsGEP2(
+                    ctx->builder, cur_type->llvm_type, tmp_alloca, gep_id, 2, "assert.typeid.ptr"
                 );
-                val = LLVMBuildLoad2(ctx->builder, target_type->llvm_type, typed_ptr, "assert.val");
-            }
-            cur_type = target_type;
-            LLVMBuildBr(ctx->builder, cont_bb);
-            // --- Fail block: trap ---
-            LLVMPositionBuilderAtEnd(ctx->builder, fail_bb);
-            {
-                LLVMValueRef trap_func = LLVMGetNamedFunction(ctx->module, "llvm.trap");
-                LLVMTypeRef trap_ftype;
-                if (trap_func == NULL)
+                LLVMValueRef stored_type_id
+                    = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), id_field, "assert.typeid");
+                int64_t expected_tid = (int64_t)target_type->type_id;
+                LLVMValueRef expected_type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), expected_tid, false);
+                LLVMValueRef type_match
+                    = LLVMBuildICmp(ctx->builder, LLVMIntEQ, stored_type_id, expected_type_id, "assert.match");
+                // Create blocks for match/fail/continue
+                LLVMBasicBlockRef current_bb = LLVMGetInsertBlock(ctx->builder);
+                LLVMValueRef current_func = LLVMGetBasicBlockParent(current_bb);
+                LLVMBasicBlockRef match_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "assert.match");
+                LLVMBasicBlockRef fail_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "assert.fail");
+                LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "assert.cont");
+                LLVMBuildCondBr(ctx->builder, type_match, match_bb, fail_bb);
+                // --- Match block: extract data ---
+                LLVMPositionBuilderAtEnd(ctx->builder, match_bb);
+                LLVMValueRef gep_data[2] = {idx0, idx0};
+                LLVMValueRef data_field = LLVMBuildInBoundsGEP2(
+                    ctx->builder, cur_type->llvm_type, tmp_alloca, gep_data, 2, "assert.data.ptr"
+                );
+                LLVMValueRef data_ptr = LLVMBuildLoad2(
+                    ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_field, "assert.data"
+                );
+                if (target_type->kind == TD_KIND_BASIC && !target_type->as.basic.is_float
+                    && target_type->as.basic.width > 0 && target_type->as.basic.width <= 64)
                 {
-                    trap_ftype = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), NULL, 0, false);
-                    trap_func = LLVMAddFunction(ctx->module, "llvm.trap", trap_ftype);
+                    val = LLVMBuildPtrToInt(ctx->builder, data_ptr, target_type->llvm_type, "assert.val");
+                }
+                else if (target_type->kind == TD_KIND_POINTER)
+                {
+                    val = LLVMBuildBitCast(ctx->builder, data_ptr, target_type->llvm_type, "assert.val");
                 }
                 else
                 {
-                    trap_ftype = LLVMGlobalGetValueType(trap_func);
+                    LLVMValueRef typed_ptr = LLVMBuildBitCast(
+                        ctx->builder, data_ptr, LLVMPointerType(target_type->llvm_type, 0), "assert.typed"
+                    );
+                    val = LLVMBuildLoad2(ctx->builder, target_type->llvm_type, typed_ptr, "assert.val");
                 }
-                LLVMBuildCall2(ctx->builder, trap_ftype, trap_func, NULL, 0, "");
+                cur_type = target_type;
+                LLVMBuildBr(ctx->builder, cont_bb);
+                // --- Fail block: trap ---
+                LLVMPositionBuilderAtEnd(ctx->builder, fail_bb);
+                {
+                    LLVMValueRef trap_func = LLVMGetNamedFunction(ctx->module, "llvm.trap");
+                    LLVMTypeRef trap_ftype;
+                    if (trap_func == NULL)
+                    {
+                        trap_ftype = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), NULL, 0, false);
+                        trap_func = LLVMAddFunction(ctx->module, "llvm.trap", trap_ftype);
+                    }
+                    else
+                    {
+                        trap_ftype = LLVMGlobalGetValueType(trap_func);
+                    }
+                    LLVMBuildCall2(ctx->builder, trap_ftype, trap_func, NULL, 0, "");
+                }
+                LLVMBuildUnreachable(ctx->builder);
+                // --- Continue block ---
+                LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
             }
-            LLVMBuildUnreachable(ctx->builder);
-            // --- Continue block ---
-            LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
+            else if (cur_type && cur_type->kind == TD_KIND_UNION)
+            {
+                // Type assertion x.(T) for union: check tag vs field index
+                int field_idx = (int)(intptr_t)op->resolved_symbol;
+                if (field_idx < 0)
+                    break;
+
+                // val is a pointer to the union struct {i64 tag, [N x i8] payload}
+                LLVMValueRef ptr = val;
+                LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+                // Extract tag (field 0) for runtime tag check
+                LLVMValueRef tag_indices[2] = {idx0, idx0};
+                LLVMValueRef tag_ptr
+                    = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, ptr, tag_indices, 2, "uassert.tag.gep");
+                LLVMValueRef stored_tag
+                    = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), tag_ptr, "uassert.tag");
+                LLVMValueRef expected_tag
+                    = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)field_idx, false);
+                LLVMValueRef tag_match
+                    = LLVMBuildICmp(ctx->builder, LLVMIntEQ, stored_tag, expected_tag, "uassert.match");
+                // Create blocks for match/fail/continue
+                LLVMBasicBlockRef current_bb = LLVMGetInsertBlock(ctx->builder);
+                LLVMValueRef current_func = LLVMGetBasicBlockParent(current_bb);
+                LLVMBasicBlockRef match_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "uassert.match");
+                LLVMBasicBlockRef fail_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "uassert.fail");
+                LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "uassert.cont");
+                LLVMBuildCondBr(ctx->builder, tag_match, match_bb, fail_bb);
+                // --- Match block: extract payload ---
+                LLVMPositionBuilderAtEnd(ctx->builder, match_bb);
+                LLVMValueRef payload_indices[2] = {idx0, idx1};
+                LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(
+                    ctx->builder, cur_type->llvm_type, ptr, payload_indices, 2, "uassert.payload.gep"
+                );
+                LLVMValueRef typed_ptr = LLVMBuildPointerCast(
+                    ctx->builder, payload_ptr, LLVMPointerType(target_type->llvm_type, 0), "uassert.typed"
+                );
+                val = LLVMBuildLoad2(ctx->builder, target_type->llvm_type, typed_ptr, "uassert.val");
+                cur_type = target_type;
+                LLVMBuildBr(ctx->builder, cont_bb);
+                // --- Fail block: trap ---
+                LLVMPositionBuilderAtEnd(ctx->builder, fail_bb);
+                {
+                    LLVMValueRef trap_func = LLVMGetNamedFunction(ctx->module, "llvm.trap");
+                    LLVMTypeRef trap_ftype;
+                    if (trap_func == NULL)
+                    {
+                        trap_ftype = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), NULL, 0, false);
+                        trap_func = LLVMAddFunction(ctx->module, "llvm.trap", trap_ftype);
+                    }
+                    else
+                    {
+                        trap_ftype = LLVMGlobalGetValueType(trap_func);
+                    }
+                    LLVMBuildCall2(ctx->builder, trap_ftype, trap_func, NULL, 0, "");
+                }
+                LLVMBuildUnreachable(ctx->builder);
+                // --- Continue block ---
+                LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
+            }
             break;
         }
 

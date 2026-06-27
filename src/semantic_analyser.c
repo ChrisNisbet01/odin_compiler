@@ -1542,7 +1542,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
             case AST_NODE_POSTFIX_ASSERTION:
             {
-                // Type assertion x.(T): only valid for 'any' type currently
+                // Type assertion x.(T)
                 if (type && type->kind == TD_KIND_BASIC && type->as.basic.name
                     && strcmp(type->as.basic.name, "any") == 0)
                 {
@@ -1553,6 +1553,32 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                         {
                             type = target_type;
                             op->resolved_type = (TypeDescriptor *)type;
+                        }
+                    }
+                }
+                else if (type && type->kind == TD_KIND_UNION)
+                {
+                    if (op->list.count > 0)
+                    {
+                        TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, op->list.children[0]);
+                        if (target_type)
+                        {
+                            // Find which union field matches the asserted type
+                            int field_idx = -1;
+                            for (int i = 0; i < type->union_metadata.members.count; i++)
+                            {
+                                if (type->union_metadata.members.fields[i].type_desc->type_id == target_type->type_id)
+                                {
+                                    field_idx = i;
+                                    break;
+                                }
+                            }
+                            if (field_idx >= 0)
+                            {
+                                type = target_type;
+                                op->resolved_type = (TypeDescriptor *)type;
+                                op->resolved_symbol = (symbol_t *)(intptr_t)field_idx;
+                            }
                         }
                     }
                 }
