@@ -1,5 +1,7 @@
 #include "ast_node_name.h"
 
+#include <stdio.h>
+
 char const *
 get_node_type_name_from_node(odin_grammar_node_t const * node)
 {
@@ -109,6 +111,195 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "StructField";
     case AST_NODE_STRUCT_FIELD_LIST:
         return "StructFieldList";
+    case AST_NODE_PRIMARY_EXPRESSION:
+        return "PrimaryExpression";
+    case AST_NODE_POSTFIX_CALL:
+        return "PostfixCall";
+    case AST_NODE_POSTFIX_SUBSCRIPT:
+        return "PostfixSubscript";
+    case AST_NODE_POSTFIX_SLICE:
+        return "PostfixSlice";
+    case AST_NODE_POSTFIX_SLICE_LT:
+        return "PostfixSliceLt";
+    case AST_NODE_POSTFIX_MEMBER:
+        return "PostfixMember";
+    case AST_NODE_POSTFIX_DEREF:
+        return "PostfixDeref";
+    case AST_NODE_POSTFIX_ASSERTION:
+        return "PostfixAssertion";
+    case AST_NODE_POSTFIX_OPS:
+        return "PostfixOps";
+    case AST_NODE_POSTFIX_EXPRESSION:
+        return "PostfixExpression";
+    case AST_NODE_UNARY_OP:
+        return "UnaryOp";
+    case AST_NODE_UNARY_EXPRESSION:
+        return "UnaryExpression";
+    case AST_NODE_MUL_OP:
+        return "MulOp";
+    case AST_NODE_MUL_EXPRESSION:
+        return "MulExpression";
+    case AST_NODE_ADD_OP:
+        return "AddOp";
+    case AST_NODE_ADD_EXPRESSION:
+        return "AddExpression";
+    case AST_NODE_SHIFT_OP:
+        return "ShiftOp";
+    case AST_NODE_SHIFT_EXPRESSION:
+        return "ShiftExpression";
+    case AST_NODE_BIT_AND_OP:
+        return "BitAndOp";
+    case AST_NODE_BIT_AND_EXPRESSION:
+        return "BitAndExpression";
+    case AST_NODE_BIT_XOR_OP:
+        return "BitXorOp";
+    case AST_NODE_BIT_XOR_EXPRESSION:
+        return "BitXorExpression";
+    case AST_NODE_BIT_OR_OP:
+        return "BitOrOp";
+    case AST_NODE_BIT_OR_EXPRESSION:
+        return "BitOrExpression";
+    case AST_NODE_COMP_OP:
+        return "CompOp";
+    case AST_NODE_COMP_EXPRESSION:
+        return "CompExpression";
+    case AST_NODE_LOG_AND_OP:
+        return "LogAndOp";
+    case AST_NODE_LOG_AND_EXPRESSION:
+        return "LogAndExpression";
+    case AST_NODE_LOG_OR_OP:
+        return "LogOrOp";
+    case AST_NODE_LOG_OR_EXPRESSION:
+        return "LogOrExpression";
+    case AST_NODE_RANGE_OP:
+        return "RangeOp";
+    case AST_NODE_RANGE_EXPRESSION:
+        return "RangeExpression";
+    case AST_NODE_TERNARY_EXPRESSION:
+        return "TernaryExpression";
+    case AST_NODE_OR_ELSE:
+        return "OrElse";
+    case AST_NODE_OR_RETURN:
+        return "OrReturn";
+    case AST_NODE_ASSIGN_OP:
+        return "AssignOp";
+    case AST_NODE_ASSIGN_EXPRESSION:
+        return "AssignExpression";
+    case AST_NODE_EXPRESSION:
+        return "Expression";
+    case AST_NODE_ARGUMENT_LIST:
+        return "ArgumentList";
+    case AST_NODE_COMPOUND_STATEMENT:
+        return "CompoundStatement";
+    case AST_NODE_DEFER_STATEMENT:
+        return "DeferStatement";
+    case AST_NODE_WHEN_STATEMENT:
+        return "WhenStatement";
+    case AST_NODE_IF_STATEMENT:
+        return "IfStatement";
+    case AST_NODE_FOR_STATEMENT:
+        return "ForStatement";
+    case AST_NODE_SWITCH_STATEMENT:
+        return "SwitchStatement";
+    case AST_NODE_SWITCH_CASE:
+        return "SwitchCase";
+    case AST_NODE_SWITCH_DEFAULT:
+        return "SwitchDefault";
+    case AST_NODE_RETURN_STATEMENT:
+        return "ReturnStatement";
+    case AST_NODE_BREAK_STATEMENT:
+        return "BreakStatement";
+    case AST_NODE_CONTINUE_STATEMENT:
+        return "ContinueStatement";
+    case AST_NODE_FALLTHROUGH_STATEMENT:
+        return "FallthroughStatement";
+    case AST_NODE_ASSIGN_STATEMENT:
+        return "AssignStatement";
+    case AST_NODE_EXPRESSION_STATEMENT:
+        return "ExpressionStatement";
+    case AST_NODE_PROCEDURE_LITERAL:
+        return "ProcedureLiteral";
+    case AST_NODE_VARIABLE_DECL:
+        return "VariableDecl";
+    case AST_NODE_CONSTANT_DECL:
+        return "ConstantDecl";
+    case AST_NODE_FOREIGN_IMPORT:
+        return "ForeignImport";
+    case AST_NODE_FOREIGN_BLOCK:
+        return "ForeignBlock";
+    case AST_NODE_WHEN_DECL:
+        return "WhenDecl";
+    case AST_NODE_USING_DECL:
+        return "UsingDecl";
+    case AST_NODE_TOP_LEVEL_DECLARATION:
+        return "TopLevelDeclaration";
+    case AST_NODE_DIRECTIVE:
+        return "Directive";
+    case AST_NODE_DIRECTIVE_WITH_ARGS:
+        return "DirectiveWithArgs";
+    case AST_NODE_INTEGER_BASE:
+        return "IntegerBase";
+    case AST_NODE_INTEGER_VALUE:
+        return "IntegerValue";
+    case AST_NODE_FLOAT_BASE:
+        return "FloatBase";
+    case AST_NODE_FLOAT_VALUE:
+        return "FloatValue";
+    case AST_NODE_STRING_LITERAL:
+        return "StringLiteral";
+    case AST_NODE_RAW_STRING_LITERAL:
+        return "RawStringLiteral";
+    case AST_NODE_RUNE_LITERAL:
+        return "RuneLiteral";
+    case AST_NODE_BOOL_TRUE:
+        return "BoolTrue";
+    case AST_NODE_BOOL_FALSE:
+        return "BoolFalse";
+    case AST_NODE_NIL:
+        return "Nil";
+    case AST_NODE_NONE:
+        return "None";
+    case AST_NODE_LEN_EXPR:
+        return "LenExpr";
+    case AST_NODE_CAP_EXPR:
+        return "CapExpr";
+    case AST_NODE_MAKE_EXPR:
+        return "MakeExpr";
+    case AST_NODE_NEW_EXPR:
+        return "NewExpr";
+    case AST_NODE_DELETE_EXPR:
+        return "DeleteExpr";
+    case AST_NODE_INCL_EXPR:
+        return "InclExpr";
+    case AST_NODE_EXCL_EXPR:
+        return "ExclExpr";
+    case AST_NODE_ELLIPSIS:
+        return "Ellipsis";
     }
     return "Unknown";
+}
+
+static void
+debug_print_ast_recursive(odin_grammar_node_t const * node, int depth)
+{
+    if (node == NULL)
+    {
+        printf("%*sNULL\n", depth * 2, "");
+        return;
+    }
+    char const * name = get_node_type_name_from_node(node);
+    char const * text = node->text ? node->text : "";
+    size_t n = node->list.count;
+    printf("%*s%s", depth * 2, "", name);
+    if (text[0] != '\0')
+        printf(" \"%s\"", text);
+    printf(" (%zu children)\n", n);
+    for (size_t i = 0; i < n; i++)
+        debug_print_ast_recursive(node->list.children[i], depth + 1);
+}
+
+void
+debug_print_ast(odin_grammar_node_t const * node)
+{
+    debug_print_ast_recursive(node, 0);
 }

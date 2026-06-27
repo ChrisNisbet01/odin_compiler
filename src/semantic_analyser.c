@@ -1396,7 +1396,6 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
 
     case AST_NODE_EXPRESSION:
-    case AST_NODE_ASSIGN_EXPRESSION:
     case AST_NODE_PRIMARY_EXPRESSION:
     {
         if (node->list.count > 0)
@@ -1409,6 +1408,28 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             return inner_type;
         }
         return NULL;
+    }
+
+    case AST_NODE_ASSIGN_EXPRESSION:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        if (node->list.count == 1)
+        {
+            TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
+            if (inner_type)
+                node->resolved_type = (TypeDescriptor *)inner_type;
+            return inner_type;
+        }
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            if (node->list.children[i] != NULL)
+                sem_evaluate_expr(ctx, node->list.children[i]);
+        }
+        TypeDescriptor const * lhs_type = node->list.children[0] ? node->list.children[0]->resolved_type : NULL;
+        if (lhs_type)
+            node->resolved_type = (TypeDescriptor *)lhs_type;
+        return lhs_type;
     }
 
     case AST_NODE_POSTFIX_EXPRESSION:

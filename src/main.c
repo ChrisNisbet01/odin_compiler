@@ -1,3 +1,4 @@
+#include "ast_node_name.h"
 #include "generator_lists.h"
 #include "ir_gen_error.h"
 #include "llvm_ir_generator.h"
@@ -96,7 +97,8 @@ main(int argc, char * argv[])
 
     long src_len;
     char * src = read_file(filename, &src_len);
-    if (src == NULL) return EXIT_FAILURE;
+    if (src == NULL)
+        return EXIT_FAILURE;
 
     epc_parser_list * list = epc_parser_list_create();
     if (list == NULL)
