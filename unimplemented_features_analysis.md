@@ -1,4 +1,5 @@
 ## Completed
+- **foreign import** (`foreign import lib "lib.so"`) — Grammar, semantic analyser (pass 1 registration), IR generator (stores path, strips quotes, emits `!llvm.dependent.libraries` metadata for linker). Test harness extracts library names from metadata and passes as `-l` flags to clang. Tests pass.
 - **foreign blocks** (`foreign "lib" { ... }`) — Fully implemented: grammar, semantic analyser (pass 1 register + pass 2 type resolution), IR generator (emits `LLVMAddFunction` declarations). Tests pass.
 - **Per-procedure `"c"` convention** — Calling convention parsing with quote stripping, string-to-ptr-u8 coercion at call sites, no context param prepended for C functions.
 - **Top-level using** — Already parsed as AST_NODE_USING_DECL, semantic analyser and IR generator handle it. Tests pass.
@@ -8,9 +9,6 @@
 - **union type** — Grammar + AST + TD_KIND_UNION + is_type_node all in place. Needs: (a) get_or_create_union_type in type_descriptors.c (tagged union: {i64 tag, [union of fields]}), (b) semantic analyser to resolve fields and create the type, (c) IR generator to allocate with tag+payload and generate member accesses. The struct_members.h infrastructure (struct_or_union_members_st) can be reused.
 
 ## Remaining features (ranked Easiest → Hardest)
-
-Tier 2: Easy (infrastructure exists, limited scope)
-1. **foreign import** (`foreign import lib "lib.so"`) — Parsed as AST_NODE_FOREIGN_IMPORT, both sem and IR handlers are no-ops. Would emit LLVM `declare external` with library linkage metadata, or produce linker flags.
 
 Tier 3: Moderate
 2. **when declaration** — Already parsed with full grammar+AST. Can reuse the when statement pattern (treat as runtime if at top level, llvm_ir_generator.c:3963). Harder than statement-when because it needs to handle top-level declarations inside conditional branches and register them in the symbol table.

@@ -65,7 +65,17 @@ run_test() {
 
     # 2. Compile .ll with clang to executable
     echo "  [CLANG] Compiling $ll_file -> $exe_file"
-    if ! timeout 2 clang "$ll_file" -o "$exe_file" 2>> "$err_file"; then
+    # Extract library names from llvm.dependent.libraries metadata
+    # Format: !llvm.dependent.libraries = !{!0}  where  !0 = !{!"libname"}
+    clang_libs=""
+    while IFS= read -r lib; do
+        clang_libs="$clang_libs -l$lib"
+    done < <(grep 'llvm.dependent.libraries' "$ll_file" 2>/dev/null \
+        | grep -oP '!\K[0-9]+' \
+        | while read ref; do
+            grep "^!$ref = !{!\"" "$ll_file" 2>/dev/null | grep -oP '!"\K[^"]+'
+        done)
+    if ! timeout 2 clang "$ll_file" -o "$exe_file" $clang_libs 2>> "$err_file"; then
         echo "  ERROR: clang compilation failed. Check $err_file"
         TEST_FAILED=true
         current_test_failed=true

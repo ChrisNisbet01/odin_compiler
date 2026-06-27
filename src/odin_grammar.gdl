@@ -445,7 +445,8 @@ WhenDecl = KwWhen Expression LBrace TopLevelDeclaration* RBrace
 
 UsingDecl = KwUsing (VariableDecl | ConstantDecl) @AST_ACTION_USING_DECL;
 
-TopLevelDeclaration = ForeignBlock
+TopLevelDeclaration = ForeignImportDecl
+                    | ForeignBlock
                     | WhenDecl
                     | UsingDecl
                     | ConstantDecl

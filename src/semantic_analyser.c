@@ -2121,6 +2121,9 @@ sem_pass1_register_top_level(SemContext * ctx)
                 {
                     sem_register_top_level_variable(ctx, top_decl);
                 }
+                else if (top_decl->type == AST_NODE_FOREIGN_IMPORT)
+                {
+                }
                 else if (top_decl->type == AST_NODE_FOREIGN_BLOCK)
                 {
                     for (size_t k = 0; k < top_decl->list.count; k++)

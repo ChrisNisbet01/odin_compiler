@@ -60,6 +60,10 @@ typedef struct
     int current_scope_depth;
 
     LLVMTypeRef auto_cast_target_type;
+
+    char ** foreign_libraries;
+    int foreign_library_count;
+    int foreign_library_capacity;
 } IrGenContext;
 
 IrGenContext *

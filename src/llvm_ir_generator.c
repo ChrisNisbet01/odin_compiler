@@ -77,6 +77,9 @@ ir_gen_context_create(char const * module_name, TypeDescriptors * type_registry,
     ctx->gen_ctx = gen_ctx;
     ctx->anon_counter = 0;
     ctx->loop_depth = 0;
+    ctx->foreign_libraries = NULL;
+    ctx->foreign_library_count = 0;
+    ctx->foreign_library_capacity = 0;
     ir_gen_error_collection_init(&ctx->errors);
 
     return ctx;
@@ -91,6 +94,9 @@ ir_gen_context_destroy(IrGenContext * ctx)
     // here
     if (ctx->module)
         LLVMDisposeModule(ctx->module);
+    for (int i = 0; i < ctx->foreign_library_count; i++)
+        free(ctx->foreign_libraries[i]);
+    free(ctx->foreign_libraries);
     free(ctx);
 }
 
@@ -2935,6 +2941,52 @@ ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, L
     }
 }
 
+// --- Foreign library registration ---
+
+static void
+ir_gen_add_foreign_library(IrGenContext * ctx, char const * lib_path)
+{
+    if (ctx == NULL || lib_path == NULL || lib_path[0] == '\0')
+        return;
+    if (ctx->foreign_library_count >= ctx->foreign_library_capacity)
+    {
+        int new_cap = ctx->foreign_library_capacity == 0 ? 8 : ctx->foreign_library_capacity * 2;
+        char ** new_libs = realloc(ctx->foreign_libraries, (size_t)new_cap * sizeof(char *));
+        if (new_libs == NULL)
+            return;
+        ctx->foreign_libraries = new_libs;
+        ctx->foreign_library_capacity = new_cap;
+    }
+    ctx->foreign_libraries[ctx->foreign_library_count] = strdup(lib_path);
+    ctx->foreign_library_count++;
+}
+
+static void
+ir_gen_collect_foreign_import(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node == NULL || node->type != AST_NODE_FOREIGN_IMPORT)
+        return;
+    // Children: [0] = Identifier (name), [1] = StringLiteral (path)
+    if (node->list.count < 2)
+        return;
+    odin_grammar_node_t * path_node = node->list.children[1];
+    if (path_node == NULL || path_node->text == NULL)
+        return;
+    // Strip surrounding quotes from string literal text
+    char const * src = path_node->text;
+    size_t len = strlen(src);
+    if (len >= 2 && src[0] == '"' && src[len - 1] == '"')
+    {
+        char * stripped = strndup(src + 1, len - 2);
+        ir_gen_add_foreign_library(ctx, stripped);
+        free(stripped);
+    }
+    else
+    {
+        ir_gen_add_foreign_library(ctx, src);
+    }
+}
+
 // --- Top-level declaration codegen ---
 
 static LLVMValueRef
@@ -4553,11 +4605,14 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
                 continue;
             if (child->type == AST_NODE_CONSTANT_DECL)
                 ir_gen_top_level_decl(ctx, child);
+            else if (child->type == AST_NODE_FOREIGN_IMPORT)
+                ir_gen_collect_foreign_import(ctx, child);
         }
         return NULL;
     }
 
     case AST_NODE_FOREIGN_IMPORT:
+        ir_gen_collect_foreign_import(ctx, node);
         return NULL;
 
     case AST_NODE_USING_DECL:
@@ -4620,6 +4675,10 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
                     ir_gen_top_level_decl(ctx, fb_child);
                 }
             }
+            else if (top_decl->type == AST_NODE_FOREIGN_IMPORT)
+            {
+                ir_gen_collect_foreign_import(ctx, top_decl);
+            }
             else if (top_decl->type == AST_NODE_USING_DECL)
             {
                 for (size_t k = 0; k < top_decl->list.count; k++)
@@ -4634,6 +4693,16 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
                 }
             }
         }
+    }
+
+    // Emit foreign library metadata
+    // !llvm.dependent.libraries expects direct MDString operands: !{!"lib1", !"lib2"}
+    for (int fi = 0; fi < ctx->foreign_library_count; fi++)
+    {
+        LLVMValueRef lib_md = LLVMMDStringInContext(
+            ctx->context, ctx->foreign_libraries[fi], (unsigned)strlen(ctx->foreign_libraries[fi])
+        );
+        LLVMAddNamedMetadataOperand(ctx->module, "llvm.dependent.libraries", lib_md);
     }
 
     // Phase 5: Generate entry point wrapper for Odin main with hidden context param
