@@ -229,6 +229,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "ForeignBlock";
     case AST_NODE_WHEN_DECL:
         return "WhenDecl";
+    case AST_NODE_WHEN_BODY:
+        return "WhenBody";
     case AST_NODE_USING_DECL:
         return "UsingDecl";
     case AST_NODE_TOP_LEVEL_DECLARATION:

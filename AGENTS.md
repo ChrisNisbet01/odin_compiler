@@ -33,3 +33,9 @@
 - **Fixed foreign block test**: `test_foreign.odin` had a type mismatch — `abs` returns `i32` but `main` returns `int` (i64). Added `cast(int) (result - 5)`.
 - **Fixed implicit integer coercion in binary expressions**: `ir_gen_binary_expression` now inserts `LLVMBuildIntCast2` when RHS type differs from LHS type for arithmetic/comparison ops (skips `in`/`not_in`/`range` where types naturally differ). Fixes the `sub i32, i64` crash with foreign libc calls.
 - **All 55 tests pass**.
+
+## Accomplishments (session 2026-06-29)
+- **Implemented `when` declarations**: Added grammar support (`WhenBody` rule with `@AST_ACTION_WHEN_BODY`, `WhenDecl` updated). Semantic analyzer pass 1 registers decls inside matching when/else branches; pass 2 analyzes bodies. IR generator evaluates conditions at compile time with expression-chain unwrapping, processes matching bodies, emits non-procedure constants via `ir_gen_top_level_decl` by evaluating and storing LLVM values in the symbol table.
+- **Fixed `sem_evaluate_constant_bool`/`ir_gen_evaluate_constant_bool`**: Added expression-chain unwrapping (including `POSTFIX_EXPRESSION` which has 2 children) so `when true`/`when false` conditions are properly evaluated instead of falling through switch with UB.
+- **Fixed `ir_gen_top_level_decl`**: Extended to handle non-procedure top-level constants (`X :: 100`) by evaluating the value expression and storing the LLVM constant in the symbol table via `generator_add_symbol`. Previously only handled procedure literals.
+- **All 63 tests pass** (test_when_decl.odin added with `when true`/`when false`/`when false...else` branches).

@@ -3070,6 +3070,15 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         return func;
     }
 
+    // Non-procedure constant: evaluate and store LLVM constant value
+    LLVMValueRef const_val = ir_gen_node(ctx, value_node);
+    if (const_val)
+    {
+        TypedValue tv = create_typed_value(const_val, value_node->resolved_type, false);
+        generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
+        return const_val;
+    }
+
     return NULL;
 }
 
@@ -4637,6 +4646,74 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 #pragma GCC diagnostic pop
 }
 
+// --- When declaration helpers ---
+
+static int
+ir_gen_evaluate_constant_bool(odin_grammar_node_t * node)
+{
+    if (node == NULL)
+        return -1;
+    // Unwrap through expression chain to reach a node type we can evaluate
+    // Most expression wrappers store the inner expression in child[0];
+    // POSTFIX_EXPRESSION has [operand, postfix_ops] so use child[0] too.
+    while (1)
+    {
+        int can_eval = 0;
+        switch (node->type)
+        {
+        case AST_NODE_BOOL_TRUE:
+        case AST_NODE_BOOL_FALSE:
+        case AST_NODE_INTEGER_VALUE:
+        case AST_NODE_UNARY_EXPRESSION:
+        case AST_NODE_COMP_EXPRESSION:
+            can_eval = 1;
+            break;
+        default:
+            break;
+        }
+        if (can_eval)
+            break;
+        if ((node->type == AST_NODE_POSTFIX_EXPRESSION || node->list.count == 1) && node->list.children[0])
+            node = node->list.children[0];
+        else
+            break;
+    }
+    switch (node->type)
+    {
+    case AST_NODE_BOOL_TRUE:
+        return 1;
+    case AST_NODE_BOOL_FALSE:
+        return 0;
+    case AST_NODE_INTEGER_VALUE:
+    {
+        if (node->text == NULL)
+            return -1;
+        char * end = NULL;
+        long long val = strtoll(node->text, &end, 0);
+        if (end == node->text)
+            return -1;
+        return (val != 0) ? 1 : 0;
+    }
+    default:
+        return -1;
+    }
+}
+
+static void
+ir_gen_when_body(IrGenContext * ctx, odin_grammar_node_t * body)
+{
+    for (size_t m = 0; m < body->list.count; m++)
+    {
+        odin_grammar_node_t * inner = body->list.children[m];
+        if (inner == NULL)
+            continue;
+        if (inner->type == AST_NODE_CONSTANT_DECL)
+            ir_gen_top_level_decl(ctx, inner);
+        else if (inner->type == AST_NODE_VARIABLE_DECL)
+            ir_gen_top_level_variable(ctx, inner);
+    }
+}
+
 // --- Main entry point ---
 
 bool
@@ -4690,6 +4767,39 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
                         ir_gen_top_level_decl(ctx, inner);
                     else if (inner->type == AST_NODE_VARIABLE_DECL)
                         ir_gen_top_level_variable(ctx, inner);
+                }
+            }
+            else if (top_decl->type == AST_NODE_WHEN_DECL)
+            {
+                size_t k = 0;
+                bool matched = false;
+                while (k < top_decl->list.count)
+                {
+                    odin_grammar_node_t * wc = top_decl->list.children[k];
+                    if (wc == NULL)
+                    {
+                        k++;
+                        continue;
+                    }
+                    if (wc->type == AST_NODE_WHEN_BODY)
+                    {
+                        if (!matched)
+                            ir_gen_when_body(ctx, wc);
+                        break;
+                    }
+                    int cond = ir_gen_evaluate_constant_bool(wc);
+                    k++;
+                    if (cond == 1 && !matched)
+                    {
+                        matched = true;
+                        if (k < top_decl->list.count)
+                        {
+                            odin_grammar_node_t * body = top_decl->list.children[k];
+                            if (body && body->type == AST_NODE_WHEN_BODY)
+                                ir_gen_when_body(ctx, body);
+                        }
+                    }
+                    k++;
                 }
             }
         }

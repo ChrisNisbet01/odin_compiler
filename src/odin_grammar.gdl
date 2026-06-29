@@ -438,9 +438,11 @@ ForeignDecl = ForeignImportDecl | ConstantDecl;
 ForeignBlockBody = LBrace ForeignDecl* RBrace;
 ForeignBlock = KwForeign Identifier ForeignBlockBody @AST_ACTION_FOREIGN_BLOCK;
 
-WhenDecl = KwWhen Expression LBrace TopLevelDeclaration* RBrace
-           (KwElse KwWhen Expression LBrace TopLevelDeclaration* RBrace)*
-           (KwElse LBrace TopLevelDeclaration* RBrace)?
+WhenBody = LBrace TopLevelDeclaration* RBrace @AST_ACTION_WHEN_BODY;
+
+WhenDecl = KwWhen Expression WhenBody
+           (KwElse KwWhen Expression WhenBody)*
+           (KwElse WhenBody)?
            @AST_ACTION_WHEN_DECL;
 
 UsingDecl = KwUsing (VariableDecl | ConstantDecl) @AST_ACTION_USING_DECL;
