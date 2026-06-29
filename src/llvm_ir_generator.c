@@ -225,9 +225,9 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
         // GEP/subscript/member access
         if (sym->value.type_info
             && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
-                || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY
-                || sym->value.type_info->kind == TD_KIND_MAP || sym->value.type_info->kind == TD_KIND_BIT_FIELD
-                || sym->value.type_info->kind == TD_KIND_UNION))
+                || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_SOA
+                || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY || sym->value.type_info->kind == TD_KIND_MAP
+                || sym->value.type_info->kind == TD_KIND_BIT_FIELD || sym->value.type_info->kind == TD_KIND_UNION))
         {
             return sym->value.value;
         }
@@ -1564,7 +1564,7 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                     break;
                 }
 
-                if (cur_type->kind != TD_KIND_STRUCT)
+                if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA)
                     return NULL;
 
                 field_access_path_t path;
@@ -3611,7 +3611,9 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             if (field_name_node == NULL || field_name_node->text == NULL)
                 break;
 
-            if (cur_type == NULL || (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_UNION))
+            if (cur_type == NULL
+                || (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA && cur_type->kind != TD_KIND_UNION
+                ))
             {
                 if (cur_type && cur_type->kind == TD_KIND_BIT_FIELD)
                 {
@@ -3961,10 +3963,11 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMTypeRef val_llvm_type = LLVMTypeOf(val);
         if (LLVMGetTypeKind(val_llvm_type) == LLVMPointerTypeKind)
         {
-            if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_ARRAY && cur_type->kind != TD_KIND_SLICE
-                && cur_type->kind != TD_KIND_PROC && cur_type->kind != TD_KIND_DYNAMIC_ARRAY
-                && cur_type->kind != TD_KIND_MAP && cur_type->kind != TD_KIND_BIT_FIELD
-                && cur_type->kind != TD_KIND_BIT_SET && cur_type->kind != TD_KIND_UNION)
+            if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA && cur_type->kind != TD_KIND_ARRAY
+                && cur_type->kind != TD_KIND_SLICE && cur_type->kind != TD_KIND_PROC
+                && cur_type->kind != TD_KIND_DYNAMIC_ARRAY && cur_type->kind != TD_KIND_MAP
+                && cur_type->kind != TD_KIND_BIT_FIELD && cur_type->kind != TD_KIND_BIT_SET
+                && cur_type->kind != TD_KIND_UNION)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }

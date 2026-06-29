@@ -810,6 +810,17 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_STRUCT_TYPE:
     {
+        bool is_soa = false;
+        for (size_t ci = 0; ci < node->list.count; ci++)
+        {
+            odin_grammar_node_t * child = node->list.children[ci];
+            if (child && child->type == AST_NODE_DIRECTIVE && child->text && strstr(child->text, "#soa") != NULL)
+            {
+                is_soa = true;
+                break;
+            }
+        }
+
         // Find StructFieldList (could be nested inside StructRawBody)
         odin_grammar_node_t * field_list = node_find_child(node, AST_NODE_STRUCT_FIELD_LIST);
         if (field_list == NULL)
@@ -876,9 +887,20 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             if (ftype == NULL)
                 continue;
 
+            if (is_soa)
+            {
+                TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, ftype);
+                if (slice_type == NULL)
+                    continue;
+                field_types[fi] = slice_type;
+                llvm_field_types[fi] = slice_type->llvm_type;
+            }
+            else
+            {
+                field_types[fi] = ftype;
+                llvm_field_types[fi] = ftype->llvm_type;
+            }
             field_names[fi] = name_node->text;
-            field_types[fi] = ftype;
-            llvm_field_types[fi] = ftype->llvm_type;
             field_is_using[fi] = is_using;
             fi++;
         }
@@ -890,6 +912,35 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             free(llvm_field_types);
             free(field_is_using);
             return NULL;
+        }
+
+        if (is_soa)
+        {
+            struct_or_union_members_st members;
+            members.count = fi;
+            members.fields = malloc((size_t)fi * sizeof(struct_field_t));
+            for (int j = 0; j < fi; j++)
+            {
+                members.fields[j].name = field_names[j];
+                members.fields[j].type_desc = field_types[j];
+                members.fields[j].is_using = field_is_using[j];
+                members.fields[j].offset = 0;
+                members.fields[j].bit_offset = 0;
+                members.fields[j].bit_width = 0;
+                members.fields[j].storage_index = 0;
+            }
+
+            TypeDescriptor const * soa_td = get_or_create_soa_type(ctx->type_registry, &members);
+
+            free((void *)field_names);
+            free((void *)field_types);
+            free(llvm_field_types);
+            free(field_is_using);
+            free(members.fields);
+
+            if (soa_td)
+                node->resolved_type = (TypeDescriptor *)soa_td;
+            return soa_td;
         }
 
         LLVMTypeRef llvm_struct = LLVMStructTypeInContext(ctx->gen_ctx->context, llvm_field_types, (unsigned)fi, false);
@@ -994,6 +1045,18 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (union_td)
             node->resolved_type = (TypeDescriptor *)union_td;
         return union_td;
+    }
+
+    case AST_NODE_SOA_TYPE:
+    {
+        // Standalone #soa[N] SomeType: parse the inner type and return it for now
+        // (full SOA array type is not yet implemented)
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            if (is_type_node(node->list.children[i]))
+                return sem_resolve_type_expr(ctx, node->list.children[i]);
+        }
+        return NULL;
     }
 
     default:
@@ -1496,7 +1559,8 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 break;
 
             case AST_NODE_POSTFIX_MEMBER:
-                if (type && type->kind == TD_KIND_STRUCT && op->list.count >= 1 && op->list.children[0])
+                if (type && (type->kind == TD_KIND_STRUCT || type->kind == TD_KIND_SOA) && op->list.count >= 1
+                    && op->list.children[0])
                 {
                     char const * field_name = op->list.children[0]->text;
                     field_access_path_t path;

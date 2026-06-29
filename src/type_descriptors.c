@@ -752,6 +752,65 @@ get_or_create_union_type(TypeDescriptors * registry, struct_or_union_members_st 
     return td;
 }
 
+TypeDescriptor const *
+get_or_create_soa_type(TypeDescriptors * registry, struct_or_union_members_st const * backing_members)
+{
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_SOA)
+            continue;
+        if (t->struct_metadata.members.count != backing_members->count)
+            continue;
+        bool match = true;
+        for (int j = 0; j < backing_members->count; j++)
+        {
+            if (strcmp(t->struct_metadata.members.fields[j].name, backing_members->fields[j].name) != 0
+                || t->struct_metadata.members.fields[j].type_desc != backing_members->fields[j].type_desc)
+            {
+                match = false;
+                break;
+            }
+        }
+        if (match)
+            return t;
+    }
+
+    int count = backing_members->count;
+    LLVMTypeRef * llvm_types = malloc((size_t)count * sizeof(LLVMTypeRef));
+    for (int j = 0; j < count; j++)
+    {
+        llvm_types[j] = backing_members->fields[j].type_desc->llvm_type;
+    }
+    LLVMTypeRef llvm_struct = LLVMStructTypeInContext(registry->context, llvm_types, (unsigned)count, false);
+    free(llvm_types);
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_SOA;
+    td->llvm_type = llvm_struct;
+    td->struct_metadata.is_complete = true;
+
+    if (count > 0 && backing_members->fields)
+    {
+        td->struct_metadata.members.fields = malloc((size_t)count * sizeof(struct_field_t));
+        memcpy(td->struct_metadata.members.fields, backing_members->fields, (size_t)count * sizeof(struct_field_t));
+        td->struct_metadata.members.count = count;
+    }
+
+    td->as.soa.backing_members.count = count;
+    td->as.soa.backing_members.fields = NULL;
+
+    if (registry->data_layout)
+    {
+        td->struct_metadata.total_size = LLVMABISizeOfType(registry->data_layout, llvm_struct);
+        td->struct_metadata.alignment = LLVMABIAlignmentOfType(registry->data_layout, llvm_struct);
+    }
+
+    return td;
+}
+
 int
 type_descriptor_find_union_field_index(TypeDescriptor const * desc, char const * name)
 {
@@ -906,7 +965,7 @@ is_floating_kind(TypeDescriptor const * desc)
 int
 type_descriptor_find_struct_field_index(TypeDescriptor const * desc, char const * name)
 {
-    if (desc == NULL || desc->kind != TD_KIND_STRUCT)
+    if (desc == NULL || (desc->kind != TD_KIND_STRUCT && desc->kind != TD_KIND_SOA))
         return -1;
     for (int i = 0; i < desc->struct_metadata.members.count; i++)
     {
@@ -919,7 +978,7 @@ type_descriptor_find_struct_field_index(TypeDescriptor const * desc, char const 
 struct_field_t const *
 type_descriptor_get_struct_field(TypeDescriptor const * desc, int index)
 {
-    if (desc == NULL || desc->kind != TD_KIND_STRUCT)
+    if (desc == NULL || (desc->kind != TD_KIND_STRUCT && desc->kind != TD_KIND_SOA))
         return NULL;
     if (index < 0 || index >= desc->struct_metadata.members.count)
         return NULL;
@@ -929,7 +988,7 @@ type_descriptor_get_struct_field(TypeDescriptor const * desc, int index)
 bool
 type_descriptor_find_struct_field_path(TypeDescriptor const * desc, char const * name, field_access_path_t * path)
 {
-    if (desc == NULL || desc->kind != TD_KIND_STRUCT)
+    if (desc == NULL || (desc->kind != TD_KIND_STRUCT && desc->kind != TD_KIND_SOA))
         return false;
 
     for (int i = 0; i < desc->struct_metadata.members.count; i++)

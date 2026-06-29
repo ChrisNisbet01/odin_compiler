@@ -39,3 +39,10 @@
 - **Fixed `sem_evaluate_constant_bool`/`ir_gen_evaluate_constant_bool`**: Added expression-chain unwrapping (including `POSTFIX_EXPRESSION` which has 2 children) so `when true`/`when false` conditions are properly evaluated instead of falling through switch with UB.
 - **Fixed `ir_gen_top_level_decl`**: Extended to handle non-procedure top-level constants (`X :: 100`) by evaluating the value expression and storing the LLVM constant in the symbol table via `generator_add_symbol`. Previously only handled procedure literals.
 - **All 63 tests pass** (test_when_decl.odin added with `when true`/`when false`/`when false...else` branches).
+
+## Accomplishments (session 2026-07-01)
+
+### SOA structs and `#soa` directive fix
+- **Implemented SOA structs (`struct #soa { x: T; y: U }`)**: Added `TD_KIND_SOA` type descriptor with slice-backed fields. Semantic analyser transforms each field type `T` → `[]T` for SOA structs. IR generator allocates struct-of-slices LLVM type and handles field access via GEP.
+- **Fixed `#soa` directive detection**: The `lexeme("#" DirectiveName)` parser captures trailing whitespace in its semantic content, producing text `"#soa "` (len 5) instead of `"#soa"` (len 4). Changed `strcmp(child->text, "#soa")` to `strstr(child->text, "#soa") != NULL` in `semantic_analyser.c:817`.
+- **All 65 tests pass** (test_soa.odin with 3 `len(s.x)` calls on SOA struct fields).

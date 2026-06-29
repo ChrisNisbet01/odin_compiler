@@ -127,6 +127,10 @@ typedef struct TypeDescriptor
             TypeDescriptor const * element_type;
             int num_bits;
         } bit_set;
+        struct
+        {
+            struct_or_union_members_st backing_members;
+        } soa;
     } as;
 } TypeDescriptor;
 
@@ -177,6 +181,9 @@ TypeDescriptor const * register_struct_type(
 );
 
 TypeDescriptor const * get_or_create_union_type(TypeDescriptors * registry, struct_or_union_members_st const * members);
+
+TypeDescriptor const *
+get_or_create_soa_type(TypeDescriptors * registry, struct_or_union_members_st const * backing_members);
 
 int type_descriptor_find_union_field_index(TypeDescriptor const * desc, char const * name);
 
