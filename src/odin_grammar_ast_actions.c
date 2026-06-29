@@ -36,6 +36,22 @@ make_node(
         if (sem != NULL && sem_len > 0)
         {
             result->text = strndup(sem, sem_len);
+            // Strip trailing whitespace (lexeme combinator with '#'
+            // treats bash comments as whitespace, including it in the match)
+            size_t tlen = strlen(result->text);
+            while (tlen > 0
+                   && (result->text[tlen - 1] == ' ' || result->text[tlen - 1] == '\t' || result->text[tlen - 1] == '\n'
+                       || result->text[tlen - 1] == '\r'))
+            {
+                tlen--;
+            }
+            size_t orig_len = strlen(result->text);
+            if (tlen < orig_len)
+            {
+                char * trimmed = strndup(result->text, tlen);
+                free((void *)result->text);
+                result->text = trimmed;
+            }
         }
     }
 

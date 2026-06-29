@@ -814,7 +814,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         for (size_t ci = 0; ci < node->list.count; ci++)
         {
             odin_grammar_node_t * child = node->list.children[ci];
-            if (child && child->type == AST_NODE_DIRECTIVE && child->text && strstr(child->text, "#soa") != NULL)
+            if (child && child->type == AST_NODE_DIRECTIVE && child->text && strcmp(child->text, "#soa") == 0)
             {
                 is_soa = true;
                 break;
@@ -1049,14 +1049,122 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_SOA_TYPE:
     {
-        // Standalone #soa[N] SomeType: parse the inner type and return it for now
-        // (full SOA array type is not yet implemented)
+        // #soa[N] TypePrefix — creates a SOA array type backed by fixed-size arrays
+        // Children: [DirectiveWithArgs, InnerType]
+        odin_grammar_node_t * dw_node = NULL;
+        odin_grammar_node_t * inner_type_node = NULL;
         for (size_t i = 0; i < node->list.count; i++)
         {
-            if (is_type_node(node->list.children[i]))
-                return sem_resolve_type_expr(ctx, node->list.children[i]);
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_DIRECTIVE_WITH_ARGS)
+                dw_node = child;
+            else if (is_type_node(child))
+                inner_type_node = child;
         }
-        return NULL;
+
+        if (dw_node == NULL || inner_type_node == NULL)
+            return NULL;
+
+        // Extract the count expression from DirectiveWithArgs
+        // Children of DirectiveWithArgs for #soa[N]: [Expression]
+        // (KwSoa has no @AST_ACTION so no Identifier child)
+        // But for #assert[N] it would be: [Identifier("assert"), Expression]
+        odin_grammar_node_t * count_expr = NULL;
+        for (size_t i = 0; i < dw_node->list.count; i++)
+        {
+            odin_grammar_node_t * child = dw_node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type != AST_NODE_IDENTIFIER)
+            {
+                count_expr = child;
+                break;
+            }
+        }
+
+        if (count_expr == NULL)
+            return NULL;
+
+        // Evaluate the count expression
+        sem_evaluate_expr(ctx, count_expr);
+
+        // Unwrap through expression chain to find integer value
+        odin_grammar_node_t * eval_node = count_expr;
+        while (eval_node->list.count >= 1 && eval_node->list.children[0] != NULL)
+        {
+            int can_eval = 0;
+            switch (eval_node->type)
+            {
+            case AST_NODE_INTEGER_VALUE:
+                can_eval = 1;
+                break;
+            default:
+                break;
+            }
+            if (can_eval)
+                break;
+            if (eval_node->list.count == 1 || eval_node->type == AST_NODE_POSTFIX_EXPRESSION)
+                eval_node = eval_node->list.children[0];
+            else
+                break;
+        }
+
+        if (eval_node->type != AST_NODE_INTEGER_VALUE || eval_node->text == NULL)
+        {
+            sem_error_list_add(&ctx->errors, count_expr, "#soa[N] requires a constant integer expression");
+            return NULL;
+        }
+
+        char * end = NULL;
+        unsigned long long count_val = strtoull(eval_node->text, &end, 0);
+        if (end == eval_node->text || count_val == 0)
+        {
+            sem_error_list_add(&ctx->errors, count_expr, "#soa[N] requires a positive integer");
+            return NULL;
+        }
+
+        // Resolve the inner type (must be a struct type)
+        TypeDescriptor const * inner_td = sem_resolve_type_expr(ctx, inner_type_node);
+        if (inner_td == NULL || inner_td->kind != TD_KIND_STRUCT)
+        {
+            sem_error_list_add(&ctx->errors, inner_type_node, "#soa[N] requires a struct type");
+            return NULL;
+        }
+
+        // Build backing members: each struct field T becomes [N]T
+        struct_or_union_members_st const * inner_members = &inner_td->struct_metadata.members;
+        int field_count = inner_members->count;
+
+        struct_or_union_members_st backing_members;
+        backing_members.count = field_count;
+        backing_members.fields = malloc((size_t)field_count * sizeof(struct_field_t));
+        if (backing_members.fields == NULL)
+            return NULL;
+
+        for (int j = 0; j < field_count; j++)
+        {
+            struct_field_t const * src = &inner_members->fields[j];
+            TypeDescriptor const * array_type
+                = get_or_create_array_type(ctx->type_registry, src->type_desc, (size_t)count_val);
+
+            backing_members.fields[j].name = src->name;
+            backing_members.fields[j].type_desc = array_type;
+            backing_members.fields[j].is_using = src->is_using;
+            backing_members.fields[j].offset = 0;
+            backing_members.fields[j].bit_offset = 0;
+            backing_members.fields[j].bit_width = 0;
+            backing_members.fields[j].storage_index = 0;
+        }
+
+        TypeDescriptor const * soa_td = get_or_create_soa_type(ctx->type_registry, &backing_members);
+
+        free(backing_members.fields);
+
+        if (soa_td)
+            node->resolved_type = (TypeDescriptor *)soa_td;
+        return soa_td;
     }
 
     default:
