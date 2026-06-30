@@ -8,11 +8,8 @@
 - **auto_cast** — Unary prefix operator `auto_cast expr` that converts a value to the target type determined by context (variable type annotation, function return type). Grammar: `AutoCastExpr = KwAutoCast UnaryExpression @AST_ACTION_AUTO_CAST_EXPR`. Semantic analyser evaluates inner expression and returns NULL (type comes from context). Return type check is bypassed when the expression contains auto_cast. IR generator: `ir_gen_auto_cast_value` handles int↔int widening/narrowing, float↔float, int↔float, pointer↔int via LLVM cast opcodes. Target type is threaded through context (`auto_cast_target_type`) from variable declarations and return statements.
 - **union type** — Grammar + AST + TD_KIND_UNION + is_type_node all in place. Needs: (a) get_or_create_union_type in type_descriptors.c (tagged union: {i64 tag, [union of fields]}), (b) semantic analyser to resolve fields and create the type, (c) IR generator to allocate with tag+payload and generate member accesses. The struct_members.h infrastructure (struct_or_union_members_st) can be reused.
 
-## Remaining features (ranked Easiest → Hardest)
-
 Tier 3: Moderate
 2. **when declaration** — Already parsed with full grammar+AST. Can reuse the when statement pattern (treat as runtime if at top level, llvm_ir_generator.c:3963). Harder than statement-when because it needs to handle top-level declarations inside conditional branches and register them in the symbol table.
-5. **#load directive** — Needs file I/O at compile time. Grammar already handles it as AST_NODE_DIRECTIVE_WITH_ARGS. Would read a file into a string constant at compile time. Requires: (a) file reading during semantic analysis, (b) injecting the result as a string literal AST node, (c) handling expression context correctly.
 
 Tier 4: Complex
 7. **Type assertion x.(T) for unions** — Currently only works for any. For unions it needs: (a) the union type implemented (item 6), (b) runtime tag comparison against the requested variant, (c) field extraction from the union payload. Directly depends on item 6.
@@ -20,8 +17,14 @@ Tier 4: Complex
 Tier 5: Very Complex
 8. **context built-in** — Depends on implicit context parameter (item 9). Needs: (a) context type definition (allocator, logger struct), (b) context identifier resolving to the injected parameter, (c) field access on context.
 9. **Implicit context parameter** — Architecture-wide change: inject ^context as hidden first parameter to every procedure, thread it through every call site. Zero existing infrastructure.
-10. **Inline asm** — Keyword reserved, no grammar rule or AST node exists. Needs: (a) grammar rule for asm { ... }, (b) parsing of constraints (output/input/clobber), (c) LLVMConstInlineAsm integration. Well-bounded but significant new code.
 11. **soa layout (Structure of Arrays)** — Grammar + AST + is_type_node all in place. But this is a major memory layout optimization affecting: type creation, member access GEP computation, array/slice indexing through SOA fields, and struct type representation. No existing infrastructure.
+
+## Remaining features - Future work (ranked Easiest → Hardest)
 
 Tier 6: Architecture-Altering
 12. **Polymorphic procedures / monomorphisation** — Full generics system. Complete template-like type parameter substitution, procedure instantiation with concrete types, duplicating LLVM functions per unique instantiation, caching. Zero infrastructure exists beyond the AST_NODE_POLY_IDENT parser token. By far the largest and most complex item.
+
+
+5. **#load directive** — Needs file I/O at compile time. Grammar already handles it as AST_NODE_DIRECTIVE_WITH_ARGS. Would read a file into a string constant at compile time. Requires: (a) file reading during semantic analysis, (b) injecting the result as a string literal AST node, (c) handling expression context correctly.
+
+10. **Inline asm** — Keyword reserved, no grammar rule or AST node exists. Needs: (a) grammar rule for asm { ... }, (b) parsing of constraints (output/input/clobber), (c) LLVMConstInlineAsm integration. Well-bounded but significant new code.
