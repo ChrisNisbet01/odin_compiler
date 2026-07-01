@@ -20,6 +20,7 @@ add_executable(${app}
     generator_lists.c
     sem_error.c
     ast_utils.c
+    package_resolver.c
     semantic_analyser.c
     ir_utils.c
     ir_gen_error.c

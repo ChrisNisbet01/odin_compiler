@@ -1,6 +1,7 @@
 #include "semantic_analyser.h"
 
 #include "ast_utils.h"
+#include "package_resolver.h"
 #include "scope.h"
 #include "symbols.h"
 #include "typed_value.h"
@@ -38,19 +39,83 @@ parse_calling_convention(char const * text)
 
 void
 sem_context_init(
-    SemContext * ctx, odin_grammar_node_t * ast, TypeDescriptors * type_registry, GeneratorContext * gen_ctx
+    SemContext * ctx,
+    odin_grammar_node_t * ast,
+    TypeDescriptors * type_registry,
+    GeneratorContext * gen_ctx,
+    char const * source_file_path,
+    char const * source_dir,
+    char const * odin_root,
+    epc_parser_t * parser,
+    epc_ast_hook_registry_t * hooks
 )
 {
     ctx->ast = ast;
     ctx->type_registry = type_registry;
     ctx->gen_ctx = gen_ctx;
     sem_error_list_init(&ctx->errors);
+    ctx->source_file_path = source_file_path;
+    ctx->source_dir = source_dir;
+    ctx->odin_root = odin_root;
+    ctx->package_name = NULL;
+    ctx->imports = NULL;
+    ctx->import_count = 0;
+    ctx->import_capacity = 0;
+    ctx->parser = parser;
+    ctx->hook_registry = hooks;
     register_builtin_context_types(type_registry);
+}
+
+void
+sem_context_destroy(SemContext * ctx)
+{
+    free(ctx->package_name);
+    ctx->package_name = NULL;
+    for (int i = 0; i < ctx->import_count; i++)
+    {
+        imported_package_free(ctx->imports[i]);
+    }
+    free(ctx->imports);
+    ctx->imports = NULL;
+    ctx->import_count = 0;
+    ctx->import_capacity = 0;
+}
+
+// --- Helper: strip quotes from StringLiteral text ---
+static char *
+strip_quotes(char const * text)
+{
+    if (text == NULL)
+        return NULL;
+    size_t len = strlen(text);
+    if (len >= 2 && text[0] == '"' && text[len - 1] == '"')
+    {
+        return strndup(text + 1, len - 2);
+    }
+    return strdup(text);
+}
+
+// --- Helper: find imported package by name ---
+static ImportedPackage *
+find_imported_package_by_name(SemContext * ctx, char const * name)
+{
+    if (name == NULL)
+        return NULL;
+    for (int i = 0; i < ctx->import_count; i++)
+    {
+        if (ctx->imports[i]->package_name != NULL && strcmp(ctx->imports[i]->package_name, name) == 0)
+        {
+            return ctx->imports[i];
+        }
+    }
+    return NULL;
 }
 
 // --- Forward declarations ---
 static TypeDescriptor const * sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node);
 static void sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type);
+static void sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast);
+static void sem_pass2_analyse_bodies_ast(SemContext * ctx, odin_grammar_node_t * program);
 
 // --- Compile-time constant evaluation ---
 // Returns:  1 = true, 0 = false, -1 = unknown (can't evaluate at compile time)
@@ -1413,6 +1478,10 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_IDENTIFIER:
     {
+        // Blank identifier _ is always valid as a discard target
+        if (node->text && strcmp(node->text, "_") == 0)
+            return NULL;
+
         symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
         if (sym)
         {
@@ -1630,6 +1699,95 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
     {
         if (node->list.count < 1)
             return NULL;
+
+        // Check if this is a package-qualified name: pkg_name.member
+        ImportedPackage * access_pkg = NULL;
+        odin_grammar_node_t * base = node->list.children[0];
+        if (base != NULL)
+        {
+            odin_grammar_node_t * inner = base;
+            while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
+                inner = inner->list.children[0];
+            if (inner->type == AST_NODE_IDENTIFIER)
+            {
+                access_pkg = find_imported_package_by_name(ctx, inner->text);
+            }
+        }
+
+        if (access_pkg != NULL)
+        {
+            TypeDescriptor const * type = NULL;
+
+            if (node->list.count >= 2)
+            {
+                odin_grammar_node_t * postfix_ops = node->list.children[1];
+                if (postfix_ops != NULL)
+                {
+                    for (size_t i = 0; i < postfix_ops->list.count; i++)
+                    {
+                        odin_grammar_node_t * op = postfix_ops->list.children[i];
+                        if (op == NULL)
+                            continue;
+
+                        switch (op->type)
+                        {
+                        case AST_NODE_POSTFIX_MEMBER:
+                            if (op->list.count >= 1 && op->list.children[0] && type == NULL)
+                            {
+                                char const * member_name = op->list.children[0]->text;
+                                symbol_t * sym = scope_find_symbol_entry(access_pkg->package_scope, member_name);
+                                if (sym)
+                                {
+                                    op->resolved_symbol = sym;
+                                    type = sym->value.type_info;
+                                    op->resolved_type = (TypeDescriptor *)type;
+                                }
+                                else
+                                {
+                                    sem_error_list_add(&ctx->errors, op, "undeclared name in package");
+                                }
+                            }
+                            break;
+
+                        case AST_NODE_POSTFIX_CALL:
+                            if (type && type->kind == TD_KIND_PROC)
+                            {
+                                if (type->proc_metadata.return_count > 1)
+                                {
+                                    op->resolved_type = (TypeDescriptor *)type;
+                                    break;
+                                }
+                                type = type->proc_metadata.return_type;
+                                op->resolved_type = (TypeDescriptor *)type;
+                            }
+                            break;
+
+                        case AST_NODE_POSTFIX_SUBSCRIPT:
+                            if (type && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE))
+                            {
+                                type = type->element_type;
+                                op->resolved_type = (TypeDescriptor *)type;
+                            }
+                            break;
+
+                        case AST_NODE_POSTFIX_DEREF:
+                            if (type && type->kind == TD_KIND_POINTER)
+                            {
+                                type = type->pointee;
+                                op->resolved_type = (TypeDescriptor *)type;
+                            }
+                            break;
+
+                        default:
+                            break;
+                        }
+                    }
+                }
+            }
+
+            node->resolved_type = (TypeDescriptor *)type;
+            return type;
+        }
 
         TypeDescriptor const * type = sem_evaluate_expr(ctx, node->list.children[0]);
 
@@ -2288,15 +2446,14 @@ sem_register_top_level_variable(SemContext * ctx, odin_grammar_node_t * node)
 }
 
 static void
-sem_pass1_register_top_level(SemContext * ctx)
+sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast)
 {
-    odin_grammar_node_t * program = ctx->ast;
-    if (program == NULL)
+    if (program_ast == NULL)
         return;
 
-    for (size_t i = 0; i < program->list.count; i++)
+    for (size_t i = 0; i < program_ast->list.count; i++)
     {
-        odin_grammar_node_t * ext_decl = program->list.children[i];
+        odin_grammar_node_t * ext_decl = program_ast->list.children[i];
         if (ext_decl == NULL)
             continue;
 
@@ -2308,7 +2465,149 @@ sem_pass1_register_top_level(SemContext * ctx)
                 if (top_decl == NULL)
                     continue;
 
-                if (top_decl->type == AST_NODE_CONSTANT_DECL)
+                if (top_decl->type == AST_NODE_PACKAGE_CLAUSE)
+                {
+                    // PackageClause children: [Identifier("name")]
+                    if (top_decl->list.count > 0 && top_decl->list.children[0] && top_decl->list.children[0]->text)
+                    {
+                        free(ctx->package_name);
+                        ctx->package_name = strdup(top_decl->list.children[0]->text);
+                    }
+                }
+                else if (top_decl->type == AST_NODE_IMPORT)
+                {
+                    // ImportSimple children: [StringLiteral("path")]
+                    if (top_decl->list.count < 1 || top_decl->list.children[0] == NULL)
+                        continue;
+                    odin_grammar_node_t * path_node = top_decl->list.children[0];
+                    char * import_path = strip_quotes(path_node->text);
+                    if (import_path == NULL)
+                        continue;
+
+                    char * resolved = resolve_import_path(import_path, ctx->source_dir, ctx->odin_root);
+                    free(import_path);
+                    if (resolved == NULL)
+                    {
+                        fprintf(stderr, "Error: Cannot resolve import '%s'\n", path_node->text);
+                        continue;
+                    }
+
+                    // Parse the imported file
+                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
+                    free(resolved);
+                    if (pkg == NULL)
+                        continue;
+
+                    // Add to ctx->imports array
+                    if (ctx->import_count >= ctx->import_capacity)
+                    {
+                        int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
+                        ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
+                        if (new_arr == NULL)
+                        {
+                            imported_package_free(pkg);
+                            continue;
+                        }
+                        ctx->imports = new_arr;
+                        ctx->import_capacity = new_cap;
+                    }
+                    ctx->imports[ctx->import_count++] = pkg;
+
+                    // Create a scope for the package and register its symbols there
+                    if (!pkg->analysed)
+                    {
+                        scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
+                        pkg->package_scope = pkg_scope;
+
+                        // Push package scope onto the scope stack for pass1 registration
+                        int saved_count = ctx->gen_ctx->count;
+                        ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
+
+                        // Save and restore package name around recursion
+                        char * saved_pkg_name = ctx->package_name;
+                        ctx->package_name = NULL;
+
+                        pkg->analysed = true;
+                        sem_pass1_register_top_level_ex(ctx, pkg->ast);
+
+                        // Run pass 2 on imported package to resolve constant types
+                        sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
+
+                        // If parse_imported_file didn't extract the name, grab it from ctx
+                        if (pkg->package_name == NULL && ctx->package_name != NULL)
+                            pkg->package_name = strdup(ctx->package_name);
+
+                        ctx->package_name = saved_pkg_name;
+
+                        // Pop without freeing (scope lives in ImportedPackage)
+                        ctx->gen_ctx->count = saved_count;
+                    }
+                }
+                else if (top_decl->type == AST_NODE_IMPORT_NAMED)
+                {
+                    // ImportNamed children: [Identifier("alias"), StringLiteral("path")]
+                    if (top_decl->list.count < 2 || top_decl->list.children[0] == NULL
+                        || top_decl->list.children[1] == NULL)
+                        continue;
+                    odin_grammar_node_t * path_node = top_decl->list.children[1];
+                    char * import_path = strip_quotes(path_node->text);
+                    if (import_path == NULL)
+                        continue;
+
+                    char * resolved = resolve_import_path(import_path, ctx->source_dir, ctx->odin_root);
+                    free(import_path);
+                    if (resolved == NULL)
+                    {
+                        fprintf(stderr, "Error: Cannot resolve import '%s'\n", path_node->text);
+                        continue;
+                    }
+
+                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
+                    free(resolved);
+                    if (pkg == NULL)
+                        continue;
+
+                    if (ctx->import_count >= ctx->import_capacity)
+                    {
+                        int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
+                        ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
+                        if (new_arr == NULL)
+                        {
+                            imported_package_free(pkg);
+                            continue;
+                        }
+                        ctx->imports = new_arr;
+                        ctx->import_capacity = new_cap;
+                    }
+                    ctx->imports[ctx->import_count++] = pkg;
+
+                    if (!pkg->analysed)
+                    {
+                        scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
+                        pkg->package_scope = pkg_scope;
+
+                        int saved_count = ctx->gen_ctx->count;
+                        ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
+
+                        // Save and restore package name around recursion
+                        char * saved_pkg_name = ctx->package_name;
+                        ctx->package_name = NULL;
+
+                        pkg->analysed = true;
+                        sem_pass1_register_top_level_ex(ctx, pkg->ast);
+
+                        // Run pass 2 on imported package to resolve constant types
+                        sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
+
+                        // If parse_imported_file didn't extract the name, grab it from ctx
+                        if (pkg->package_name == NULL && ctx->package_name != NULL)
+                            pkg->package_name = strdup(ctx->package_name);
+
+                        ctx->package_name = saved_pkg_name;
+                        ctx->gen_ctx->count = saved_count;
+                    }
+                }
+                else if (top_decl->type == AST_NODE_CONSTANT_DECL)
                 {
                     sem_register_top_level_declaration(ctx, top_decl);
                 }
@@ -2401,6 +2700,12 @@ sem_pass1_register_top_level(SemContext * ctx)
             }
         }
     }
+}
+
+static void
+sem_pass1_register_top_level(SemContext * ctx)
+{
+    sem_pass1_register_top_level_ex(ctx, ctx->ast);
 }
 
 // --- Pass 2: body analysis dispatcher ---
@@ -2760,9 +3065,8 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
 }
 
 static void
-sem_pass2_analyse_bodies(SemContext * ctx)
+sem_pass2_analyse_bodies_ast(SemContext * ctx, odin_grammar_node_t * program)
 {
-    odin_grammar_node_t * program = ctx->ast;
     if (program == NULL)
         return;
 
@@ -2868,7 +3172,7 @@ sem_analyse(SemContext * ctx)
     if (sem_error_list_has_errors(&ctx->errors))
         return false;
 
-    sem_pass2_analyse_bodies(ctx);
+    sem_pass2_analyse_bodies_ast(ctx, ctx->ast);
     if (sem_error_list_has_errors(&ctx->errors))
         return false;
 

@@ -5,10 +5,12 @@
 #include "odin_grammar.h"
 #include "odin_grammar_ast.h"
 #include "odin_grammar_ast_actions.h"
+#include "package_resolver.h"
 #include "semantic_analyser.h"
 #include "type_descriptors.h"
 
 #include <easy_pc/easy_pc.h>
+#include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -162,6 +164,19 @@ main(int argc, char * argv[])
 
     odin_grammar_node_t * ast_root = (odin_grammar_node_t *)ast_result.ast_root;
 
+    // Resolve ODIN_ROOT
+    char * odin_root = resolve_odin_root(argv[0]);
+    if (odin_root != NULL)
+    {
+        printf("ODIN_ROOT: %s\n", odin_root);
+    }
+
+    // Compute source directory from filename
+    char * filename_copy = strdup(filename);
+    char * dir = dirname(filename_copy);
+    char * source_dir = strdup(dir);
+    free(filename_copy);
+
     // Semantic analysis
     LLVMContextRef llvm_ctx = LLVMContextCreate();
     LLVMBuilderRef builder = LLVMCreateBuilderInContext(llvm_ctx);
@@ -171,6 +186,8 @@ main(int argc, char * argv[])
     if (type_reg == NULL)
     {
         fprintf(stderr, "Error: Failed to create type registry.\n");
+        free(source_dir);
+        free(odin_root);
         odin_grammar_node_free(ast_root, NULL);
         epc_ast_hook_registry_free(hook_registry);
         epc_parse_session_destroy(&session);
@@ -185,6 +202,8 @@ main(int argc, char * argv[])
     if (gen_ctx == NULL)
     {
         fprintf(stderr, "Error: Failed to create generator context.\n");
+        free(source_dir);
+        free(odin_root);
         type_descriptors_destroy_registry(type_reg);
         odin_grammar_node_free(ast_root, NULL);
         epc_ast_hook_registry_free(hook_registry);
@@ -197,7 +216,7 @@ main(int argc, char * argv[])
     }
 
     SemContext sem_ctx;
-    sem_context_init(&sem_ctx, ast_root, type_reg, gen_ctx);
+    sem_context_init(&sem_ctx, ast_root, type_reg, gen_ctx, filename, source_dir, odin_root, parser, hook_registry);
 
     bool sem_ok = sem_analyse(&sem_ctx);
 
@@ -214,6 +233,7 @@ main(int argc, char * argv[])
         if (ir_ctx == NULL)
         {
             fprintf(stderr, "Error: Failed to create IR generator context.\n");
+            sem_context_destroy(&sem_ctx);
             type_descriptors_destroy_registry(type_reg);
             generator_context_destroy(gen_ctx);
             odin_grammar_node_free(ast_root, NULL);
@@ -222,6 +242,8 @@ main(int argc, char * argv[])
             epc_parser_list_free(list);
             LLVMDisposeBuilder(builder);
             LLVMContextDispose(llvm_ctx);
+            free(source_dir);
+            free(odin_root);
             free(src);
             return EXIT_FAILURE;
         }
@@ -251,6 +273,7 @@ main(int argc, char * argv[])
     }
 
     // Cleanup
+    sem_context_destroy(&sem_ctx);
     type_descriptors_destroy_registry(type_reg);
     generator_context_destroy(gen_ctx);
     odin_grammar_node_free(ast_root, NULL);
@@ -259,6 +282,8 @@ main(int argc, char * argv[])
     epc_parser_list_free(list);
     LLVMDisposeBuilder(builder);
     LLVMContextDispose(llvm_ctx);
+    free(source_dir);
+    free(odin_root);
     free(src);
 
     return sem_ok ? EXIT_SUCCESS : EXIT_FAILURE;

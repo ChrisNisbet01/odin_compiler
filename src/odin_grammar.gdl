@@ -126,7 +126,7 @@ HexDigits = hex_digit+;
 HexLiteral = lexeme("0x" HexDigits) @AST_ACTION_INTEGER_BASE;
 OctalLiteral = lexeme("0o" [0-7]+) @AST_ACTION_INTEGER_BASE;
 BinaryLiteral = lexeme("0b" oneof("01")+) @AST_ACTION_INTEGER_BASE;
-DecimalLiteral = ([1-9] digit* | '0') @AST_ACTION_INTEGER_BASE;
+DecimalLiteral = lexeme(([1-9] digit* | '0')) @AST_ACTION_INTEGER_BASE;
 IntegerLiteral = (HexLiteral | OctalLiteral | BinaryLiteral | DecimalLiteral) @AST_ACTION_INTEGER_VALUE;
 
 DigitSeq = digit+;
