@@ -24,7 +24,6 @@ FAILED_TESTS_FILE="$OUTPUT_DIR/failed_tests.list"
 run_test() {
     local odin_file="$1"
     local base_name=$(basename "$odin_file" .odin)
-    local ll_file="$OUTPUT_DIR/${base_name}.ll"
     local exe_file="$OUTPUT_DIR/${base_name}"
     local err_file="$OUTPUT_DIR/${base_name}.err"
     local current_test_failed=false
@@ -34,11 +33,14 @@ run_test() {
     echo ""
     echo "--- Testing: $odin_file ---"
 
-    rm -f "$ll_file" "$exe_file" "$err_file" "$OUTPUT_DIR/${base_name}.out"
+    local base_dir_name=$(dirname "$odin_file")
+    rm -f "$exe_file" "$err_file" "$OUTPUT_DIR/${base_name}.out"
+    rm -f "$base_dir_name/${base_name}.ll" "$base_dir_name/${base_name}.o"
 
-    # 1. Compile with odinc
+    # 1. Compile and link with odinc
+    # Use --keep-temps so the .ll file is available for any debugging
     echo "  [ODINC] Building $odin_file"
-    if ! "$COMPILER" build "$odin_file" > "$OUTPUT_DIR/${base_name}.out" 2> "$err_file"; then
+    if ! "$COMPILER" build --keep-temps "$odin_file" > "$OUTPUT_DIR/${base_name}.out" 2> "$err_file"; then
         echo "  ERROR: odinc build failed for $odin_file. Check $err_file"
         current_test_failed=true
     fi
@@ -46,14 +48,16 @@ run_test() {
         echo "  WARNING: odinc produced warnings for $odin_file. Check $err_file"
     fi
 
-    # Check .ll was produced (either in test/ or output/)
-    if [ ! -f "${odin_file}.ll" ] && [ ! -f "$ll_file" ]; then
-        echo "  ERROR: No .ll file produced for $odin_file"
+    # Check executable was produced (odinc emits it alongside the .ll and .o)
+    local base_dir_name=$(dirname "$odin_file")
+    local expected_exe="$base_dir_name/${base_name}"
+    if [ ! -f "$expected_exe" ] && [ ! -f "$exe_file" ]; then
+        echo "  ERROR: No executable produced for $odin_file"
         current_test_failed=true
     fi
-    # Move .ll to output dir if it was left in test/
-    if [ -f "${odin_file}.ll" ] && [ ! -f "$ll_file" ]; then
-        mv "${odin_file}.ll" "$ll_file"
+    # Move executable to output dir if it was left in test/
+    if [ -f "$expected_exe" ] && [ ! -f "$exe_file" ]; then
+        mv "$expected_exe" "$exe_file"
     fi
 
     if [ "$current_test_failed" = "true" ]; then
@@ -63,28 +67,7 @@ run_test() {
         return
     fi
 
-    # 2. Compile .ll with clang to executable
-    echo "  [CLANG] Compiling $ll_file -> $exe_file"
-    # Extract library names from llvm.dependent.libraries metadata
-    # Format: !llvm.dependent.libraries = !{!0}  where  !0 = !{!"libname"}
-    clang_libs=""
-    while IFS= read -r lib; do
-        clang_libs="$clang_libs -l$lib"
-    done < <(grep 'llvm.dependent.libraries' "$ll_file" 2>/dev/null \
-        | grep -oP '!\K[0-9]+' \
-        | while read ref; do
-            grep "^!$ref = !{!\"" "$ll_file" 2>/dev/null | grep -oP '!"\K[^"]+'
-        done)
-    if ! timeout 2 clang "$ll_file" -o "$exe_file" $clang_libs 2>> "$err_file"; then
-        echo "  ERROR: clang compilation failed. Check $err_file"
-        TEST_FAILED=true
-        current_test_failed=true
-        FAILED_TESTS=$((FAILED_TESTS + 1))
-        echo "$odin_file" >> "$FAILED_TESTS_FILE"
-        return
-    fi
-
-    # 3. Run the executable
+    # 2. Run the executable
     echo "  [RUN] Executing $exe_file"
     local exec_output="$OUTPUT_DIR/${base_name}_exec.log"
     set +e
@@ -147,6 +130,10 @@ run_expected_fail_test() {
         PASSED_TESTS=$((PASSED_TESTS + 1))
     fi
 }
+
+# Set ODIN_ROOT so stubs in <project>/stubs/ are resolvable via <odin_root>/src/<pkg>/<pkg>.odin
+export ODIN_ROOT="$(cd "$SCRIPT_DIR/../stubs" && pwd)"
+echo "ODIN_ROOT=$ODIN_ROOT"
 
 echo "--- Starting Odin Compiler Test Suite ---"
 echo "Compiler: $COMPILER"

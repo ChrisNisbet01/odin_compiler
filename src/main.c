@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define VERSION "0.1.0"
 
@@ -46,14 +47,44 @@ read_file(char const * path, long * out_len)
     return buf;
 }
 
+static int
+run_linker(char const * ll_file, char const * output_file, IrGenContext * ir_ctx)
+{
+    char const * cc = getenv("CC");
+    if (cc == NULL || cc[0] == '\0')
+        cc = "clang";
+
+    size_t cmd_len = strlen(cc) + strlen(ll_file) + strlen(output_file) + 64;
+    for (int i = 0; i < ir_ctx->foreign_library_count; i++)
+    {
+        cmd_len += strlen(ir_ctx->foreign_libraries[i]) + 6;
+    }
+    cmd_len += 8;
+
+    char * cmd = malloc(cmd_len);
+    size_t pos = snprintf(cmd, cmd_len, "%s '%s' -o '%s'", cc, ll_file, output_file);
+
+    for (int i = 0; i < ir_ctx->foreign_library_count; i++)
+    {
+        pos += snprintf(cmd + pos, cmd_len - pos, " -l%s", ir_ctx->foreign_libraries[i]);
+    }
+    pos += snprintf(cmd + pos, cmd_len - pos, " -lm");
+
+    printf("  [LINK] %s\n", cmd);
+    int ret = system(cmd);
+    free(cmd);
+    return ret;
+}
+
 static void
 print_usage(char const * prog)
 {
     printf("Usage:\n");
-    printf("  %s build <file>              Parse, type-check, and compile\n", prog);
-    printf("  %s check <file>              Parse and type-check only\n", prog);
-    printf("  %s version                   Print version\n", prog);
-    printf("  %s help                      Print this help\n", prog);
+    printf("  %s build [-o <output>] [--keep-temps] <file>\n", prog);
+    printf("                           Parse, type-check, compile, and link\n");
+    printf("  %s check <file>         Parse and type-check only\n", prog);
+    printf("  %s version              Print version\n", prog);
+    printf("  %s help                 Print this help\n", prog);
 }
 
 int
@@ -88,14 +119,39 @@ main(int argc, char * argv[])
 
     bool do_codegen = (strcmp(command, "build") == 0);
 
-    if (argc < 3)
+    // Parse options and extract filename
+    char const * filename = NULL;
+    char const * output_name = NULL;
+    bool keep_temps = false;
+
+    for (int i = 2; i < argc; i++)
+    {
+        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
+        {
+            output_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--keep-temps") == 0)
+        {
+            keep_temps = true;
+        }
+        else if (argv[i][0] == '-')
+        {
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
+            print_usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+        else
+        {
+            filename = argv[i];
+        }
+    }
+
+    if (filename == NULL)
     {
         fprintf(stderr, "Error: Missing input file\n");
         print_usage(argv[0]);
         return EXIT_FAILURE;
     }
-
-    char const * filename = argv[2];
 
     long src_len;
     char * src = read_file(filename, &src_len);
@@ -227,6 +283,28 @@ main(int argc, char * argv[])
         sem_error_list_init(&sem_ctx.errors);
     }
 
+    // Compute output filenames
+    char * ll_file = NULL;
+    char * exe_file = NULL;
+
+    if (output_name != NULL)
+    {
+        size_t out_len = strlen(output_name);
+        ll_file = malloc(out_len + 4);
+        exe_file = strdup(output_name);
+        snprintf(ll_file, out_len + 4, "%s.ll", output_name);
+    }
+    else
+    {
+        char const * dot = strrchr(filename, '.');
+        size_t base_len = (dot != NULL) ? (size_t)(dot - filename) : strlen(filename);
+        exe_file = malloc(base_len + 1);
+        memcpy(exe_file, filename, base_len);
+        exe_file[base_len] = '\0';
+        ll_file = malloc(base_len + 4);
+        snprintf(ll_file, base_len + 4, "%s.ll", exe_file);
+    }
+
     if (do_codegen && sem_ok)
     {
         IrGenContext * ir_ctx = ir_gen_context_create("main", type_reg, gen_ctx);
@@ -247,6 +325,8 @@ main(int argc, char * argv[])
             free(source_dir);
             free(odin_root);
             free(src);
+            free(ll_file);
+            free(exe_file);
             return EXIT_FAILURE;
         }
 
@@ -254,15 +334,30 @@ main(int argc, char * argv[])
 
         if (ir_ok)
         {
-            char out_name[256];
-            snprintf(out_name, sizeof(out_name), "%s.ll", filename);
-            if (write_llvm_ir_to_file(ir_ctx->module, out_name) == 0)
+            // 1. Write .ll file
+            if (write_llvm_ir_to_file(ir_ctx->module, ll_file) == 0)
             {
-                printf("Generated IR: %s\n", out_name);
+                printf("Generated IR: %s\n", ll_file);
             }
             else
             {
-                fprintf(stderr, "Error: Failed to write IR to '%s'\n", out_name);
+                fprintf(stderr, "Error: Failed to write IR to '%s'\n", ll_file);
+            }
+
+            // 2. Compile .ll -> executable using system C compiler
+            if (run_linker(ll_file, exe_file, ir_ctx) == 0)
+            {
+                printf("Generated executable: %s\n", exe_file);
+            }
+            else
+            {
+                fprintf(stderr, "Error: Linking failed for '%s'\n", exe_file);
+            }
+
+            // 3. Clean up intermediate files unless --keep-temps
+            if (!keep_temps)
+            {
+                remove(ll_file);
             }
         }
         else
@@ -287,6 +382,8 @@ main(int argc, char * argv[])
     free(source_dir);
     free(odin_root);
     free(src);
+    free(ll_file);
+    free(exe_file);
 
     return sem_ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
