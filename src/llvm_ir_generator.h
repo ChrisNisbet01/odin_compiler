@@ -3,6 +3,7 @@
 #include "generator_lists.h"
 #include "ir_gen_error.h"
 #include "odin_grammar_ast.h"
+#include "package_resolver.h"
 #include "type_descriptors.h"
 
 #include <llvm-c/Core.h>
@@ -64,6 +65,9 @@ typedef struct
     char ** foreign_libraries;
     int foreign_library_count;
     int foreign_library_capacity;
+
+    ImportedPackage ** imports;
+    int import_count;
 } IrGenContext;
 
 IrGenContext *

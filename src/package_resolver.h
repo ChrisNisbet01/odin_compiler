@@ -19,6 +19,8 @@ typedef struct
     char * package_name;       // from the package clause
     scope_t * package_scope;   // scope holding the package's exported symbols
     bool analysed;             // has semantic analysis been run on this?
+    bool codegen_done;         // has IR codegen been done for this package?
+    bool is_using;             // was this imported with 'import using'?
 } ImportedPackage;
 
 // Resolve an import path to a file path.

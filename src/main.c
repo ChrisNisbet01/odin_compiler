@@ -230,6 +230,8 @@ main(int argc, char * argv[])
     if (do_codegen && sem_ok)
     {
         IrGenContext * ir_ctx = ir_gen_context_create("main", type_reg, gen_ctx);
+        ir_ctx->imports = sem_ctx.imports;
+        ir_ctx->import_count = sem_ctx.import_count;
         if (ir_ctx == NULL)
         {
             fprintf(stderr, "Error: Failed to create IR generator context.\n");

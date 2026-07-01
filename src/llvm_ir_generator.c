@@ -3611,6 +3611,14 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             if (field_name_node == NULL || field_name_node->text == NULL)
                 break;
 
+            // Package-qualified access: pkg.member (resolved by semantic analyser)
+            if (cur_type == NULL && op->resolved_symbol != NULL)
+            {
+                val = op->resolved_symbol->value.value;
+                cur_type = op->resolved_symbol->value.type_info;
+                break;
+            }
+
             if (cur_type == NULL
                 || (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA && cur_type->kind != TD_KIND_UNION
                 ))
@@ -4719,94 +4727,135 @@ ir_gen_when_body(IrGenContext * ctx, odin_grammar_node_t * body)
 
 // --- Main entry point ---
 
+static void
+ir_gen_process_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * top_decl)
+{
+    if (top_decl == NULL)
+        return;
+    if (top_decl->type == AST_NODE_CONSTANT_DECL)
+        ir_gen_top_level_decl(ctx, top_decl);
+    else if (top_decl->type == AST_NODE_VARIABLE_DECL)
+        ir_gen_top_level_variable(ctx, top_decl);
+    else if (top_decl->type == AST_NODE_FOREIGN_BLOCK)
+    {
+        for (size_t k = 0; k < top_decl->list.count; k++)
+        {
+            odin_grammar_node_t * fb_child = top_decl->list.children[k];
+            if (fb_child == NULL || fb_child->type != AST_NODE_CONSTANT_DECL)
+                continue;
+            ir_gen_top_level_decl(ctx, fb_child);
+        }
+    }
+    else if (top_decl->type == AST_NODE_FOREIGN_IMPORT)
+        ir_gen_collect_foreign_import(ctx, top_decl);
+    else if (top_decl->type == AST_NODE_USING_DECL)
+    {
+        for (size_t k = 0; k < top_decl->list.count; k++)
+        {
+            odin_grammar_node_t * inner = top_decl->list.children[k];
+            if (inner == NULL)
+                continue;
+            if (inner->type == AST_NODE_CONSTANT_DECL)
+                ir_gen_top_level_decl(ctx, inner);
+            else if (inner->type == AST_NODE_VARIABLE_DECL)
+                ir_gen_top_level_variable(ctx, inner);
+        }
+    }
+    else if (top_decl->type == AST_NODE_WHEN_DECL)
+    {
+        size_t k = 0;
+        bool matched = false;
+        while (k < top_decl->list.count)
+        {
+            odin_grammar_node_t * wc = top_decl->list.children[k];
+            if (wc == NULL)
+            {
+                k++;
+                continue;
+            }
+            if (wc->type == AST_NODE_WHEN_BODY)
+            {
+                if (!matched)
+                    ir_gen_when_body(ctx, wc);
+                break;
+            }
+            int cond = ir_gen_evaluate_constant_bool(wc);
+            k++;
+            if (cond == 1 && !matched)
+            {
+                matched = true;
+                if (k < top_decl->list.count)
+                {
+                    odin_grammar_node_t * body = top_decl->list.children[k];
+                    if (body && body->type == AST_NODE_WHEN_BODY)
+                        ir_gen_when_body(ctx, body);
+                }
+            }
+            k++;
+        }
+    }
+}
+
+static void
+ir_gen_process_ast(IrGenContext * ctx, odin_grammar_node_t * ast)
+{
+    if (ast == NULL)
+        return;
+    for (size_t i = 0; i < ast->list.count; i++)
+    {
+        odin_grammar_node_t * ext_decl = ast->list.children[i];
+        if (ext_decl == NULL || ext_decl->type != AST_NODE_EXTERNAL_DECLARATIONS)
+            continue;
+        for (size_t j = 0; j < ext_decl->list.count; j++)
+            ir_gen_process_top_level_decl(ctx, ext_decl->list.children[j]);
+    }
+}
+
+static void
+import_using_copy_symbol(void * value, void * user_data)
+{
+    symbol_t * sym = (symbol_t *)value;
+    scope_t * target_scope = (scope_t *)user_data;
+    if (sym == NULL || sym->name == NULL || target_scope == NULL)
+        return;
+    scope_add_symbol(target_scope, sym->name, sym->value);
+}
+
 bool
 ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
 {
     if (ctx == NULL || ast == NULL)
         return false;
 
-    for (size_t i = 0; i < ast->list.count; i++)
+    // Generate code for imported packages first
+    for (int i = 0; i < ctx->import_count; i++)
     {
-        odin_grammar_node_t * ext_decl = ast->list.children[i];
-        if (ext_decl == NULL || ext_decl->type != AST_NODE_EXTERNAL_DECLARATIONS)
+        ImportedPackage * pkg = ctx->imports[i];
+        if (pkg == NULL || pkg->ast == NULL || pkg->codegen_done)
             continue;
 
-        for (size_t j = 0; j < ext_decl->list.count; j++)
-        {
-            odin_grammar_node_t * top_decl = ext_decl->list.children[j];
-            if (top_decl == NULL)
-                continue;
+        int saved_count = ctx->gen_ctx->count;
+        if (pkg->package_scope)
+            ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg->package_scope;
 
-            if (top_decl->type == AST_NODE_CONSTANT_DECL)
-            {
-                ir_gen_top_level_decl(ctx, top_decl);
-            }
-            else if (top_decl->type == AST_NODE_VARIABLE_DECL)
-            {
-                ir_gen_top_level_variable(ctx, top_decl);
-            }
-            else if (top_decl->type == AST_NODE_FOREIGN_BLOCK)
-            {
-                for (size_t k = 0; k < top_decl->list.count; k++)
-                {
-                    odin_grammar_node_t * fb_child = top_decl->list.children[k];
-                    if (fb_child == NULL || fb_child->type != AST_NODE_CONSTANT_DECL)
-                        continue;
-                    ir_gen_top_level_decl(ctx, fb_child);
-                }
-            }
-            else if (top_decl->type == AST_NODE_FOREIGN_IMPORT)
-            {
-                ir_gen_collect_foreign_import(ctx, top_decl);
-            }
-            else if (top_decl->type == AST_NODE_USING_DECL)
-            {
-                for (size_t k = 0; k < top_decl->list.count; k++)
-                {
-                    odin_grammar_node_t * inner = top_decl->list.children[k];
-                    if (inner == NULL)
-                        continue;
-                    if (inner->type == AST_NODE_CONSTANT_DECL)
-                        ir_gen_top_level_decl(ctx, inner);
-                    else if (inner->type == AST_NODE_VARIABLE_DECL)
-                        ir_gen_top_level_variable(ctx, inner);
-                }
-            }
-            else if (top_decl->type == AST_NODE_WHEN_DECL)
-            {
-                size_t k = 0;
-                bool matched = false;
-                while (k < top_decl->list.count)
-                {
-                    odin_grammar_node_t * wc = top_decl->list.children[k];
-                    if (wc == NULL)
-                    {
-                        k++;
-                        continue;
-                    }
-                    if (wc->type == AST_NODE_WHEN_BODY)
-                    {
-                        if (!matched)
-                            ir_gen_when_body(ctx, wc);
-                        break;
-                    }
-                    int cond = ir_gen_evaluate_constant_bool(wc);
-                    k++;
-                    if (cond == 1 && !matched)
-                    {
-                        matched = true;
-                        if (k < top_decl->list.count)
-                        {
-                            odin_grammar_node_t * body = top_decl->list.children[k];
-                            if (body && body->type == AST_NODE_WHEN_BODY)
-                                ir_gen_when_body(ctx, body);
-                        }
-                    }
-                    k++;
-                }
-            }
-        }
+        ir_gen_process_ast(ctx, pkg->ast);
+
+        ctx->gen_ctx->count = saved_count;
+        pkg->codegen_done = true;
     }
+
+    // Re-copy symbols for 'import using' packages (codegen now has LLVM values)
+    scope_t * current = generator_current_scope(ctx->gen_ctx);
+    for (int i = 0; i < ctx->import_count; i++)
+    {
+        ImportedPackage * pkg = ctx->imports[i];
+        if (pkg == NULL || !pkg->is_using || pkg->package_scope == NULL)
+            continue;
+        generic_hash_table_iterate(pkg->package_scope->symbols.by_name, import_using_copy_symbol, current);
+    }
+
+    // Generate code for the main AST
+    ir_gen_process_ast(ctx, ast);
 
     // Emit foreign library metadata
     // !llvm.dependent.libraries expects direct MDString operands: !{!"lib1", !"lib2"}

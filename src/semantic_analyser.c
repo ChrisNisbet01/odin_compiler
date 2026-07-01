@@ -2731,6 +2731,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         ctx->import_capacity = new_cap;
                     }
                     ctx->imports[ctx->import_count++] = pkg;
+                    pkg->is_using = true;
 
                     if (!pkg->analysed)
                     {

@@ -54,3 +54,12 @@
 - **Import cycle detection**: Added `import_stack` to `SemContext` (dynamic array of resolved paths). Before parsing an import, checks if the resolved path is already in the stack; if so, prints error and aborts. Push/pop wraps each import's parse+analyse cycle. Tested with `expected_to_fail/test_import_cycle.odin` (a↔b cycle).
 - **ODIN_ROOT resolution hardening**: `resolve_odin_root` now calls `realpath` on the exe path first to resolve symlinks and relative paths before computing `<exe_dir>/../..`.
 - **All 69 tests pass**.
+
+## Accomplishments (session 2026-07-02)
+
+### Import codegen cross-package function calls
+- **Fixed build**: Added `import_using_copy_symbol` as a static function in `llvm_ir_generator.c` to resolve linker error (previously only existed as `static` in `semantic_analyser.c`).
+- **Implemented cross-package function calls**: Package-qualified member access (`pkg.func()`) now works end-to-end. The semantic analyser's `POSTFIX_EXPRESSION` handler recognizes package-qualified names and resolves members via the package scope. The IR generator's `POSTFIX_MEMBER` handler reads `op->resolved_symbol` when `cur_type` is NULL, and `POSTFIX_CALL` falls back to `cur_type` when the function isn't in the local scope. Tested with `test_import_func_call.odin` (calls `test_import_helper.helper_func(41)` → returns 42).
+- **`import using` with function calls**: Works via the symbol re-copy loop in `ir_generate()` that refreshes LLVM values after import codegen. Tested with `test_import_using_func_call.odin` (calls `helper_func(41)` directly).
+- **Fixed test bug**: `assert(...)` is a compile-time directive `#assert[...]`, not a runtime function. Fixed both new tests to use return-value checking instead.
+- **All 72 tests pass**.
