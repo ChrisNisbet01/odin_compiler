@@ -46,3 +46,11 @@
 - **Implemented SOA structs (`struct #soa { x: T; y: U }`)**: Added `TD_KIND_SOA` type descriptor with slice-backed fields. Semantic analyser transforms each field type `T` → `[]T` for SOA structs. IR generator allocates struct-of-slices LLVM type and handles field access via GEP.
 - **Fixed `#soa` directive detection**: The `lexeme("#" DirectiveName)` parser captures trailing whitespace in its semantic content, producing text `"#soa "` (len 5) instead of `"#soa"` (len 4). Changed `strcmp(child->text, "#soa")` to `strstr(child->text, "#soa") != NULL` in `semantic_analyser.c:817`.
 - **All 65 tests pass** (test_soa.odin with 3 `len(s.x)` calls on SOA struct fields).
+
+### Package imports (session 2026-07-01 continued)
+- **Named imports (`import alias "path"`)**: Added `AST_NODE_IMPORT_NAMED` grammar rule (`KwImport Identifier StringLiteral`). Semantic analyser extracts alias name from `children[0]` and overrides `pkg->package_name`. Tested with `test_import_named.odin`.
+- **Using imports (`import using "path"`)**: Added `AST_NODE_IMPORT_USING` grammar rule (`KwImport KwUsing StringLiteral`). Semantic analyser runs pass1/pass2 on the imported package then copies all symbols from the package scope into the current scope via `generic_hash_table_iterate`. Tested with `test_import_using.odin`.
+- **Recursive imports**: Tested chain `main → a → b` — three-level transitive imports work correctly.
+- **Import cycle detection**: Added `import_stack` to `SemContext` (dynamic array of resolved paths). Before parsing an import, checks if the resolved path is already in the stack; if so, prints error and aborts. Push/pop wraps each import's parse+analyse cycle. Tested with `expected_to_fail/test_import_cycle.odin` (a↔b cycle).
+- **ODIN_ROOT resolution hardening**: `resolve_odin_root` now calls `realpath` on the exe path first to resolve symlinks and relative paths before computing `<exe_dir>/../..`.
+- **All 69 tests pass**.

@@ -25,6 +25,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "Import";
     case AST_NODE_IMPORT_NAMED:
         return "ImportNamed";
+    case AST_NODE_IMPORT_USING:
+        return "ImportUsing";
     case AST_NODE_IDENTIFIER:
         return "Identifier";
     case AST_NODE_POLY_IDENT:

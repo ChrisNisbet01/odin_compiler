@@ -31,6 +31,11 @@ typedef struct
     // Parser/hooks for parsing imported files
     epc_parser_t * parser;
     epc_ast_hook_registry_t * hook_registry;
+
+    // Import cycle detection — stack of paths currently being processed
+    char ** import_stack;
+    int import_stack_count;
+    int import_stack_capacity;
 } SemContext;
 
 void sem_context_init(

@@ -21,10 +21,8 @@ resolve_odin_root(char const * exe_path)
     char const * env_root = getenv("ODIN_ROOT");
     if (env_root != NULL && env_root[0] != '\0')
     {
-        // Resolve to absolute path
         if (env_root[0] == '/')
             return strdup(env_root);
-        // Relative path — resolve against CWD
         char * cwd = getcwd(NULL, 0);
         if (cwd == NULL)
             return strdup(env_root);
@@ -36,28 +34,26 @@ resolve_odin_root(char const * exe_path)
     }
 
     // 2. Default: <exe_dir>/../..
-    // exe_path could be relative or absolute; we need the directory
-    char * exe_copy = strdup(exe_path);
+    // Resolve exe path to real path first (handles symlinks, relative paths)
+    char * real_exe = realpath(exe_path, NULL);
+    char const * exe_to_use = real_exe != NULL ? real_exe : exe_path;
+
+    char * exe_copy = strdup(exe_to_use);
     char * exe_dir = dirname(exe_copy);
 
-    // Compute <exe_dir>/../.. and resolve to absolute
     char const * rel_path = "../..";
     size_t needed = strlen(exe_dir) + 1 + strlen(rel_path) + 1;
     char * combined = malloc(needed);
     snprintf(combined, needed, "%s/%s", exe_dir, rel_path);
-    free(exe_copy);
 
-    // Resolve to absolute using realpath
+    free(exe_copy);
+    free(real_exe);
+
     char * resolved = realpath(combined, NULL);
     if (resolved == NULL)
-    {
-        // Fall back to the combined path if realpath fails
         resolved = combined;
-    }
     else
-    {
         free(combined);
-    }
 
     return resolved;
 }

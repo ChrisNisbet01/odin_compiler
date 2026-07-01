@@ -63,6 +63,9 @@ sem_context_init(
     ctx->import_capacity = 0;
     ctx->parser = parser;
     ctx->hook_registry = hooks;
+    ctx->import_stack = NULL;
+    ctx->import_stack_count = 0;
+    ctx->import_stack_capacity = 0;
     register_builtin_context_types(type_registry);
 }
 
@@ -79,6 +82,12 @@ sem_context_destroy(SemContext * ctx)
     ctx->imports = NULL;
     ctx->import_count = 0;
     ctx->import_capacity = 0;
+    for (int i = 0; i < ctx->import_stack_count; i++)
+        free(ctx->import_stack[i]);
+    free(ctx->import_stack);
+    ctx->import_stack = NULL;
+    ctx->import_stack_count = 0;
+    ctx->import_stack_capacity = 0;
 }
 
 // --- Helper: strip quotes from StringLiteral text ---
@@ -2446,6 +2455,53 @@ sem_register_top_level_variable(SemContext * ctx, odin_grammar_node_t * node)
 }
 
 static void
+import_using_copy_symbol(void * value, void * user_data)
+{
+    symbol_t * sym = (symbol_t *)value;
+    scope_t * target_scope = (scope_t *)user_data;
+    if (sym == NULL || sym->name == NULL || target_scope == NULL)
+        return;
+    scope_add_symbol(target_scope, sym->name, sym->value);
+}
+
+static bool
+import_push_path(SemContext * ctx, char const * resolved_path)
+{
+    if (resolved_path == NULL)
+        return false;
+    for (int i = 0; i < ctx->import_stack_count; i++)
+    {
+        if (strcmp(ctx->import_stack[i], resolved_path) == 0)
+        {
+            fprintf(stderr, "Error: Import cycle detected — '%s'\n", resolved_path);
+            return false;
+        }
+    }
+    if (ctx->import_stack_count >= ctx->import_stack_capacity)
+    {
+        int new_cap = ctx->import_stack_capacity == 0 ? 8 : ctx->import_stack_capacity * 2;
+        char ** new_arr = realloc(ctx->import_stack, (size_t)new_cap * sizeof(char *));
+        if (new_arr == NULL)
+            return false;
+        ctx->import_stack = new_arr;
+        ctx->import_stack_capacity = new_cap;
+    }
+    ctx->import_stack[ctx->import_stack_count++] = strdup(resolved_path);
+    return true;
+}
+
+static void
+import_pop_path(SemContext * ctx)
+{
+    if (ctx->import_stack_count > 0)
+    {
+        ctx->import_stack_count--;
+        free(ctx->import_stack[ctx->import_stack_count]);
+        ctx->import_stack[ctx->import_stack_count] = NULL;
+    }
+}
+
+static void
 sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast)
 {
     if (program_ast == NULL)
@@ -2492,19 +2548,30 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         continue;
                     }
 
-                    // Parse the imported file
-                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
-                    free(resolved);
-                    if (pkg == NULL)
+                    if (!import_push_path(ctx, resolved))
+                    {
+                        free(resolved);
                         continue;
+                    }
 
-                    // Add to ctx->imports array
+                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
+
+                    // import_push_path strdup'd resolved; stack owns it now
+                    if (pkg == NULL)
+                    {
+                        import_pop_path(ctx);
+                        free(resolved);
+                        continue;
+                    }
+
                     if (ctx->import_count >= ctx->import_capacity)
                     {
                         int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
                         ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
                         if (new_arr == NULL)
                         {
+                            import_pop_path(ctx);
+                            free(resolved);
                             imported_package_free(pkg);
                             continue;
                         }
@@ -2513,42 +2580,39 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                     }
                     ctx->imports[ctx->import_count++] = pkg;
 
-                    // Create a scope for the package and register its symbols there
                     if (!pkg->analysed)
                     {
                         scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
                         pkg->package_scope = pkg_scope;
 
-                        // Push package scope onto the scope stack for pass1 registration
                         int saved_count = ctx->gen_ctx->count;
                         ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
 
-                        // Save and restore package name around recursion
                         char * saved_pkg_name = ctx->package_name;
                         ctx->package_name = NULL;
 
                         pkg->analysed = true;
                         sem_pass1_register_top_level_ex(ctx, pkg->ast);
 
-                        // Run pass 2 on imported package to resolve constant types
                         sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
 
-                        // If parse_imported_file didn't extract the name, grab it from ctx
                         if (pkg->package_name == NULL && ctx->package_name != NULL)
                             pkg->package_name = strdup(ctx->package_name);
 
                         ctx->package_name = saved_pkg_name;
 
-                        // Pop without freeing (scope lives in ImportedPackage)
                         ctx->gen_ctx->count = saved_count;
                     }
+
+                    import_pop_path(ctx);
+                    free(resolved);
                 }
                 else if (top_decl->type == AST_NODE_IMPORT_NAMED)
                 {
-                    // ImportNamed children: [Identifier("alias"), StringLiteral("path")]
                     if (top_decl->list.count < 2 || top_decl->list.children[0] == NULL
-                        || top_decl->list.children[1] == NULL)
+                        || top_decl->list.children[0]->text == NULL || top_decl->list.children[1] == NULL)
                         continue;
+                    char const * alias_name = top_decl->list.children[0]->text;
                     odin_grammar_node_t * path_node = top_decl->list.children[1];
                     char * import_path = strip_quotes(path_node->text);
                     if (import_path == NULL)
@@ -2562,10 +2626,19 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         continue;
                     }
 
-                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
-                    free(resolved);
-                    if (pkg == NULL)
+                    if (!import_push_path(ctx, resolved))
+                    {
+                        free(resolved);
                         continue;
+                    }
+
+                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
+                    if (pkg == NULL)
+                    {
+                        import_pop_path(ctx);
+                        free(resolved);
+                        continue;
+                    }
 
                     if (ctx->import_count >= ctx->import_capacity)
                     {
@@ -2573,6 +2646,8 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
                         if (new_arr == NULL)
                         {
+                            import_pop_path(ctx);
+                            free(resolved);
                             imported_package_free(pkg);
                             continue;
                         }
@@ -2589,23 +2664,101 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         int saved_count = ctx->gen_ctx->count;
                         ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
 
-                        // Save and restore package name around recursion
                         char * saved_pkg_name = ctx->package_name;
                         ctx->package_name = NULL;
 
                         pkg->analysed = true;
                         sem_pass1_register_top_level_ex(ctx, pkg->ast);
 
-                        // Run pass 2 on imported package to resolve constant types
                         sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
 
-                        // If parse_imported_file didn't extract the name, grab it from ctx
+                        if (pkg->package_name == NULL && ctx->package_name != NULL)
+                            pkg->package_name = strdup(ctx->package_name);
+
+                        free(pkg->package_name);
+                        pkg->package_name = strdup(alias_name);
+
+                        ctx->package_name = saved_pkg_name;
+                        ctx->gen_ctx->count = saved_count;
+                    }
+
+                    import_pop_path(ctx);
+                    free(resolved);
+                }
+                else if (top_decl->type == AST_NODE_IMPORT_USING)
+                {
+                    if (top_decl->list.count < 1 || top_decl->list.children[0] == NULL)
+                        continue;
+                    odin_grammar_node_t * path_node = top_decl->list.children[0];
+                    char * import_path = strip_quotes(path_node->text);
+                    if (import_path == NULL)
+                        continue;
+
+                    char * resolved = resolve_import_path(import_path, ctx->source_dir, ctx->odin_root);
+                    free(import_path);
+                    if (resolved == NULL)
+                    {
+                        fprintf(stderr, "Error: Cannot resolve import '%s'\n", path_node->text);
+                        continue;
+                    }
+
+                    if (!import_push_path(ctx, resolved))
+                    {
+                        free(resolved);
+                        continue;
+                    }
+
+                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
+                    if (pkg == NULL)
+                    {
+                        import_pop_path(ctx);
+                        free(resolved);
+                        continue;
+                    }
+
+                    if (ctx->import_count >= ctx->import_capacity)
+                    {
+                        int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
+                        ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
+                        if (new_arr == NULL)
+                        {
+                            import_pop_path(ctx);
+                            free(resolved);
+                            imported_package_free(pkg);
+                            continue;
+                        }
+                        ctx->imports = new_arr;
+                        ctx->import_capacity = new_cap;
+                    }
+                    ctx->imports[ctx->import_count++] = pkg;
+
+                    if (!pkg->analysed)
+                    {
+                        scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
+                        pkg->package_scope = pkg_scope;
+
+                        int saved_count = ctx->gen_ctx->count;
+                        ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
+
+                        char * saved_pkg_name = ctx->package_name;
+                        ctx->package_name = NULL;
+
+                        pkg->analysed = true;
+                        sem_pass1_register_top_level_ex(ctx, pkg->ast);
+                        sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
+
                         if (pkg->package_name == NULL && ctx->package_name != NULL)
                             pkg->package_name = strdup(ctx->package_name);
 
                         ctx->package_name = saved_pkg_name;
                         ctx->gen_ctx->count = saved_count;
+
+                        scope_t * current_scope = generator_current_scope(ctx->gen_ctx);
+                        generic_hash_table_iterate(pkg_scope->symbols.by_name, import_using_copy_symbol, current_scope);
                     }
+
+                    import_pop_path(ctx);
+                    free(resolved);
                 }
                 else if (top_decl->type == AST_NODE_CONSTANT_DECL)
                 {

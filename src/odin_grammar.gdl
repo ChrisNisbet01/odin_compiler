@@ -425,8 +425,9 @@ Statement = DeferStatement
 PackageClause = KwPackage Identifier @AST_ACTION_PACKAGE_CLAUSE;
 
 ImportNamed = KwImport Identifier StringLiteral @AST_ACTION_IMPORT_NAMED;
-ImportSimple = KwImport KwUsing? StringLiteral @AST_ACTION_IMPORT;
-ImportDecl = ImportNamed | ImportSimple;
+ImportUsing = KwImport KwUsing StringLiteral @AST_ACTION_IMPORT_USING;
+ImportSimple = KwImport StringLiteral @AST_ACTION_IMPORT;
+ImportDecl = ImportNamed | ImportUsing | ImportSimple;
 
 IdentifierList = delimited(Identifier, Comma) Comma? @AST_ACTION_IDENTIFIER_LIST;
 VariableDecl = IdentifierList (Colon TypePrefix (Assign Expression)? | ColonAssign Expression) @AST_ACTION_VARIABLE_DECL;
