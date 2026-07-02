@@ -406,6 +406,12 @@ DEFINE_ACTION(ast_action_cast_expr_action, AST_NODE_CAST_EXPR)
 DEFINE_ACTION(ast_action_transmute_expr_action, AST_NODE_TRANSMUTE_EXPR)
 DEFINE_ACTION(ast_action_len_expr_action, AST_NODE_LEN_EXPR)
 DEFINE_ACTION(ast_action_cap_expr_action, AST_NODE_CAP_EXPR)
+DEFINE_ACTION(ast_action_size_of_expr_action, AST_NODE_SIZE_OF_EXPR)
+DEFINE_ACTION(ast_action_align_of_expr_action, AST_NODE_ALIGN_OF_EXPR)
+DEFINE_ACTION(ast_action_offset_of_expr_action, AST_NODE_OFFSET_OF_EXPR)
+DEFINE_ACTION(ast_action_raw_data_expr_action, AST_NODE_RAW_DATA_EXPR)
+DEFINE_ACTION(ast_action_min_expr_action, AST_NODE_MIN_EXPR)
+DEFINE_ACTION(ast_action_max_expr_action, AST_NODE_MAX_EXPR)
 DEFINE_ACTION(ast_action_make_expr_action, AST_NODE_MAKE_EXPR)
 DEFINE_ACTION(ast_action_new_expr_action, AST_NODE_NEW_EXPR)
 DEFINE_ACTION(ast_action_delete_expr_action, AST_NODE_DELETE_EXPR)
@@ -569,6 +575,12 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_TRANSMUTE_EXPR, ast_action_transmute_expr_action);
     REGISTER(AST_ACTION_LEN_EXPR, ast_action_len_expr_action);
     REGISTER(AST_ACTION_CAP_EXPR, ast_action_cap_expr_action);
+    REGISTER(AST_ACTION_SIZE_OF_EXPR, ast_action_size_of_expr_action);
+    REGISTER(AST_ACTION_ALIGN_OF_EXPR, ast_action_align_of_expr_action);
+    REGISTER(AST_ACTION_OFFSET_OF_EXPR, ast_action_offset_of_expr_action);
+    REGISTER(AST_ACTION_RAW_DATA_EXPR, ast_action_raw_data_expr_action);
+    REGISTER(AST_ACTION_MIN_EXPR, ast_action_min_expr_action);
+    REGISTER(AST_ACTION_MAX_EXPR, ast_action_max_expr_action);
     REGISTER(AST_ACTION_MAKE_EXPR, ast_action_make_expr_action);
     REGISTER(AST_ACTION_NEW_EXPR, ast_action_new_expr_action);
     REGISTER(AST_ACTION_DELETE_EXPR, ast_action_delete_expr_action);

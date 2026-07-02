@@ -4372,6 +4372,139 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return len_val;
     }
 
+    case AST_NODE_SIZE_OF_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * type_node = node->list.children[0];
+        TypeDescriptor const * td = type_node->resolved_type;
+        if (td == NULL || td->llvm_type == NULL)
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+        uint64_t size = LLVMABISizeOfType(ctx->data_layout, td->llvm_type);
+        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), size, false);
+    }
+
+    case AST_NODE_ALIGN_OF_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * type_node = node->list.children[0];
+        TypeDescriptor const * td = type_node->resolved_type;
+        if (td == NULL || td->llvm_type == NULL)
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 1, false);
+        uint32_t align = LLVMABIAlignmentOfType(ctx->data_layout, td->llvm_type);
+        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), align, false);
+    }
+
+    case AST_NODE_OFFSET_OF_EXPR:
+    {
+        if (node->list.count < 2)
+            return NULL;
+        odin_grammar_node_t * type_node = node->list.children[0];
+        odin_grammar_node_t * field_node = node->list.children[1];
+        TypeDescriptor const * td = type_node->resolved_type;
+        if (td == NULL || td->llvm_type == NULL)
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+        if (td->kind != TD_KIND_STRUCT && td->kind != TD_KIND_SOA && td->kind != TD_KIND_UNION
+            && td->kind != TD_KIND_BIT_FIELD)
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+        char const * field_name = field_node ? field_node->text : NULL;
+        if (field_name == NULL)
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+        field_access_path_t path;
+        if (type_descriptor_find_struct_field_path(td, field_name, &path))
+        {
+            // Walk path to find the final field; compute cumulative offset using LLVM
+            uint64_t offset = 0;
+            TypeDescriptor const * walk = td;
+            for (int pi = 0; pi < path.count; pi++)
+            {
+                struct_field_t const * f = type_descriptor_get_struct_field(walk, path.indices[pi]);
+                if (f == NULL)
+                    break;
+                if (LLVMGetTypeKind(walk->llvm_type) == LLVMStructTypeKind)
+                    offset += LLVMOffsetOfElement(ctx->data_layout, walk->llvm_type, (unsigned)path.indices[pi]);
+                walk = f->type_desc;
+            }
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), offset, false);
+        }
+        // For union offset_of always returns 0
+        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+    }
+
+    case AST_NODE_RAW_DATA_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * operand = node->list.children[0];
+        LLVMValueRef operand_val = ir_gen_node(ctx, operand);
+        if (operand_val == NULL)
+            return NULL;
+        TypeDescriptor const * operand_type = operand->resolved_type;
+        if (operand_type == NULL)
+            return LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+        TypeDescriptor const * elem_type = operand_type->element_type;
+        LLVMTypeRef elem_ptr = elem_type ? LLVMPointerType(elem_type->llvm_type, 0)
+                                         : LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+        if (operand_type->kind == TD_KIND_ARRAY)
+        {
+            if (LLVMGetTypeKind(LLVMTypeOf(operand_val)) == LLVMPointerTypeKind)
+                return LLVMBuildPointerCast(ctx->builder, operand_val, elem_ptr, "raw_data");
+            LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, LLVMTypeOf(operand_val), "raw_data.arr");
+            LLVMBuildStore(ctx->builder, operand_val, alloca);
+            return LLVMBuildPointerCast(ctx->builder, alloca, elem_ptr, "raw_data");
+        }
+        // Slice or dynamic array: extract data pointer (field 0)
+        LLVMTypeRef val_type = LLVMTypeOf(operand_val);
+        LLVMValueRef data_ptr = NULL;
+        if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
+        {
+            LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                                      LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+            data_ptr = LLVMBuildLoad2(
+                ctx->builder,
+                LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0),
+                LLVMBuildInBoundsGEP2(ctx->builder, operand_type->llvm_type, operand_val, indices, 2, "rd.gep"),
+                "raw_data"
+            );
+        }
+        else
+        {
+            data_ptr = LLVMBuildExtractValue(ctx->builder, operand_val, 0, "raw_data");
+        }
+        if (elem_ptr)
+            return LLVMBuildPointerCast(ctx->builder, data_ptr, elem_ptr, "raw_data");
+        return data_ptr;
+    }
+
+    case AST_NODE_MIN_EXPR:
+    case AST_NODE_MAX_EXPR:
+    {
+        if (node->list.count < 2)
+            return NULL;
+        bool is_min = (node->type == AST_NODE_MIN_EXPR);
+        LLVMValueRef lhs = ir_gen_node(ctx, node->list.children[0]);
+        LLVMValueRef rhs = ir_gen_node(ctx, node->list.children[1]);
+        if (lhs == NULL || rhs == NULL)
+            return lhs ? lhs : rhs;
+        LLVMTypeRef cmp_type = LLVMTypeOf(lhs);
+        LLVMTypeKind tk = LLVMGetTypeKind(cmp_type);
+        LLVMValueRef cmp;
+        if (tk == LLVMIntegerTypeKind)
+        {
+            cmp = LLVMBuildICmp(ctx->builder, is_min ? LLVMIntSLT : LLVMIntSGT, lhs, rhs, "mm.cmp");
+        }
+        else if (tk == LLVMFloatTypeKind || tk == LLVMDoubleTypeKind)
+        {
+            cmp = LLVMBuildFCmp(ctx->builder, is_min ? LLVMRealOLT : LLVMRealOGT, lhs, rhs, "mm.cmp");
+        }
+        else
+        {
+            return lhs;
+        }
+        return LLVMBuildSelect(ctx->builder, cmp, lhs, rhs, is_min ? "min" : "max");
+    }
+
     case AST_NODE_MAKE_EXPR:
     {
         if (node->list.count < 2)

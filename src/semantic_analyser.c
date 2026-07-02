@@ -312,7 +312,25 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
     {
     case AST_NODE_BASIC_TYPE:
     case AST_NODE_TYPE_NAME:
-        return sem_resolve_type_name(ctx, node);
+    {
+        TypeDescriptor const * td = sem_resolve_type_name(ctx, node);
+        if (td != NULL)
+            return td;
+        // For compound types wrapped in TypeName (e.g. struct { ... }), resolve children
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            if (node->list.children[i] != NULL)
+            {
+                td = sem_resolve_type_expr(ctx, node->list.children[i]);
+                if (td != NULL)
+                {
+                    node->resolved_type = (TypeDescriptor *)td;
+                    return td;
+                }
+            }
+        }
+        return NULL;
+    }
 
     case AST_NODE_POINTER_TYPE:
     {
@@ -1457,6 +1475,119 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
         node->resolved_type = NULL;
         return NULL;
+    }
+
+    case AST_NODE_SIZE_OF_EXPR:
+    case AST_NODE_ALIGN_OF_EXPR:
+    {
+        if (node->list.count < 1)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        odin_grammar_node_t * type_node = node->list.children[0];
+        TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+        if (td == NULL)
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "invalid type argument to size_of/align_of");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        type_node->resolved_type = (TypeDescriptor *)td;
+        TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
+        node->resolved_type = (TypeDescriptor *)int_type;
+        return int_type;
+    }
+
+    case AST_NODE_OFFSET_OF_EXPR:
+    {
+        if (node->list.count < 2)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        odin_grammar_node_t * type_node = node->list.children[0];
+        odin_grammar_node_t * field_node = node->list.children[1];
+        TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+        if (td == NULL)
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "invalid type argument to offset_of");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        type_node->resolved_type = (TypeDescriptor *)td;
+        if (td->kind != TD_KIND_STRUCT && td->kind != TD_KIND_SOA && td->kind != TD_KIND_UNION)
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "offset_of requires a struct, SOA, or union type");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+
+        TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
+        node->resolved_type = (TypeDescriptor *)int_type;
+        return int_type;
+    }
+
+    case AST_NODE_RAW_DATA_EXPR:
+    {
+        if (node->list.count < 1)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        odin_grammar_node_t * operand = node->list.children[0];
+        sem_evaluate_expr(ctx, operand);
+        TypeDescriptor const * operand_type = operand->resolved_type;
+        if (operand_type == NULL)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        if (operand_type->kind != TD_KIND_SLICE && operand_type->kind != TD_KIND_ARRAY
+            && operand_type->kind != TD_KIND_DYNAMIC_ARRAY)
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "raw_data requires a slice, array, or dynamic array");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        TypeDescriptor const * elem_type = operand_type->element_type;
+        if (elem_type == NULL)
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "raw_data: operand has no element type");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        TypeDescriptor const * ptr_type = get_or_create_pointer_type(ctx->type_registry, elem_type);
+        node->resolved_type = (TypeDescriptor *)ptr_type;
+        return ptr_type;
+    }
+
+    case AST_NODE_MIN_EXPR:
+    case AST_NODE_MAX_EXPR:
+    {
+        if (node->list.count < 2)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        TypeDescriptor const * lhs_type = sem_evaluate_expr(ctx, node->list.children[0]);
+        TypeDescriptor const * rhs_type = sem_evaluate_expr(ctx, node->list.children[1]);
+        if (lhs_type == NULL || rhs_type == NULL)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        bool lhs_num = is_integer_kind(lhs_type) || is_floating_kind(lhs_type);
+        bool rhs_num = is_integer_kind(rhs_type) || is_floating_kind(rhs_type);
+        if (!lhs_num || !rhs_num)
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "min/max requires numeric arguments");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
+        node->resolved_type = (TypeDescriptor *)int_type;
+        return int_type;
     }
 
     case AST_NODE_DISTINCT_TYPE:
