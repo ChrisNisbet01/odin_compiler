@@ -278,7 +278,6 @@ main(int argc, char * argv[])
 
     if (sem_error_list_has_errors(&sem_ctx.errors))
     {
-        fprintf(stderr, "Semantic analysis failed:\n");
         sem_error_list_print(&sem_ctx.errors);
         sem_error_list_init(&sem_ctx.errors);
     }
@@ -310,6 +309,7 @@ main(int argc, char * argv[])
         IrGenContext * ir_ctx = ir_gen_context_create("main", type_reg, gen_ctx);
         ir_ctx->imports = sem_ctx.imports;
         ir_ctx->import_count = sem_ctx.import_count;
+        ir_ctx->file_path = filename;
         if (ir_ctx == NULL)
         {
             fprintf(stderr, "Error: Failed to create IR generator context.\n");
@@ -362,7 +362,6 @@ main(int argc, char * argv[])
         }
         else
         {
-            fprintf(stderr, "IR generation failed.\n");
             ir_gen_error_collection_print(&ir_ctx->errors);
         }
 

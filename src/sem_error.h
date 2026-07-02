@@ -9,6 +9,7 @@
 typedef struct
 {
     char const * message;
+    char const * file_path;
     odin_grammar_node_t * node;
 } SemError;
 
@@ -22,6 +23,6 @@ void sem_error_list_init(SemErrorList * list);
 
 bool sem_error_list_has_errors(SemErrorList const * list);
 
-void sem_error_list_add(SemErrorList * list, odin_grammar_node_t * node, char const * message);
+void sem_error_list_add(SemErrorList * list, char const * file_path, odin_grammar_node_t * node, char const * message);
 
 void sem_error_list_print(SemErrorList const * list);

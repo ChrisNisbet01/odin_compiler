@@ -1,13 +1,12 @@
 # Unsupported Language Features
 
-Features present in the official Odin standard library that our compiler does not yet support. These are tracked here for future implementation reference.
+Features present in the official Odin language that our compiler does not yet support. These are tracked here for future implementation reference.
 
 ## Compile-Time / Polymorphic
 
 - `$T` / `$N` — Compile-time polymorphic parameters (generic procedures)
 - `type_of(expr)` — Compile-time type reflection built-in
 - Proc overload bundles — `proc{fn1, fn2}` syntax
-- `---` — Bodyless procedure declarations (used for builtins)
 - `#type` — Procedure type alias syntax
 
 ## Built-in Procedures
@@ -64,3 +63,9 @@ Features present in the official Odin standard library that our compiler does no
 - `distinct` type creation
 - `bit_set` with explicit underlying type
 - Cross-module `import "base:intrinsics"` or `import "core:mem"` (no `:` collection prefix support)
+
+## Recently Added (Supported)
+
+- `---` — Bodyless procedure declarations (used for builtins/stubs)
+- Standard library stubs via `ODIN_ROOT` resolution + linker integration (clang)
+- Error messages now include source location: `<file>:<line>:<col>`

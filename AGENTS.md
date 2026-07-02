@@ -63,3 +63,21 @@
 - **`import using` with function calls**: Works via the symbol re-copy loop in `ir_generate()` that refreshes LLVM values after import codegen. Tested with `test_import_using_func_call.odin` (calls `helper_func(41)` directly).
 - **Fixed test bug**: `assert(...)` is a compile-time directive `#assert[...]`, not a runtime function. Fixed both new tests to use return-value checking instead.
 - **All 72 tests pass**.
+
+## Accomplishments (session 2026-07-03)
+
+### Better error reporting with source locations
+- **Populated `source_data.view` in all AST nodes**: Modified `make_node`, `make_node_base`, and `ast_action_struct_field_action` in `odin_grammar_ast_actions.c` to call `epc_cpt_node_get_input_view(node)` and store line/column info on every AST node during construction.
+- **Added file path tracking to semantic errors**: Added `file_path` field to `SemError` struct, updated `sem_error_list_add` signature to take a file path parameter. All 25+ call sites in `semantic_analyser.c` updated to pass `ctx->source_file_path`.
+- **Per-file error tracking for imports**: During import processing, `ctx->source_file_path` is temporarily swapped to `pkg->source_path` so errors from imported files correctly show the imported file's path.
+- **Improved `sem_error_list_print`**: Now outputs `error: <file>:<line>:<col>: <message>` instead of the bare `Semantic error: <message>`.
+- **Same improvements to IR gen errors**: Added `file_path` to `IrGenError` struct and `IrGenContext`, updated the single call site and print function.
+- **Removed redundant headers**: Removed `"Semantic analysis failed:"` and `"IR generation failed."` prefix lines since the new format already starts with `error:`.
+- **Converted `fprintf` import errors**: Changed three `fprintf(stderr, "Error: Cannot resolve import...")` calls to use `sem_error_list_add` for consistent formatted output.
+- **Updated `unsupported_features.md`**: Moved `---` bodyless procedures to "Recently Added" section; added error reporting improvement.
+- **All 73 tests pass**.
+
+## Accomplishments (session 2026-07-03, continued)
+- **Added error reporting for ~30 silent-failure sites in IR generation**: Added `ir_gen_error_collection_add` calls at ~30 locations across `ir_gen_lvalue`, `ir_gen_postfix_expression`, `ir_gen_node`, `ir_gen_binary_expression`, `ir_gen_unary_expression`, and `ir_gen_in_expression`. Covers P0 (silently-skipped operations on wrong types), P1 (symbol/type lookup failures including cast/transmute/len/make/new/incl/excl), and P2-P4 (tracked in `notes/ir_gen_error_reporting.md`).
+- **Handled false-positive edge cases**: Package names in expression context return NULL from `ir_gen_identifier` without error (PostfixMember handler resolves via `op->resolved_symbol`). Blank identifier `_` returns NULL from `ir_gen_lvalue` without error. Outer PostfixExpression node does not add cascading error when inner `ir_gen_lvalue` already reported the cause.
+- **All 73 tests pass**.

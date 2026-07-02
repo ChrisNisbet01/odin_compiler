@@ -9,6 +9,7 @@
 typedef struct
 {
     char const * message;
+    char const * file_path;
     odin_grammar_node_t * node;
 } IrGenError;
 
@@ -22,6 +23,6 @@ void ir_gen_error_collection_init(IrGenErrorCollection * col);
 
 bool ir_gen_error_collection_has_errors(IrGenErrorCollection const * col);
 
-void ir_gen_error_collection_add(IrGenErrorCollection * col, odin_grammar_node_t * node, char const * message);
+void ir_gen_error_collection_add(IrGenErrorCollection * col, char const * file_path, odin_grammar_node_t * node, char const * message);
 
 void ir_gen_error_collection_print(IrGenErrorCollection const * col);

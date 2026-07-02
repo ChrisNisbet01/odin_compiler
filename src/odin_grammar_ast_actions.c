@@ -29,6 +29,9 @@ make_node(
         result->list.children[i] = (odin_grammar_node_t *)children[i];
     }
 
+    epc_parser_input_view_t input_view = epc_cpt_node_get_input_view(node);
+    result->source_data.view = input_view;
+
     if (capture_text)
     {
         char const * sem = epc_cpt_node_get_semantic_content(node);
@@ -64,6 +67,7 @@ make_node_base(epc_cpt_node_t * node, void ** children, int count)
     (void)node;
 
     odin_grammar_node_t * result = calloc(1, sizeof(*result));
+    result->source_data.view = epc_cpt_node_get_input_view(node);
     result->list.count = (size_t)count;
     result->list.children = calloc((size_t)count, sizeof(odin_grammar_node_t *));
     for (int i = 0; i < count; i++)
@@ -379,6 +383,7 @@ ast_action_struct_field_action(
 {
     (void)user_data;
     odin_grammar_node_t * result = calloc(1, sizeof(odin_grammar_node_t));
+    result->source_data.view = epc_cpt_node_get_input_view(node);
     result->type = AST_NODE_STRUCT_FIELD;
     result->list.children = calloc((size_t)count, sizeof(odin_grammar_node_t *));
     result->list.count = (size_t)count;

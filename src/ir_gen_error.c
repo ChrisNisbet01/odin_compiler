@@ -16,12 +16,30 @@ ir_gen_error_collection_has_errors(IrGenErrorCollection const * col)
 }
 
 void
-ir_gen_error_collection_add(IrGenErrorCollection * col, odin_grammar_node_t * node, char const * message)
+ir_gen_error_collection_add(IrGenErrorCollection * col, char const * file_path, odin_grammar_node_t * node, char const * message)
 {
     if (col->count >= MAX_IR_GEN_ERRORS) return;
     col->errors[col->count].node = node;
+    col->errors[col->count].file_path = file_path ? strdup(file_path) : NULL;
     col->errors[col->count].message = strdup(message);
     col->count++;
+}
+
+static void
+print_location(FILE * f, IrGenError const * err)
+{
+    if (err->file_path)
+    {
+        fprintf(f, "%s", err->file_path);
+    }
+    else
+    {
+        fprintf(f, "<unknown>");
+    }
+    if (err->node && err->node->source_data.view.line_number > 0)
+    {
+        fprintf(f, ":%zu:%zu", err->node->source_data.view.line_number, err->node->source_data.view.column_number);
+    }
 }
 
 void
@@ -29,6 +47,8 @@ ir_gen_error_collection_print(IrGenErrorCollection const * col)
 {
     for (int i = 0; i < col->count; i++)
     {
-        fprintf(stderr, "IR gen error: %s\n", col->errors[i].message);
+        fprintf(stderr, "error: ");
+        print_location(stderr, &col->errors[i]);
+        fprintf(stderr, ": %s\n", col->errors[i].message);
     }
 }

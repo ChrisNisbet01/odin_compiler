@@ -62,6 +62,8 @@ typedef struct
 
     LLVMTypeRef auto_cast_target_type;
 
+    char const * file_path;
+
     char ** foreign_libraries;
     int foreign_library_count;
     int foreign_library_capacity;
