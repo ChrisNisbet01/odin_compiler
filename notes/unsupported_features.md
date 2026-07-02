@@ -13,13 +13,10 @@ Features present in the official Odin language that our compiler does not yet su
 
 - `type_info_of(T)` — Get runtime type info from a typeid
 - `typeid_of(T)` — Get typeid from a type
-- `size_of(T)` / `align_of(T)` / `offset_of(T, field)` — Compile-time queries
 - `swizzle` — Vector swizzle operation
 - `complex` / `quaternion` — Complex/quaternion construction
 - `expand_values` / `compress_values` — Struct/array expansion
-- `raw_data` — Get raw pointer to backing data
 - `soa_zip` / `soa_unzip` — SOA struct manipulation
-- `min` / `max` — Generic min/max
 
 ## Annotations / Attributes
 
@@ -33,7 +30,6 @@ Features present in the official Odin language that our compiler does not yet su
 
 ## Types
 
-- `i128` / `u128` — 128-bit integer types
 - `f16` — 16-bit float
 - `complex32` / `complex64` / `complex128` — Complex types
 - `quaternion64` / `quaternion128` / `quaternion256` — Quaternion types
@@ -69,3 +65,7 @@ Features present in the official Odin language that our compiler does not yet su
 - `---` — Bodyless procedure declarations (used for builtins/stubs)
 - Standard library stubs via `ODIN_ROOT` resolution + linker integration (clang)
 - Error messages now include source location: `<file>:<line>:<col>`
+- `size_of(T)` / `align_of(T)` / `offset_of(T, field)` — Compile-time queries
+- `raw_data(expr)` — Get raw pointer to backing data
+- `min(a, b)` / `max(a, b)` — Generic min/max
+- `i128` / `u128` — 128-bit integer types
