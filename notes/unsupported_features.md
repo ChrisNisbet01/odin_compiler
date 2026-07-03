@@ -32,7 +32,6 @@ Features present in the official Odin language that our compiler does not yet su
 
 - `complex32` / `complex64` / `complex128` — Complex types
 - `quaternion64` / `quaternion128` / `quaternion256` — Quaternion types
-- `typeid` — Type identifier type
 - Endian-specific types — `i16le`, `i32be`, `f64le`, etc.
 - `Maybe(T)` — Optional type
 - `[^]T` — Pointer-to-array with `fmt:` tags
@@ -69,3 +68,4 @@ Features present in the official Odin language that our compiler does not yet su
 - `f16` — 16-bit float type
 - `cstring` — C-compatible null-terminated string pointer
 - `uintptr` — Unsigned pointer-sized integer
+- `typeid` — Type identifier type

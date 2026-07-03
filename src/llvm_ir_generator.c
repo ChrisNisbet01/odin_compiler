@@ -858,7 +858,7 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
         LLVMTypeRef operand_type = LLVMTypeOf(operand);
         LLVMTypeKind type_kind = LLVMGetTypeKind(operand_type);
-    bool is_float = (type_kind == LLVMHalfTypeKind || type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
+        bool is_float = (type_kind == LLVMHalfTypeKind || type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
 
         switch (op_md->kind)
         {

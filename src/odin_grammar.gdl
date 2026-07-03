@@ -82,6 +82,7 @@ KwUintptr = lexeme("uintptr" IdBoundary);
 KwF16 = lexeme("f16" IdBoundary);
 KwCstring = lexeme("cstring" IdBoundary);
 KwAny = lexeme("any" IdBoundary);
+KwTypeId = lexeme("typeid" IdBoundary);
 KwType = lexeme("type" IdBoundary);
 
 KwBitField = lexeme("bit_field" IdBoundary);
@@ -106,7 +107,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwOrElse | KwOrReturn | KwNot | KwAnd | KwOr | KwNotIn
     | KwInt | KwI8 | KwI16 | KwI32 | KwI64
     | KwU8 | KwU16 | KwU32 | KwU64
-    | KwF16 | KwF32 | KwF64 | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring | KwAny | KwType
+    | KwF16 | KwF32 | KwF64 | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring | KwAny | KwTypeId | KwType
     | KwBitField | KwBitSet | KwIncl | KwExcl;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
@@ -228,7 +229,7 @@ BasicType = (KwInt | KwI8 | KwI16 | KwI32 | KwI64
           | KwU8 | KwU16 | KwU32 | KwU64
           | KwF16 | KwF32 | KwF64
           | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring
-          | KwAny | KwType)
+          | KwAny | KwTypeId | KwType)
           @AST_ACTION_BASIC_TYPE;
 
 // --- Type Expressions ---

@@ -159,6 +159,7 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         {"rune", 32, false, true},
         {"byte", 8, false, true},
         {"uintptr", 64, false, true},
+        {"typeid", 64, false, true},
         {"bool", 1, false, true},
     };
 
