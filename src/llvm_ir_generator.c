@@ -1057,6 +1057,18 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             {
                 init_val = LLVMBuildExtractValue(ctx->builder, init_val, 0, "str2cstr");
             }
+            // Auto-convert integer types (e.g. int literal → i32 variable)
+            if (var_type && LLVMGetTypeKind(var_type->llvm_type) == LLVMIntegerTypeKind
+                && LLVMGetTypeKind(init_llvm_type) == LLVMIntegerTypeKind)
+            {
+                unsigned var_bits = LLVMGetIntTypeWidth(var_type->llvm_type);
+                unsigned init_bits = LLVMGetIntTypeWidth(init_llvm_type);
+                if (var_bits != init_bits)
+                {
+                    bool sign_extend = var_type->as.basic.is_unsigned ? false : (var_bits > init_bits);
+                    init_val = LLVMBuildIntCast2(ctx->builder, init_val, var_type->llvm_type, sign_extend, "int2int");
+                }
+            }
             // Auto-convert float types (e.g. f64 literal → f16 variable)
             if (var_type && var_type->kind == TD_KIND_BASIC && var_type->as.basic.is_float)
             {

@@ -161,6 +161,26 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         {"uintptr", 64, false, true},
         {"typeid", 64, false, true},
         {"bool", 1, false, true},
+        // Endian-specific integer types (same LLVM types as native on x86_64 LE)
+        {"i16le", 16, false, false},
+        {"i32le", 32, false, false},
+        {"i64le", 64, false, false},
+        {"i16be", 16, false, false},
+        {"i32be", 32, false, false},
+        {"i64be", 64, false, false},
+        {"u16le", 16, false, true},
+        {"u32le", 32, false, true},
+        {"u64le", 64, false, true},
+        {"u16be", 16, false, true},
+        {"u32be", 32, false, true},
+        {"u64be", 64, false, true},
+        // Endian-specific float types (same LLVM types on x86_64)
+        {"f16le", 16, true, false},
+        {"f32le", 32, true, false},
+        {"f64le", 64, true, false},
+        {"f16be", 16, true, false},
+        {"f32be", 32, true, false},
+        {"f64be", 64, true, false},
     };
 
     LLVMTypeRef string_llvm = string_llvm_type(context);
