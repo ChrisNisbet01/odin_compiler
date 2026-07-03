@@ -105,6 +105,14 @@ KwF16Be = lexeme("f16be" IdBoundary);
 KwF32Be = lexeme("f32be" IdBoundary);
 KwF64Be = lexeme("f64be" IdBoundary);
 
+// Complex type keywords
+KwComplex32 = lexeme("complex32" IdBoundary);
+KwComplex64 = lexeme("complex64" IdBoundary);
+KwComplex128 = lexeme("complex128" IdBoundary);
+KwQuaternion64 = lexeme("quaternion64" IdBoundary);
+KwQuaternion128 = lexeme("quaternion128" IdBoundary);
+KwQuaternion256 = lexeme("quaternion256" IdBoundary);
+
 KwBitField = lexeme("bit_field" IdBoundary);
 KwBitSet = lexeme("bit_set" IdBoundary);
 KwIncl = lexeme("incl" IdBoundary);
@@ -131,6 +139,8 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwI16Le | KwI32Le | KwI64Le | KwI16Be | KwI32Be | KwI64Be
     | KwU16Le | KwU32Le | KwU64Le | KwU16Be | KwU32Be | KwU64Be
     | KwF16Le | KwF32Le | KwF64Le | KwF16Be | KwF32Be | KwF64Be
+    | KwComplex32 | KwComplex64 | KwComplex128
+    | KwQuaternion64 | KwQuaternion128 | KwQuaternion256
     | KwBitField | KwBitSet | KwIncl | KwExcl;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
@@ -255,7 +265,9 @@ BasicType = (KwInt | KwI8 | KwI16 | KwI32 | KwI64
           | KwAny | KwTypeId | KwType
           | KwI16Le | KwI32Le | KwI64Le | KwI16Be | KwI32Be | KwI64Be
           | KwU16Le | KwU32Le | KwU64Le | KwU16Be | KwU32Be | KwU64Be
-          | KwF16Le | KwF32Le | KwF64Le | KwF16Be | KwF32Be | KwF64Be)
+          | KwF16Le | KwF32Le | KwF64Le | KwF16Be | KwF32Be | KwF64Be
+          | KwComplex32 | KwComplex64 | KwComplex128
+          | KwQuaternion64 | KwQuaternion128 | KwQuaternion256)
           @AST_ACTION_BASIC_TYPE;
 
 // --- Type Expressions ---

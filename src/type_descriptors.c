@@ -232,6 +232,66 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         reg->basic_types[reg->basic_count++] = cstring_td;
     }
 
+    // Complex types: struct { float, float }
+    {
+        LLVMTypeRef f16_t = LLVMHalfTypeInContext(context);
+        LLVMTypeRef f32_t = LLVMFloatTypeInContext(context);
+        LLVMTypeRef f64_t = LLVMDoubleTypeInContext(context);
+
+        LLVMTypeRef complex32_fields[2] = {f16_t, f16_t};
+        LLVMTypeRef complex64_fields[2] = {f32_t, f32_t};
+        LLVMTypeRef complex128_fields[2] = {f64_t, f64_t};
+
+        LLVMTypeRef quat64_fields[4] = {f16_t, f16_t, f16_t, f16_t};
+        LLVMTypeRef quat128_fields[4] = {f32_t, f32_t, f32_t, f32_t};
+        LLVMTypeRef quat256_fields[4] = {f64_t, f64_t, f64_t, f64_t};
+
+        TypeDescriptor * td;
+
+        td = type_descriptor_alloc(reg);
+        if (td) {
+            td->kind = TD_KIND_BASIC;
+            td->llvm_type = LLVMStructTypeInContext(context, complex32_fields, 2, false);
+            td->as.basic.name = "complex32"; td->as.basic.width = 32;
+            reg->basic_types[reg->basic_count++] = td;
+        }
+        td = type_descriptor_alloc(reg);
+        if (td) {
+            td->kind = TD_KIND_BASIC;
+            td->llvm_type = LLVMStructTypeInContext(context, complex64_fields, 2, false);
+            td->as.basic.name = "complex64"; td->as.basic.width = 64;
+            reg->basic_types[reg->basic_count++] = td;
+        }
+        td = type_descriptor_alloc(reg);
+        if (td) {
+            td->kind = TD_KIND_BASIC;
+            td->llvm_type = LLVMStructTypeInContext(context, complex128_fields, 2, false);
+            td->as.basic.name = "complex128"; td->as.basic.width = 128;
+            reg->basic_types[reg->basic_count++] = td;
+        }
+        td = type_descriptor_alloc(reg);
+        if (td) {
+            td->kind = TD_KIND_BASIC;
+            td->llvm_type = LLVMStructTypeInContext(context, quat64_fields, 4, false);
+            td->as.basic.name = "quaternion64"; td->as.basic.width = 64;
+            reg->basic_types[reg->basic_count++] = td;
+        }
+        td = type_descriptor_alloc(reg);
+        if (td) {
+            td->kind = TD_KIND_BASIC;
+            td->llvm_type = LLVMStructTypeInContext(context, quat128_fields, 4, false);
+            td->as.basic.name = "quaternion128"; td->as.basic.width = 128;
+            reg->basic_types[reg->basic_count++] = td;
+        }
+        td = type_descriptor_alloc(reg);
+        if (td) {
+            td->kind = TD_KIND_BASIC;
+            td->llvm_type = LLVMStructTypeInContext(context, quat256_fields, 4, false);
+            td->as.basic.name = "quaternion256"; td->as.basic.width = 256;
+            reg->basic_types[reg->basic_count++] = td;
+        }
+    }
+
     // Define `any` as a struct { i8* data; i64 type_id } to distinguish from `string`
     LLVMTypeRef any_llvm = LLVMStructCreateNamed(context, "any");
     LLVMTypeRef any_fields[2] = {
