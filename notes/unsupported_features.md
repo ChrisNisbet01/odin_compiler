@@ -5,16 +5,15 @@ Features present in the official Odin language that our compiler does not yet su
 ## Compile-Time / Polymorphic
 
 - `$T` / `$N` — Compile-time polymorphic parameters (generic procedures)
-- `type_of(expr)` — Compile-time type reflection built-in
 - Proc overload bundles — `proc{fn1, fn2}` syntax
 - `#type` — Procedure type alias syntax
 
 ## Built-in Procedures
 
+- `type_of(expr)` — Compile-time type reflection built-in
 - `type_info_of(T)` — Get runtime type info from a typeid
 - `typeid_of(T)` — Get typeid from a type
 - `swizzle` — Vector swizzle operation
-- `complex` / `quaternion` — Complex/quaternion construction
 - `expand_values` / `compress_values` — Struct/array expansion
 - `soa_zip` / `soa_unzip` — SOA struct manipulation
 
@@ -69,3 +68,5 @@ Features present in the official Odin language that our compiler does not yet su
 - Endian-specific types — `i16le`, `i32be`, `f64le`, etc. (on x86_64 LE)
 - `complex32` / `complex64` / `complex128` — Complex types
 - `quaternion64` / `quaternion128` / `quaternion256` — Quaternion types
+- `complex(r, i)` / `quaternion(r, i, j, k)` — Complex/quaternion construction
+- `TypeName(expr)` — Auto-cast-by-juxtaposition (e.g. `f32(1.0)`)

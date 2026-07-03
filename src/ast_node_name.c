@@ -279,6 +279,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "MinExpr";
     case AST_NODE_MAX_EXPR:
         return "MaxExpr";
+    case AST_NODE_TYPE_OF_EXPR:
+        return "TypeOfExpr";
     case AST_NODE_MAKE_EXPR:
         return "MakeExpr";
     case AST_NODE_NEW_EXPR:

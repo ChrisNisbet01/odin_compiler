@@ -1623,6 +1623,19 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return ptr_type;
     }
 
+    case AST_NODE_TYPE_OF_EXPR:
+    {
+        if (node->list.count < 1)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        sem_evaluate_expr(ctx, node->list.children[0]);
+        TypeDescriptor const * typeid_type = get_basic_type_by_name(ctx->type_registry, "typeid");
+        node->resolved_type = (TypeDescriptor *)typeid_type;
+        return typeid_type;
+    }
+
     case AST_NODE_MIN_EXPR:
     case AST_NODE_MAX_EXPR:
     {
