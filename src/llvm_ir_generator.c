@@ -630,10 +630,15 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             bool sign_extend = (rhs_bits < lhs_bits);
             rhs = LLVMBuildIntCast2(ctx->builder, rhs, lhs_type, sign_extend, "coerce");
         }
+        else if ((lhs_tk == LLVMHalfTypeKind || lhs_tk == LLVMFloatTypeKind || lhs_tk == LLVMDoubleTypeKind)
+                 && (rhs_tk == LLVMHalfTypeKind || rhs_tk == LLVMFloatTypeKind || rhs_tk == LLVMDoubleTypeKind))
+        {
+            rhs = LLVMBuildFPCast(ctx->builder, rhs, lhs_type, "fltcoerce");
+        }
     }
 
     LLVMTypeKind type_kind = LLVMGetTypeKind(lhs_type);
-    bool is_float = (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
+    bool is_float = (type_kind == LLVMHalfTypeKind || type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wswitch-enum"
@@ -853,7 +858,7 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
         LLVMTypeRef operand_type = LLVMTypeOf(operand);
         LLVMTypeKind type_kind = LLVMGetTypeKind(operand_type);
-        bool is_float = (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
+    bool is_float = (type_kind == LLVMHalfTypeKind || type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
 
         switch (op_md->kind)
         {
@@ -1051,6 +1056,23 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 && LLVMGetTypeKind(init_llvm_type) == LLVMStructTypeKind)
             {
                 init_val = LLVMBuildExtractValue(ctx->builder, init_val, 0, "str2cstr");
+            }
+            // Auto-convert float types (e.g. f64 literal → f16 variable)
+            if (var_type && var_type->kind == TD_KIND_BASIC && var_type->as.basic.is_float)
+            {
+                LLVMTypeKind var_kind = LLVMGetTypeKind(var_type->llvm_type);
+                LLVMTypeKind init_kind = LLVMGetTypeKind(init_llvm_type);
+                if (var_kind != init_kind)
+                {
+                    if (var_kind == LLVMHalfTypeKind || var_kind == LLVMFloatTypeKind)
+                    {
+                        init_val = LLVMBuildFPTrunc(ctx->builder, init_val, var_type->llvm_type, "flt2flt");
+                    }
+                    else
+                    {
+                        init_val = LLVMBuildFPExt(ctx->builder, init_val, var_type->llvm_type, "flt2flt");
+                    }
+                }
             }
             if (var_type && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
             {
@@ -1728,8 +1750,7 @@ ir_gen_binary_op_by_kind(IrGenContext * ctx, LLVMValueRef lhs, LLVMValueRef rhs,
 
     LLVMTypeRef lhs_type = LLVMTypeOf(lhs);
     LLVMTypeKind type_kind = LLVMGetTypeKind(lhs_type);
-    bool is_float = (type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
-
+    bool is_float = (type_kind == LLVMHalfTypeKind || type_kind == LLVMFloatTypeKind || type_kind == LLVMDoubleTypeKind);
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wswitch-enum"
 

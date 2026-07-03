@@ -153,6 +153,7 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         {"u32", 32, false, true},
         {"u64", 64, false, true},
         {"u128", 128, false, true},
+        {"f16", 16, true, false},
         {"f32", 32, true, false},
         {"f64", 64, true, false},
         {"rune", 32, false, true},
@@ -178,7 +179,9 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         if (basic_specs[i].is_float)
         {
             td->llvm_type
-                = basic_specs[i].width == 32 ? LLVMFloatTypeInContext(context) : LLVMDoubleTypeInContext(context);
+                = basic_specs[i].width == 32 ? LLVMFloatTypeInContext(context)
+                : basic_specs[i].width == 16 ? LLVMHalfTypeInContext(context)
+                : LLVMDoubleTypeInContext(context);
         }
         else
         {

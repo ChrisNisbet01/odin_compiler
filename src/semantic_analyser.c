@@ -1286,12 +1286,23 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_FLOAT_VALUE:
     {
-        TypeDescriptor const * f64_type = get_basic_type_by_name(ctx->type_registry, "f64");
-        if (f64_type)
+        char const * text = node->text;
+        TypeDescriptor const * flt_type = NULL;
+        if (text != NULL)
         {
-            node->resolved_type = (TypeDescriptor *)f64_type;
+            size_t len = strlen(text);
+            if (len >= 3 && strcmp(text + len - 3, "f16") == 0)
+            {
+                flt_type = get_basic_type_by_name(ctx->type_registry, "f16");
+            }
         }
-        return f64_type;
+        if (flt_type == NULL)
+            flt_type = get_basic_type_by_name(ctx->type_registry, "f64");
+        if (flt_type)
+        {
+            node->resolved_type = (TypeDescriptor *)flt_type;
+        }
+        return flt_type;
     }
 
     case AST_NODE_STRING_LITERAL:
