@@ -417,6 +417,8 @@ DEFINE_ACTION(ast_action_new_expr_action, AST_NODE_NEW_EXPR)
 DEFINE_ACTION(ast_action_delete_expr_action, AST_NODE_DELETE_EXPR)
 DEFINE_ACTION(ast_action_incl_expr_action, AST_NODE_INCL_EXPR)
 DEFINE_ACTION(ast_action_excl_expr_action, AST_NODE_EXCL_EXPR)
+DEFINE_ACTION(ast_action_complex_expr_action, AST_NODE_COMPLEX_EXPR)
+DEFINE_ACTION(ast_action_quaternion_expr_action, AST_NODE_QUATERNION_EXPR)
 
 // --- Terminal nodes (text captured for semantic use) ---
 DEFINE_TERMINAL_ACTION(ast_action_identifier_action, AST_NODE_IDENTIFIER)
@@ -586,6 +588,8 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_DELETE_EXPR, ast_action_delete_expr_action);
     REGISTER(AST_ACTION_INCL_EXPR, ast_action_incl_expr_action);
     REGISTER(AST_ACTION_EXCL_EXPR, ast_action_excl_expr_action);
+    REGISTER(AST_ACTION_COMPLEX_EXPR, ast_action_complex_expr_action);
+    REGISTER(AST_ACTION_QUATERNION_EXPR, ast_action_quaternion_expr_action);
 
 #undef REGISTER
 }

@@ -1488,6 +1488,56 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
+    case AST_NODE_COMPLEX_EXPR:
+    case AST_NODE_QUATERNION_EXPR:
+    {
+        bool is_complex = (node->type == AST_NODE_COMPLEX_EXPR);
+        int min_args = is_complex ? 2 : 4;
+        if (node->list.count < min_args)
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "complex/quaternion: insufficient arguments");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        TypeDescriptor const * arg0 = sem_evaluate_expr(ctx, node->list.children[0]);
+        for (size_t i = 1; i < node->list.count; i++)
+        {
+            TypeDescriptor const * arg = sem_evaluate_expr(ctx, node->list.children[i]);
+            if (arg == NULL || arg0 == NULL)
+                continue;
+            if (arg->llvm_type != arg0->llvm_type)
+            {
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+                    "complex/quaternion: all arguments must have the same type");
+                node->resolved_type = NULL;
+                return NULL;
+            }
+        }
+        if (arg0 == NULL)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        char const * target_name = NULL;
+        LLVMContextRef llvm_ctx = ctx->gen_ctx->context;
+        if (arg0->llvm_type == LLVMHalfTypeInContext(llvm_ctx))
+            target_name = is_complex ? "complex32" : "quaternion64";
+        else if (arg0->llvm_type == LLVMFloatTypeInContext(llvm_ctx))
+            target_name = is_complex ? "complex64" : "quaternion128";
+        else if (arg0->llvm_type == LLVMDoubleTypeInContext(llvm_ctx))
+            target_name = is_complex ? "complex128" : "quaternion256";
+        else
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+                "complex/quaternion: arguments must be f16, f32, or f64");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        TypeDescriptor const * result_type = get_basic_type_by_name(ctx->type_registry, target_name);
+        node->resolved_type = (TypeDescriptor *)result_type;
+        return result_type;
+    }
+
     case AST_NODE_SIZE_OF_EXPR:
     case AST_NODE_ALIGN_OF_EXPR:
     {

@@ -4799,6 +4799,23 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
+    case AST_NODE_COMPLEX_EXPR:
+    case AST_NODE_QUATERNION_EXPR:
+    {
+        if (node->resolved_type == NULL || node->list.count < 2)
+            return NULL;
+        LLVMTypeRef struct_type = node->resolved_type->llvm_type;
+        LLVMValueRef result = LLVMGetUndef(struct_type);
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            LLVMValueRef val = ir_gen_node(ctx, node->list.children[i]);
+            if (val == NULL)
+                return NULL;
+            result = LLVMBuildInsertValue(ctx->builder, result, val, (unsigned)i, "complex.field");
+        }
+        return result;
+    }
+
     case AST_NODE_NIL:
     case AST_NODE_NONE:
         return ir_gen_nil(ctx, node);
