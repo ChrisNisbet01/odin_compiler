@@ -678,49 +678,37 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOEQ, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntEQ, lhs, rhs, "cmptmp");
-        if (is_float)
-            return cmp;
-        return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
+        return cmp;
     }
     case OP_NE:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealONE, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntNE, lhs, rhs, "cmptmp");
-        if (is_float)
-            return cmp;
-        return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
+        return cmp;
     }
     case OP_LT:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOLT, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntSLT, lhs, rhs, "cmptmp");
-        if (is_float)
-            return cmp;
-        return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
+        return cmp;
     }
     case OP_GT:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOGT, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntSGT, lhs, rhs, "cmptmp");
-        if (is_float)
-            return cmp;
-        return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
+        return cmp;
     }
     case OP_LE:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOLE, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntSLE, lhs, rhs, "cmptmp");
-        if (is_float)
-            return cmp;
-        return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
+        return cmp;
     }
     case OP_GE:
     {
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOGE, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntSGE, lhs, rhs, "cmptmp");
-        if (is_float)
-            return cmp;
-        return LLVMBuildIntCast2(ctx->builder, cmp, lhs_type, false, "cmpext");
+        return cmp;
     }
     case OP_LOG_AND:
     {
@@ -1056,6 +1044,14 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         ctx->auto_cast_target_type = NULL;
         if (init_val)
         {
+            LLVMTypeRef init_llvm_type = LLVMTypeOf(init_val);
+            // Auto-convert string struct {ptr, i64} → cstring ptr
+            if (var_type && var_type->kind == TD_KIND_BASIC && var_type->as.basic.name != NULL
+                && strcmp(var_type->as.basic.name, "cstring") == 0
+                && LLVMGetTypeKind(init_llvm_type) == LLVMStructTypeKind)
+            {
+                init_val = LLVMBuildExtractValue(ctx->builder, init_val, 0, "str2cstr");
+            }
             if (var_type && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
             {
                 LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
@@ -4083,17 +4079,20 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
     // If the final value is a pointer and the result type is non-composite, load
     // it. Proc types are excluded because the pointer IS the value (function
-    // pointer).
+    // pointer). Basic pointer-valued types (cstring, rawptr) are excluded
+    // because the value IS a pointer, not a pointer-to-value.
     if (val != NULL && cur_type != NULL)
     {
         LLVMTypeRef val_llvm_type = LLVMTypeOf(val);
         if (LLVMGetTypeKind(val_llvm_type) == LLVMPointerTypeKind)
         {
+            bool is_ptr_valued_basic = (cur_type->kind == TD_KIND_BASIC
+                && LLVMGetTypeKind(cur_type->llvm_type) == LLVMPointerTypeKind);
             if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA && cur_type->kind != TD_KIND_ARRAY
                 && cur_type->kind != TD_KIND_SLICE && cur_type->kind != TD_KIND_PROC
                 && cur_type->kind != TD_KIND_DYNAMIC_ARRAY && cur_type->kind != TD_KIND_MAP
                 && cur_type->kind != TD_KIND_BIT_FIELD && cur_type->kind != TD_KIND_BIT_SET
-                && cur_type->kind != TD_KIND_UNION)
+                && cur_type->kind != TD_KIND_UNION && !is_ptr_valued_basic)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }
