@@ -227,7 +227,8 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
             && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
                 || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_SOA
                 || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY || sym->value.type_info->kind == TD_KIND_MAP
-                || sym->value.type_info->kind == TD_KIND_BIT_FIELD || sym->value.type_info->kind == TD_KIND_UNION))
+                || sym->value.type_info->kind == TD_KIND_BIT_FIELD || sym->value.type_info->kind == TD_KIND_UNION
+                || sym->value.type_info->kind == TD_KIND_MAYBE))
         {
             return sym->value.value;
         }
@@ -947,6 +948,47 @@ ir_gen_register_enum_enumerators(IrGenContext * ctx, odin_grammar_node_t * enum_
 
 // --- Variable codegen ---
 
+static bool
+init_contains_none(odin_grammar_node_t * node)
+{
+    if (node == NULL) return false;
+    if (node->type == AST_NODE_NONE) return true;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        if (node->list.children[i] != NULL)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child->type == AST_NODE_NONE)
+                return true;
+            switch (child->type)
+            {
+                case AST_NODE_ASSIGN_EXPRESSION:
+                case AST_NODE_OR_ELSE:
+                case AST_NODE_OR_RETURN:
+                case AST_NODE_TERNARY_EXPRESSION:
+                case AST_NODE_RANGE_EXPRESSION:
+                case AST_NODE_LOG_OR_EXPRESSION:
+                case AST_NODE_LOG_AND_EXPRESSION:
+                case AST_NODE_COMP_EXPRESSION:
+                case AST_NODE_BIT_OR_EXPRESSION:
+                case AST_NODE_BIT_XOR_EXPRESSION:
+                case AST_NODE_BIT_AND_EXPRESSION:
+                case AST_NODE_SHIFT_EXPRESSION:
+                case AST_NODE_ADD_EXPRESSION:
+                case AST_NODE_MUL_EXPRESSION:
+                case AST_NODE_POSTFIX_EXPRESSION:
+                case AST_NODE_PRIMARY_EXPRESSION:
+                    if (init_contains_none(child))
+                        return true;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    return false;
+}
+
 static LLVMValueRef
 ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -969,7 +1011,8 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         odin_grammar_node_t * child = node->list.children[i];
         if (child == NULL)
             continue;
-        if (child->resolved_type && child->type != AST_NODE_IDENTIFIER && child->type != AST_NODE_IDENTIFIER_LIST
+        if ((child->resolved_type || init_contains_none(child) || (child->type == AST_NODE_NIL))
+            && child->type != AST_NODE_IDENTIFIER && child->type != AST_NODE_IDENTIFIER_LIST
             && !is_type_node(child))
             init_node = child;
         else if (is_type_node(child))
@@ -980,7 +1023,8 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         for (size_t i = 1; i < node->list.count; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
-            if (child != NULL && child != id_list && child->type != AST_NODE_IDENTIFIER_LIST)
+            if (child == NULL) continue;
+            if (init_contains_none(child) || child->type == AST_NODE_NIL)
             {
                 init_node = child;
                 break;
@@ -1086,7 +1130,25 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                     }
                 }
             }
-            if (var_type && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
+            if (var_type && var_type->kind == TD_KIND_MAYBE)
+            {
+                LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                if (init_node && init_contains_none(init_node))
+                {
+                    // none: set tag = 1 (payload is already zeroed from zero-init)
+                    LLVMValueRef tag_indices[2] = {idx0, idx0};
+                    LLVMValueRef tag_gep = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, tag_indices, 2, "maybe.tag.gep");
+                    LLVMBuildStore(ctx->builder, LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 1, false), tag_gep);
+                }
+                else if (init_val != NULL)
+                {
+                    // some(value): set tag = 0 (already zero), store payload
+                    LLVMValueRef payload_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+                    LLVMValueRef payload_gep = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, payload_indices, 2, "maybe.payload.gep");
+                    LLVMBuildStore(ctx->builder, init_val, payload_gep);
+                }
+            }
+            else if (var_type && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
             {
                 LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
                 LLVMValueRef zero_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
@@ -1120,7 +1182,7 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                     = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, gep1, 2, "any.typeid");
                 LLVMBuildStore(ctx->builder, type_id, id_field);
             }
-            else
+            else if (init_val != NULL)
             {
                 LLVMBuildStore(ctx->builder, init_val, alloca);
             }
@@ -1647,6 +1709,17 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                     break;
                 }
 
+                if (cur_type->kind == TD_KIND_MAYBE)
+                {
+                    // Maybe(T).value — access payload field 1, bitcast to inner type
+                    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                    LLVMValueRef payload_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+                    LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, ptr, payload_indices, 2, "maybe.val.gep");
+                    ptr = LLVMBuildBitCast(ctx->builder, payload_ptr, LLVMPointerType(cur_type->as.maybe.inner_type->llvm_type, 0), field_name_node->text);
+                    cur_type = cur_type->as.maybe.inner_type;
+                    break;
+                }
+
                 if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA)
                 {
                     ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "member access: type is not a struct");
@@ -1835,6 +1908,42 @@ ir_gen_or_else_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
 
     LLVMTypeRef lhs_type = LLVMTypeOf(lhs);
+
+    // Check if LHS is Maybe(T) — check tag instead of zero
+    TypeDescriptor const * lhs_td = node->list.children[0]->resolved_type;
+    if (lhs_td && lhs_td->kind == TD_KIND_MAYBE)
+    {
+        // Load Maybe struct value (lhs may be pointer from composite type identifier)
+        LLVMTypeRef maybe_llvm = lhs_td->llvm_type;
+        LLVMValueRef maybe_val = lhs;
+        if (LLVMGetTypeKind(LLVMTypeOf(lhs)) == LLVMPointerTypeKind)
+            maybe_val = LLVMBuildLoad2(ctx->builder, maybe_llvm, lhs, "maybe.load");
+        LLVMTypeRef inner_llvm = lhs_td->as.maybe.inner_type->llvm_type;
+        LLVMValueRef tag = LLVMBuildExtractValue(ctx->builder, maybe_val, 0, "maybe.tag");
+        LLVMValueRef payload = LLVMBuildExtractValue(ctx->builder, maybe_val, 1, "maybe.val");
+        LLVMValueRef is_none = LLVMBuildICmp(ctx->builder, LLVMIntNE, tag, LLVMConstNull(LLVMInt64TypeInContext(ctx->context)), "maybe.isnone");
+
+        LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(ctx->builder);
+        LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "or.rhs");
+        LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "or.merge");
+
+        LLVMBuildCondBr(ctx->builder, is_none, rhs_bb, merge_bb);
+
+        // RHS block
+        LLVMPositionBuilderAtEnd(ctx->builder, rhs_bb);
+        LLVMValueRef rhs = ir_gen_node(ctx, node->list.children[1]);
+        if (rhs == NULL)
+            rhs = LLVMConstNull(inner_llvm);
+        LLVMBuildBr(ctx->builder, merge_bb);
+
+        // Merge with phi
+        LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
+        LLVMValueRef phi = LLVMBuildPhi(ctx->builder, inner_llvm, "or.phi");
+        LLVMValueRef phi_vals[2] = {payload, rhs};
+        LLVMBasicBlockRef phi_blocks[2] = {entry_bb, rhs_bb};
+        LLVMAddIncoming(phi, phi_vals, phi_blocks, 2);
+        return phi;
+    }
 
     LLVMValueRef is_zero;
     LLVMTypeKind tk = LLVMGetTypeKind(lhs_type);
@@ -3730,6 +3839,22 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 break;
             }
 
+            // Maybe(T).value — access payload field
+            if (cur_type && cur_type->kind == TD_KIND_MAYBE && field_name_node->text
+                && strcmp(field_name_node->text, "value") == 0)
+            {
+                LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(
+                    ctx->builder, cur_type->llvm_type, val,
+                    (LLVMValueRef[]) {
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)
+                    }, 2, "maybe.val.gep"
+                );
+                val = LLVMBuildLoad2(ctx->builder, cur_type->as.maybe.inner_type->llvm_type, payload_ptr, "maybe.val.load");
+                cur_type = cur_type->as.maybe.inner_type;
+                break;
+            }
+
             if (cur_type == NULL
                 || (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA && cur_type->kind != TD_KIND_UNION
                 ))
@@ -3907,6 +4032,51 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                     );
                     val = LLVMBuildLoad2(ctx->builder, target_type->llvm_type, typed_ptr, "assert.val");
                 }
+                cur_type = target_type;
+                LLVMBuildBr(ctx->builder, cont_bb);
+                // --- Fail block: trap ---
+                LLVMPositionBuilderAtEnd(ctx->builder, fail_bb);
+                {
+                    LLVMValueRef trap_func = LLVMGetNamedFunction(ctx->module, "llvm.trap");
+                    LLVMTypeRef trap_ftype;
+                    if (trap_func == NULL)
+                    {
+                        trap_ftype = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), NULL, 0, false);
+                        trap_func = LLVMAddFunction(ctx->module, "llvm.trap", trap_ftype);
+                    }
+                    else
+                    {
+                        trap_ftype = LLVMGlobalGetValueType(trap_func);
+                    }
+                    LLVMBuildCall2(ctx->builder, trap_ftype, trap_func, NULL, 0, "");
+                }
+                LLVMBuildUnreachable(ctx->builder);
+                // --- Continue block ---
+                LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
+            }
+            else if (cur_type && cur_type->kind == TD_KIND_MAYBE)
+            {
+                // Type assertion x.(T) for Maybe(T): check tag == 0 (some)
+                LLVMValueRef ptr = val;
+                LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+                LLVMValueRef tag_indices[2] = {idx0, idx0};
+                LLVMValueRef tag_ptr = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, ptr, tag_indices, 2, "massert.tag.gep");
+                LLVMValueRef stored_tag = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), tag_ptr, "massert.tag");
+                LLVMValueRef expected_tag = LLVMConstNull(LLVMInt64TypeInContext(ctx->context));
+                LLVMValueRef tag_match = LLVMBuildICmp(ctx->builder, LLVMIntEQ, stored_tag, expected_tag, "massert.match");
+                LLVMBasicBlockRef current_bb = LLVMGetInsertBlock(ctx->builder);
+                LLVMValueRef current_func = LLVMGetBasicBlockParent(current_bb);
+                LLVMBasicBlockRef match_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "massert.match");
+                LLVMBasicBlockRef fail_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "massert.fail");
+                LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "massert.cont");
+                LLVMBuildCondBr(ctx->builder, tag_match, match_bb, fail_bb);
+                // --- Match block: extract payload ---
+                LLVMPositionBuilderAtEnd(ctx->builder, match_bb);
+                LLVMValueRef payload_indices[2] = {idx0, idx1};
+                LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, ptr, payload_indices, 2, "massert.payload.gep");
+                LLVMValueRef typed_ptr = LLVMBuildBitCast(ctx->builder, payload_ptr, LLVMPointerType(target_type->llvm_type, 0), "massert.typed");
+                val = LLVMBuildLoad2(ctx->builder, target_type->llvm_type, typed_ptr, "massert.val");
                 cur_type = target_type;
                 LLVMBuildBr(ctx->builder, cont_bb);
                 // --- Fail block: trap ---

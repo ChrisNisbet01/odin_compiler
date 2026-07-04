@@ -66,6 +66,7 @@ typedef enum
     TD_KIND_DISTINCT,
     TD_KIND_SOA,
     TD_KIND_RANGE,
+    TD_KIND_MAYBE,
 } td_kind_t;
 
 typedef struct
@@ -131,6 +132,10 @@ typedef struct TypeDescriptor
         {
             struct_or_union_members_st backing_members;
         } soa;
+        struct
+        {
+            TypeDescriptor const * inner_type;
+        } maybe;
     } as;
 } TypeDescriptor;
 
@@ -184,6 +189,9 @@ TypeDescriptor const * get_or_create_union_type(TypeDescriptors * registry, stru
 
 TypeDescriptor const *
 get_or_create_soa_type(TypeDescriptors * registry, struct_or_union_members_st const * backing_members);
+
+TypeDescriptor const *
+get_or_create_maybe_type(TypeDescriptors * registry, TypeDescriptor const * inner_type);
 
 int type_descriptor_find_union_field_index(TypeDescriptor const * desc, char const * name);
 

@@ -1259,6 +1259,32 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return soa_td;
     }
 
+    case AST_NODE_MAYBE_TYPE:
+    {
+        // MaybeType = KwMaybe LParen TypePrefix RParen
+        // Children: [InnerType]
+        odin_grammar_node_t * inner_type_node = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            if (is_type_node(node->list.children[i]))
+            {
+                inner_type_node = node->list.children[i];
+                break;
+            }
+        }
+        if (inner_type_node == NULL)
+            return NULL;
+
+        TypeDescriptor const * inner_type = sem_resolve_type_expr(ctx, inner_type_node);
+        if (inner_type == NULL)
+            return NULL;
+
+        TypeDescriptor const * maybe_type = get_or_create_maybe_type(ctx->type_registry, inner_type);
+        if (maybe_type)
+            node->resolved_type = (TypeDescriptor *)maybe_type;
+        return maybe_type;
+    }
+
     default:
         return NULL;
     }
@@ -1826,6 +1852,13 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
         TypeDescriptor const * lhs_type = sem_evaluate_expr(ctx, node->list.children[0]);
         TypeDescriptor const * rhs_type = sem_evaluate_expr(ctx, node->list.children[1]);
+        // For Maybe(T) or_else, result is T (the inner type), not Maybe(T)
+        if (lhs_type && lhs_type->kind == TD_KIND_MAYBE)
+        {
+            TypeDescriptor const * inner_type = lhs_type->as.maybe.inner_type;
+            node->resolved_type = (TypeDescriptor *)inner_type;
+            return inner_type;
+        }
         TypeDescriptor const * result_type = lhs_type ? lhs_type : rhs_type;
         if (result_type)
             node->resolved_type = (TypeDescriptor *)result_type;
@@ -2084,6 +2117,16 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                         op->resolved_type = (TypeDescriptor *)type;
                     }
                 }
+                else if (type && type->kind == TD_KIND_MAYBE && op->list.count >= 1 && op->list.children[0])
+                {
+                    // Maybe(T).value -> T
+                    char const * field_name = op->list.children[0]->text;
+                    if (field_name && strcmp(field_name, "value") == 0)
+                    {
+                        type = type->as.maybe.inner_type;
+                        op->resolved_type = (TypeDescriptor *)type;
+                    }
+                }
                 break;
 
             case AST_NODE_POSTFIX_SUBSCRIPT:
@@ -2146,6 +2189,19 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 op->resolved_type = (TypeDescriptor *)type;
                                 op->resolved_symbol = (symbol_t *)(intptr_t)field_idx;
                             }
+                        }
+                    }
+                }
+                else if (type && type->kind == TD_KIND_MAYBE)
+                {
+                    // Maybe(T).(T) — unwrap: returns T if tag == 0 (some), else UB
+                    if (op->list.count > 0)
+                    {
+                        TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, op->list.children[0]);
+                        if (target_type && target_type->type_id == type->as.maybe.inner_type->type_id)
+                        {
+                            type = target_type;
+                            op->resolved_type = (TypeDescriptor *)type;
                         }
                     }
                 }

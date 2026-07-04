@@ -10,7 +10,6 @@ Features present in the official Odin language that our compiler does not yet su
 
 ## Built-in Procedures
 
-- `type_of(expr)` — Compile-time type reflection built-in
 - `type_info_of(T)` — Get runtime type info from a typeid
 - `typeid_of(T)` — Get typeid from a type
 - `swizzle` — Vector swizzle operation
@@ -70,3 +69,5 @@ Features present in the official Odin language that our compiler does not yet su
 - `quaternion64` / `quaternion128` / `quaternion256` — Quaternion types
 - `complex(r, i)` / `quaternion(r, i, j, k)` — Complex/quaternion construction
 - `TypeName(expr)` — Auto-cast-by-juxtaposition (e.g. `f32(1.0)`)
+- `type_of(expr)` — Compile-time type reflection built-in
+- `Maybe(T)` — Optional type with `none` / `or_else` / `.value`

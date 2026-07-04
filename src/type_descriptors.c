@@ -964,6 +964,34 @@ get_or_create_range_type(TypeDescriptors * registry, bool is_inclusive)
 }
 
 TypeDescriptor const *
+get_or_create_maybe_type(TypeDescriptors * registry, TypeDescriptor const * inner_type)
+{
+    if (inner_type == NULL)
+        return NULL;
+
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_MAYBE)
+            continue;
+        if (t->as.maybe.inner_type == inner_type)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_MAYBE;
+    td->as.maybe.inner_type = inner_type;
+
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(registry->context);
+    LLVMTypeRef fields[2] = {i64_type, inner_type->llvm_type};
+    td->llvm_type = LLVMStructTypeInContext(registry->context, fields, 2, false);
+
+    return td;
+}
+
+TypeDescriptor const *
 type_descriptor_get_context_type(TypeDescriptors * registry)
 {
     return registry->context_type;

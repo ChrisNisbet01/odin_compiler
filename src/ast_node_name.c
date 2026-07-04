@@ -295,6 +295,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "ComplexExpr";
     case AST_NODE_QUATERNION_EXPR:
         return "QuaternionExpr";
+    case AST_NODE_MAYBE_TYPE:
+        return "MaybeType";
     case AST_NODE_ELLIPSIS:
         return "Ellipsis";
     }
