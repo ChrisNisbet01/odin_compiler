@@ -73,6 +73,57 @@ resolve_import_path(char const * import_name, char const * source_dir, char cons
     if (import_name == NULL || import_name[0] == '\0')
         return NULL;
 
+    // Check for collection prefix: "core:fmt" → collection="core", pkg="fmt"
+    char const * colon = strchr(import_name, ':');
+    if (colon != NULL)
+    {
+        size_t coll_len = (size_t)(colon - import_name);
+        char const * pkg_name = colon + 1;
+        if (pkg_name[0] == '\0')
+            return NULL;
+
+        // Determine collection directory base
+        // "core" → <odin_root>/core/   (or <odin_root>/ if no odin_root)
+        char const * coll_base = odin_root != NULL ? odin_root : source_dir;
+
+        // Try resolution paths:
+        //   <coll_base>/<collection>/<pkg>/<pkg>.odin      (ODIN_ROOT = stubs/)
+        //   <coll_base>/<collection>/src/<pkg>/<pkg>.odin  (package under src/)
+        //   <coll_base>/stubs/<collection>/<pkg>/<pkg>.odin (ODIN_ROOT = project root, stubs layout)
+        size_t needed;
+        char * candidate;
+
+        // Path 1: <coll_base>/<collection>/<pkg>/<pkg>.odin
+        needed = strlen(coll_base) + 1 + coll_len + 1 + strlen(pkg_name) + 1 + strlen(pkg_name) + 6;
+        candidate = malloc(needed);
+        snprintf(candidate, needed, "%s/%.*s/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
+        if (file_exists(candidate)) return candidate;
+        free(candidate);
+
+        // Path 2: <coll_base>/<collection>/src/<pkg>/<pkg>.odin
+        needed = strlen(coll_base) + 1 + coll_len + 5 + strlen(pkg_name) + 1 + strlen(pkg_name) + 6;
+        candidate = malloc(needed);
+        snprintf(candidate, needed, "%s/%.*s/src/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
+        if (file_exists(candidate)) return candidate;
+        free(candidate);
+
+        // Path 3: <coll_base>/stubs/<collection>/<pkg>/<pkg>.odin
+        needed = strlen(coll_base) + 7 + coll_len + 1 + strlen(pkg_name) + 1 + strlen(pkg_name) + 6;
+        candidate = malloc(needed);
+        snprintf(candidate, needed, "%s/stubs/%.*s/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
+        if (file_exists(candidate)) return candidate;
+        free(candidate);
+
+        // Path 4: <coll_base>/stubs/<collection>/src/<pkg>/<pkg>.odin
+        needed = strlen(coll_base) + 7 + coll_len + 5 + strlen(pkg_name) + 1 + strlen(pkg_name) + 6;
+        candidate = malloc(needed);
+        snprintf(candidate, needed, "%s/stubs/%.*s/src/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
+        if (file_exists(candidate)) return candidate;
+        free(candidate);
+
+        return NULL;
+    }
+
     // 1. Check <source_dir>/<import_name>/<import_name>.odin
     size_t needed = strlen(source_dir) + 1 + strlen(import_name) + 1 + strlen(import_name) + 6;
     char * candidate = malloc(needed);
