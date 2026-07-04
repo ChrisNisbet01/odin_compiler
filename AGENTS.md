@@ -1,3 +1,23 @@
+## Accomplishments (session 2026-07-05)
+
+### Implemented Maybe(T) optional type
+- **Grammar**: Added `KwMaybe` keyword, `MaybeType` rule (`KwMaybe LParen TypePrefix RParen`), added to `TypePrefix`/`AllReservedWords`.
+- **AST**: Added `AST_NODE_MAYBE_TYPE` enum entry, action, and node name.
+- **Type descriptors**: Added `TD_KIND_MAYBE` with `get_or_create_maybe_type` — LLVM layout `{i64 tag, T payload}`.
+- **Semantic analyser**: Resolves `Maybe(T)` type, `.value` member access (returns inner type), `x.(T)` type assertion (validates target matches inner type), `or_else` result type unwraps `Maybe(T)` → `T`.
+- **IR generator**: 
+  - Lvalue `.value`: GEP to field 1, bitcast to inner type pointer. 
+  - Rvalue `.value`: GEP + load.
+  - `or_else`: tag check (field 0 != 0 → none → RHS, else payload), phi-based merge.
+  - Type assertion: tag check + trap on fail, payload extraction via GEP.
+  - Variable decl: `none` init sets tag=1; implicit `T→Maybe(T)` wrapping stores payload.
+  - Fixed: `init_contains_none` helper for detecting `none` inside `AssignExpression` wrapper.
+  - Fixed: `TD_KIND_MAYBE` added to composite types list so identifiers return pointer.
+  - Fixed: `LLVMBuildStore` NULL guard for general case.
+- **Fixed semantic analyser's `or_else`**: Now unwraps `Maybe(T)` to inner type for result type.
+- **Fixed `is_type_node`**: Added `AST_NODE_MAYBE_TYPE`.
+- **All 86 tests pass** (test_maybe.odin added with 5 subtests).
+
 ## Accomplishments (session 2026-06-19)
 
 **Morning session:**
