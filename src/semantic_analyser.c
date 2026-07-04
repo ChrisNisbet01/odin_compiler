@@ -1415,6 +1415,31 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return int_type;
     }
 
+    case AST_NODE_PRINT_STRING_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * operand = node->list.children[0];
+        sem_evaluate_expr(ctx, operand);
+        TypeDescriptor const * operand_type = operand->resolved_type;
+        if (operand_type == NULL)
+            return NULL;
+
+        bool is_string = (operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name != NULL
+                          && strcmp(operand_type->as.basic.name, "string") == 0);
+        if (!is_string)
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_string requires a string argument");
+            return NULL;
+        }
+
+        TypeDescriptor const * void_type = get_basic_type_by_name(ctx->type_registry, "void");
+        if (void_type == NULL)
+            return NULL;
+        node->resolved_type = (TypeDescriptor *)void_type;
+        return void_type;
+    }
+
     case AST_NODE_MAKE_EXPR:
     {
         if (node->list.count < 2)

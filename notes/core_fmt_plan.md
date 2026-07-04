@@ -7,60 +7,63 @@ Support `import "core:fmt"` with `fmt.println()`, `fmt.printf()` using Odin-leve
 
 ### Current State
 - Simple imports (`import "path"`) resolve relative to source dir or `<ODIN_ROOT>/src/<pkg>/`
-- Foreign function binding (`foreign libc { ... }`) with `-l` linker flags
+- Collection prefix imports (`core:fmt`) working via colon-split in `resolve_import_path`
+- `print_string` built-in (compiler keyword, like `len`, `cap`) available for byte/string output
+- `fmt.odin` stub exists at `stubs/core/fmt/fmt.odin` with `println` using `print_string`
 - Bodyless procedures (`---`) for extern declarations
 - Cross-package function calls with context threading
-- No `:)` collection prefix support in import resolver
+- No escape sequence handling in string literals (`"\n"` outputs literal `\n`)
 
 ### Missing Features (by dependency order)
 
-1. **Collection prefix imports** (`core:fmt`) — `resolve_import_path` has no concept of `collection:package` syntax
-2. **Variadic functions** (`...`) — No `...` support in grammar, type system, or IR generation
-3. **I/O output mechanism** — No way to write bytes to stdout without C FFI
-4. **`fmt` package** — No `stubs/src/fmt/fmt.odin` exists
-5. **String formatting** — Integer-to-string, float-to-string conversion (formatting logic)
+1. **Escape sequences** — `\n`, `\t`, `\"` etc. in string literals
+2. **Variadic functions** (`..any`) — No `...` support in grammar, type system, or IR generation
+3. **String formatting** — Integer-to-string, float-to-string conversion (formatting logic)
+4. **`fmt.printf`** — Format string parsing with `%d`, `%s`, `%x` specifiers
 
 ## Phase Plan
 
-### Phase 1: Collection Prefix Imports
-- Modify `package_resolver.c:resolve_import_path` to split on `:`
-- Map collection names to directories:
-  - `core` → `<ODIN_ROOT>/core/` (project root)
-- Resolve `core:fmt` → `<ODIN_ROOT>/core/fmt/fmt.odin`
+### Phase 1: Collection Prefix Imports ✅ DONE
+- Modified `package_resolver.c:resolve_import_path` to split on `:`
+- Map `core:fmt` → `<ODIN_ROOT>/core/fmt/fmt.odin` (resolves to stubs dir)
+- Built-in procedure `print_string(s: string)` via grammar keyword, AST node, semantic handler, IR generator (declares `putchar`, loops over string bytes)
 
-### Phase 2: Variadic `...` Parameters
-- Add `KW_Ellipsis` lexeme (or reuse existing `AST_NODE_ELLIPSIS`)
-- Add grammar rule: `VariadicParam = Ellipsis TypePrefix` or similar
-- Add `AST_NODE_VARIADIC_PARAM` / flag on `ProcType`
-- Handle in semantic analyser (variadic parameter resolution)
-- Handle in IR generator (LLVM varargs function types, `..."c"` calling convention)
+### Phase 2: I/O Output Mechanism ✅ DONE
+- Added `KwPrintString` lexeme, `PrintStringExpr` grammar rule, `AST_NODE_PRINT_STRING_EXPR` node
+- Semantic analysis validates argument is `string` type
+- IR generation extracts data ptr + len from string struct, loops calling `putchar` per byte
 
-### Phase 3: I/O Output Mechanism
-- Add built-in `print`/`println` support in the compiler (like `len`, `cap`)
-- Or add foreign function binding for `write` syscall (minimal OS layer)
-- Or add compiler intrinsics for raw byte/string output
+### Phase 3: `fmt` Package Stub ✅ DONE
+- `stubs/core/fmt/fmt.odin` defines `println(s: string)` calling `print_string(s)` + `print_string("\n")`
+- Cross-package calls to `fmt.println` work end-to-end
+- Escape sequence handling needed for proper newline output
 
-### Phase 4: `fmt` Package Implementation
-- Create `stubs/core/fmt/fmt.odin` with:
-  - `print(things: ..any)` — format and output each arg
-  - `println(things: ..any)` — like print with trailing newline
-  - `printf(fmt: string, args: ..any)` — format string with specifiers
-  - Internal formatting logic: `int_to_string`, `float_to_string`, etc.
-- Format specifier support: `%d`, `%f`, `%s`, `%x`, `%v`, etc.
+### Phase 4: Variadic `...` Parameters
+- Add `KW_Ellipsis` lexeme / grammar support
+- Allow `fmt.println(a: ..any)` style variadic calls
+- Each arg packed as `any` type
 
-### Phase 5: Testing
+### Phase 5: String Formatting (for `printf`)
+- Integer-to-string conversion in Odin
+- Format specifier parser (`%d`, `%s`, `%x`, `%v`)
+- `fmt.printf` procedure with format string + args
+
+### Phase 6: Testing
 - `test_fmt.odin` with `fmt.println(42)`, `fmt.printf("%d %s", 99, "hello")`
+- Escape sequence tests
 
 ## Design Decisions
 - No C `printf` delegation — formatting logic implemented in Odin or compiler built-ins
-- Output mechanism needs to write bytes; easiest path: add compiler built-in `__print_string` / `__print_byte`
+- Output uses `print_string` built-in (compiler generates putchar loop in LLVM IR)
+- Escape sequences in string literals are a pre-existing gap (not specific to fmt)
 - Variadic `..any` is a simplified form of Odin's `..T`; for now `..any` treats each arg as `any` type
 - Formatting can use Odin-level integer/float-to-string routines
 
 ## Progress
 
-- [ ] Phase 1: Collection prefix imports
-- [ ] Phase 2: Variadic `...` parameters
-- [ ] Phase 3: I/O output mechanism
-- [ ] Phase 4: `fmt` package
-- [ ] Phase 5: Testing
+- [x] Phase 1: Collection prefix imports
+- [x] Phase 2: I/O output mechanism (`print_string` built-in)
+- [x] Phase 3: `fmt` package stub with `println`
+- [ ] Phase 4: Variadic `...` parameters
+- [ ] Phase 5: String formatting
+- [ ] Phase 6: Testing

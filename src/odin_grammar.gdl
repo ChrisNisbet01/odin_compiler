@@ -48,6 +48,7 @@ KwRawData = lexeme("raw_data" IdBoundary);
 KwMin = lexeme("min" IdBoundary);
 KwMax = lexeme("max" IdBoundary);
 KwTypeOf = lexeme("type_of" IdBoundary);
+KwPrintString = lexeme("print_string" IdBoundary);
 KwTrue = lexeme("true" IdBoundary);
 KwFalse = lexeme("false" IdBoundary);
 KwNil = lexeme("nil" IdBoundary);
@@ -139,6 +140,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwTrue | KwFalse | KwNil | KwNone
     | KwContext | KwAsm | KwAutoCast
     | KwOrElse | KwOrReturn | KwNot | KwAnd | KwOr | KwNotIn
+    | KwPrintString
     | KwInt | KwI8 | KwI16 | KwI32 | KwI64
     | KwU8 | KwU16 | KwU32 | KwU64
     | KwF16 | KwF32 | KwF64 | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring | KwAny | KwTypeId | KwType
@@ -385,8 +387,9 @@ InclExpr = KwIncl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACT
 ExclExpr = KwExcl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_EXCL_EXPR;
 ComplexExpr = KwComplex LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_COMPLEX_EXPR;
 QuaternionExpr = KwQuaternion LParen SuffixExpression Comma SuffixExpression Comma SuffixExpression Comma SuffixExpression RParen @AST_ACTION_QUATERNION_EXPR;
+PrintStringExpr = KwPrintString LParen SuffixExpression RParen @AST_ACTION_PRINT_STRING_EXPR;
 TypeCastByJuxtaposition = TypeName LParen Expression RParen @AST_ACTION_CAST_EXPR;
-UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | SizeOfExpr | AlignOfExpr | OffsetOfExpr | RawDataExpr | MinExpr | MaxExpr | TypeOfExpr | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | ComplexExpr | QuaternionExpr | UnaryPrefix | PostfixExpression | TypeCastByJuxtaposition;
+UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | SizeOfExpr | AlignOfExpr | OffsetOfExpr | RawDataExpr | MinExpr | MaxExpr | TypeOfExpr | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | ComplexExpr | QuaternionExpr | PrintStringExpr | UnaryPrefix | PostfixExpression | TypeCastByJuxtaposition;
 
 MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
 MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;

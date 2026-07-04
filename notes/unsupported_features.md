@@ -49,7 +49,9 @@ Features present in the official Odin language that our compiler does not yet su
 - `#align` struct alignment attribute
 - `distinct` type creation
 - `bit_set` with explicit underlying type
-- Cross-module `import "base:intrinsics"` or `import "core:mem"` (no `:` collection prefix support)
+- Cross-module `import "base:intrinsics"` or `import "core:mem"` (collection prefix imports)
+- Built-in `print_string(s: string)` — Compiler keyword for raw string output
+- `core:fmt` package stub with `println` using `print_string`
 
 ## Recently Added (Supported)
 

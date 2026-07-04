@@ -4574,6 +4574,85 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return len_val;
     }
 
+    case AST_NODE_PRINT_STRING_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * operand = node->list.children[0];
+        LLVMValueRef str_val = ir_gen_node(ctx, operand);
+        if (str_val == NULL)
+            return NULL;
+
+        TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
+        if (str_desc == NULL || str_desc->llvm_type == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "print_string: string type not found");
+            return NULL;
+        }
+        LLVMTypeRef str_struct_type = str_desc->llvm_type;
+
+        // Extract data pointer (field 0) and length (field 1)
+        LLVMValueRef str_struct = NULL;
+        LLVMTypeRef val_type = LLVMTypeOf(str_val);
+        if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
+        {
+            str_struct = LLVMBuildLoad2(ctx->builder, str_struct_type, str_val, "print.str");
+        }
+        else
+        {
+            str_struct = str_val;
+        }
+
+        LLVMValueRef data_ptr = LLVMBuildExtractValue(ctx->builder, str_struct, 0, "print.data");
+        LLVMValueRef len_val = LLVMBuildExtractValue(ctx->builder, str_struct, 1, "print.len");
+
+        // Declare putchar if not already declared
+        LLVMTypeRef putchar_param_types[] = {LLVMInt32TypeInContext(ctx->context)};
+        LLVMTypeRef putchar_ftype = LLVMFunctionType(
+            LLVMInt32TypeInContext(ctx->context), putchar_param_types, 1, false
+        );
+        LLVMValueRef putchar_fn = LLVMGetNamedFunction(ctx->module, "putchar");
+        if (putchar_fn == NULL)
+        {
+            putchar_fn = LLVMAddFunction(ctx->module, "putchar", putchar_ftype);
+            LLVMSetLinkage(putchar_fn, LLVMExternalLinkage);
+        }
+
+        // Loop: for i64 i = 0; i < len; i++
+        LLVMValueRef current_func = func_current_function(ctx);
+        LLVMBasicBlockRef cur_bb = LLVMGetInsertBlock(ctx->builder);
+        LLVMBasicBlockRef loop_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "print.loop");
+        LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "print.body");
+        LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "print.end");
+
+        LLVMValueRef i_alloca = LLVMBuildAlloca(ctx->builder, LLVMInt64TypeInContext(ctx->context), "print.i");
+        LLVMBuildStore(ctx->builder, LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false), i_alloca);
+        LLVMBuildBr(ctx->builder, loop_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, loop_bb);
+        LLVMValueRef i_val = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), i_alloca, "print.i.val");
+        LLVMValueRef cmp = LLVMBuildICmp(ctx->builder, LLVMIntSLT, i_val, len_val, "print.cmp");
+        LLVMBuildCondBr(ctx->builder, cmp, body_bb, end_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
+        LLVMValueRef char_ptr = LLVMBuildInBoundsGEP2(
+            ctx->builder, LLVMInt8TypeInContext(ctx->context), data_ptr, &i_val, 1, "print.char.ptr"
+        );
+        LLVMValueRef char_val = LLVMBuildLoad2(ctx->builder, LLVMInt8TypeInContext(ctx->context), char_ptr, "print.char");
+        LLVMValueRef char_ext = LLVMBuildZExt(ctx->builder, char_val, LLVMInt32TypeInContext(ctx->context), "print.char.ext");
+        LLVMValueRef putchar_args[] = {char_ext};
+        LLVMBuildCall2(ctx->builder, putchar_ftype, putchar_fn, putchar_args, 1, "");
+
+        LLVMValueRef i_next = LLVMBuildAdd(
+            ctx->builder, i_val, LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 1, false), "print.i.next"
+        );
+        LLVMBuildStore(ctx->builder, i_next, i_alloca);
+        LLVMBuildBr(ctx->builder, loop_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, end_bb);
+        return NULL;
+    }
+
     case AST_NODE_TYPE_OF_EXPR:
     {
         if (node->list.count < 1)
