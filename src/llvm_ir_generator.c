@@ -3554,7 +3554,53 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, 128);
             }
 
-            // Coerce Odin string struct arguments to ptr u8 for C calls
+            // Variadic ..any packing: build []any slice from extra args (ODIN convention)
+            bool is_any_variadic = false;
+            if (proc_type->proc_metadata.is_variadic
+                && proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN
+                && proc_type->proc_metadata.param_count >= 1)
+            {
+                TypeDescriptor const * last_param = proc_type->proc_metadata.params[proc_type->proc_metadata.param_count - 1];
+                if (last_param != NULL && last_param->kind == TD_KIND_SLICE)
+                    is_any_variadic = true;
+            }
+            if (is_any_variadic
+                && arg_count >= proc_type->proc_metadata.param_count - 1)
+            {
+                int param_count = proc_type->proc_metadata.param_count;
+                int fixed_count = param_count - 1;
+                int variadic_count = arg_count - fixed_count;
+                TypeDescriptor const * any_type = get_basic_type_by_name(ctx->type_registry, "any");
+                if (any_type)
+                {
+                    TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, any_type);
+                    LLVMTypeRef any_llvm = any_type->llvm_type;
+                    LLVMTypeRef slice_llvm = slice_type ? slice_type->llvm_type : NULL;
+                    if (any_llvm && slice_llvm)
+                    {
+                        LLVMValueRef backing = LLVMBuildAlloca(ctx->builder,
+                            LLVMArrayType(any_llvm, variadic_count), "variadic.backing");
+                        for (int vi = 0; vi < variadic_count; vi++)
+                        {
+                            LLVMValueRef gep_idx[2] = {
+                                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), vi, false)
+                            };
+                            LLVMValueRef slot = LLVMBuildInBoundsGEP2(ctx->builder,
+                                LLVMArrayType(any_llvm, variadic_count), backing, gep_idx, 2, "var.slot");
+                            ir_gen_pack_any(ctx, slot, args[fixed_count + vi], any_llvm, NULL);
+                        }
+                        LLVMValueRef backing_ptr = LLVMBuildBitCast(ctx->builder, backing,
+                            LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), "var.backing.cast");
+                        LLVMValueRef slice_val = LLVMGetUndef(slice_llvm);
+                        slice_val = LLVMBuildInsertValue(ctx->builder, slice_val,
+                            LLVMConstInt(LLVMInt64TypeInContext(ctx->context), variadic_count, false), 0, "var.len");
+                        slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, backing_ptr, 1, "var.ptr");
+                        args[fixed_count] = slice_val;
+                        arg_count = fixed_count + 1;
+                    }
+                }
+            }
             if (proc_type->proc_metadata.calling_convention == CALLING_CONV_C)
             {
                 int param_count = proc_type->proc_metadata.param_count;

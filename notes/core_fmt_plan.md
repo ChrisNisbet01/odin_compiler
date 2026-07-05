@@ -38,10 +38,14 @@ Support `import "core:fmt"` with `fmt.println()`, `fmt.printf()` using Odin-leve
 - Cross-package calls to `fmt.println` work end-to-end
 - Escape sequence handling needed for proper newline output
 
-### Phase 4: Variadic `...` Parameters
-- Add `KW_Ellipsis` lexeme / grammar support
-- Allow `fmt.println(a: ..any)` style variadic calls
-- Each arg packed as `any` type
+### Phase 4: Variadic `..any` Parameters ✅ DONE
+- Added `VariadicMarker = DotDot @AST_ACTION_ELLIPSIS` grammar rule
+- `Parameter` rule updated: `Identifier Colon VariadicMarker? TypePrefix`
+- Semantic analyser detects `AST_NODE_ELLIPSIS` child in `AST_NODE_PARAMETER`, resolves `..any` to `[]any`
+- IR generator at call site packs extra args into `[]any` slice (backing array of `any` structs)
+- Distinguishes `..any` from bare `...` (C varargs) by checking last param type (slice vs non-slice)
+- `LLVMFunctionType` only marked variadic for bare `...` or C convention, not `..any`
+- `foo :: proc(args: ..any) -> int` and `foo(1, 2, 3)` work end-to-end
 
 ### Phase 5: String Formatting (for `printf`)
 - Integer-to-string conversion in Odin
@@ -64,6 +68,6 @@ Support `import "core:fmt"` with `fmt.println()`, `fmt.printf()` using Odin-leve
 - [x] Phase 1: Collection prefix imports
 - [x] Phase 2: I/O output mechanism (`print_string` built-in)
 - [x] Phase 3: `fmt` package stub with `println`
-- [ ] Phase 4: Variadic `...` parameters
+- [x] Phase 4: Variadic `..any` parameters
 - [ ] Phase 5: String formatting
 - [ ] Phase 6: Testing

@@ -226,6 +226,7 @@ DotDot = lexeme(".." not('.'));
 DotDotLt = lexeme("..<");
 Ellipsis = lexeme("...") @AST_ACTION_ELLIPSIS;
 TripleDash = lexeme("---") @AST_ACTION_TRIPLE_DASH;
+VariadicMarker = DotDot @AST_ACTION_ELLIPSIS;
 
 Plus = lexeme('+' not('+') not('='));
 Minus = lexeme('-' not('-') not('=') not('>'));
@@ -310,7 +311,7 @@ StructRawBody = LBrace StructFieldList RBrace;
 StructType = KwStruct (SoaType | (Directive? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
 StructTypeRef = KwStruct Identifier @AST_ACTION_STRUCT_TYPE_REF;
 
-Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon TypePrefix @AST_ACTION_PARAMETER;
+Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon VariadicMarker? TypePrefix @AST_ACTION_PARAMETER;
 Parameters = Ellipsis | (Parameter (Comma Parameter)* (Comma Ellipsis)?) @AST_ACTION_PARAMETERS;
 ParameterList = LParen Parameters? RParen @AST_ACTION_PARAMETER_LIST;
 NamedReturn = Identifier Colon TypePrefix @AST_ACTION_NAMED_RETURN;

@@ -778,13 +778,26 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                         if (param->type != AST_NODE_PARAMETER)
                             continue;
 
-                        // Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon TypePrefix
+                        // Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon VariadicMarker? TypePrefix
+                        // Check for VariadicMarker child (AST_NODE_ELLIPSIS from ..)
+                        bool is_variadic_param = false;
+                        for (size_t ci = 0; ci < param->list.count; ci++)
+                        {
+                            if (param->list.children[ci] != NULL
+                                && param->list.children[ci]->type == AST_NODE_ELLIPSIS)
+                            {
+                                is_variadic_param = true;
+                                is_variadic = true;
+                                break;
+                            }
+                        }
+
                         // Find the TypePrefix child (last non-NULL child)
                         odin_grammar_node_t * type_node = NULL;
                         for (size_t ci = 0; ci < param->list.count; ci++)
                         {
                             odin_grammar_node_t * pc = param->list.children[ci];
-                            if (pc != NULL)
+                            if (pc != NULL && pc->type != AST_NODE_ELLIPSIS)
                                 type_node = pc;
                         }
 
@@ -794,6 +807,15 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                         TypeDescriptor const * pt = sem_resolve_type_expr(ctx, type_node);
                         if (pt == NULL)
                             continue;
+
+                        // If this is a variadic .. parameter, wrap the type in a slice
+                        // e.g. ..any → []any
+                        if (is_variadic_param)
+                        {
+                            pt = get_or_create_slice_type(ctx->type_registry, pt);
+                            if (pt == NULL)
+                                continue;
+                        }
 
                         // Grow params array
                         if (param_count >= (int)param_cap)

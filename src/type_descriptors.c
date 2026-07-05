@@ -720,7 +720,11 @@ get_or_create_proc_type(
         ret_llvm = return_type ? return_type->llvm_type : LLVMVoidTypeInContext(registry->context);
     }
 
-    td->proc_metadata.func_type = LLVMFunctionType(ret_llvm, llvm_params, (unsigned)llvm_param_count, is_variadic);
+    // LLVM variadic only for bare ... (not ..any which uses a slice param)
+    bool llvm_variadic = is_variadic
+        && (calling_convention == CALLING_CONV_C
+            || (param_count > 0 && params[param_count - 1]->kind != TD_KIND_SLICE));
+    td->proc_metadata.func_type = LLVMFunctionType(ret_llvm, llvm_params, (unsigned)llvm_param_count, llvm_variadic);
     td->llvm_type = LLVMPointerType(td->proc_metadata.func_type, 0);
     free(llvm_params);
 
