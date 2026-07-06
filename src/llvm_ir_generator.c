@@ -3564,6 +3564,30 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, arg_types, 128);
             }
 
+            // Wrap arguments that match 'any' parameters (non-variadic)
+            {
+                TypeDescriptor const * any_type = get_basic_type_by_name(ctx->type_registry, "any");
+                if (any_type != NULL && any_type->llvm_type != NULL)
+                {
+                    LLVMTypeRef any_llvm = any_type->llvm_type;
+                    int param_count = proc_type->proc_metadata.param_count;
+                    for (int pi = 0; pi < param_count && pi < arg_count; pi++)
+                    {
+                        TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
+                        if (param_type && param_type->kind == TD_KIND_BASIC
+                            && param_type->as.basic.name && strcmp(param_type->as.basic.name, "any") == 0)
+                        {
+                            if (arg_types[pi] && arg_types[pi]->kind == TD_KIND_BASIC
+                                && arg_types[pi]->as.basic.name && strcmp(arg_types[pi]->as.basic.name, "any") == 0)
+                                continue;
+                            LLVMValueRef any_alloca = LLVMBuildAlloca(ctx->builder, any_llvm, "any.arg");
+                            ir_gen_pack_any(ctx, any_alloca, args[pi], any_llvm, arg_types[pi]);
+                            args[pi] = LLVMBuildLoad2(ctx->builder, any_llvm, any_alloca, "any.loaded");
+                        }
+                    }
+                }
+            }
+
             // Variadic ..any packing: build []any slice from extra args (ODIN convention)
             bool is_any_variadic = false;
             if (proc_type->proc_metadata.is_variadic

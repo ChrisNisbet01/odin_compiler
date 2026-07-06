@@ -1862,9 +1862,6 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_MUL_EXPRESSION:
     case AST_NODE_ADD_EXPRESSION:
-    case AST_NODE_COMP_EXPRESSION:
-    case AST_NODE_LOG_AND_EXPRESSION:
-    case AST_NODE_LOG_OR_EXPRESSION:
     case AST_NODE_SHIFT_EXPRESSION:
     case AST_NODE_BIT_AND_EXPRESSION:
     case AST_NODE_BIT_XOR_EXPRESSION:
@@ -1875,6 +1872,20 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         (void)right_type;
         node->resolved_type = (TypeDescriptor *)left_type;
         return left_type;
+    }
+
+    // Comparison and logical expressions resolve to bool
+    case AST_NODE_COMP_EXPRESSION:
+    case AST_NODE_LOG_AND_EXPRESSION:
+    case AST_NODE_LOG_OR_EXPRESSION:
+    {
+        TypeDescriptor const * left_type = sem_evaluate_expr(ctx, node->list.children[0]);
+        TypeDescriptor const * right_type = sem_evaluate_expr(ctx, node->list.children[2]);
+        (void)right_type;
+        (void)left_type;
+        TypeDescriptor const * bool_type = get_basic_type_by_name(ctx->type_registry, "bool");
+        node->resolved_type = (TypeDescriptor *)bool_type;
+        return bool_type;
     }
 
     case AST_NODE_POSTFIX_CALL:
