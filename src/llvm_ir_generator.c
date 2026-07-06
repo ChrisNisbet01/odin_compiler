@@ -219,6 +219,15 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
     if (sym == NULL)
         return NULL;
 
+    // Forward-declare procedures that haven't been code-generated yet
+    if (sym->value.value == NULL && sym->value.type_info
+        && sym->value.type_info->kind == TD_KIND_PROC)
+    {
+        sym->value.value = LLVMAddFunction(
+            ctx->module, node->text, sym->value.type_info->proc_metadata.func_type
+        );
+    }
+
     if (sym->value.is_lvalue && sym->value.value != NULL)
     {
         // Don't load composite types — the pointer is needed for
@@ -303,16 +312,57 @@ ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node)
         content_len = text_len - 2;
     }
 
-    // Build [N x i8] constant (with null terminator)
-    size_t arr_len = content_len + 1;
+    // Process escape sequences: first pass to count output length
+    size_t arr_len = content_len + 1; // max possible (no escapes)
     LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
+
+    // First pass: count escaped length
+    size_t escaped_len = 0;
+    for (size_t i = 0; i < content_len; i++)
+    {
+        if (content[i] == '\\' && i + 1 < content_len)
+        {
+            switch (content[i + 1])
+            {
+            case 'n': case 't': case 'r': case '\\': case '"':
+                escaped_len++; i++; break;
+            default: escaped_len++; break;
+            }
+        }
+        else
+        {
+            escaped_len++;
+        }
+    }
+    arr_len = escaped_len + 1;
+
     LLVMValueRef * elements = malloc(arr_len * sizeof(LLVMValueRef));
     if (elements == NULL)
         return NULL;
 
+    // Second pass: fill elements with escape processing
+    size_t out_idx = 0;
     for (size_t i = 0; i < content_len; i++)
-        elements[i] = LLVMConstInt(i8_type, (unsigned char)content[i], false);
-    elements[content_len] = LLVMConstInt(i8_type, 0, false); // null terminator
+    {
+        if (content[i] == '\\' && i + 1 < content_len)
+        {
+            switch (content[i + 1])
+            {
+            case 'n':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0A, false); i++; break;
+            case 't':  elements[out_idx++] = LLVMConstInt(i8_type, 0x09, false); i++; break;
+            case 'r':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0D, false); i++; break;
+            case '\\': elements[out_idx++] = LLVMConstInt(i8_type, 0x5C, false); i++; break;
+            case '"':  elements[out_idx++] = LLVMConstInt(i8_type, 0x22, false); i++; break;
+            default:   elements[out_idx++] = LLVMConstInt(i8_type, (unsigned char)content[i], false); break;
+            }
+        }
+        else
+        {
+            elements[out_idx++] = LLVMConstInt(i8_type, (unsigned char)content[i], false);
+        }
+    }
+    elements[out_idx] = LLVMConstInt(i8_type, 0, false); // null terminator
+    content_len = escaped_len;
 
     LLVMTypeRef arr_type = LLVMArrayType(i8_type, arr_len);
     LLVMValueRef arr_const = LLVMConstArray(i8_type, elements, arr_len);
@@ -2117,17 +2167,23 @@ ir_gen_pack_any(
 {
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
     LLVMValueRef zero_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-    LLVMValueRef data_ptr;
+
+    // If the value is already an `any` struct, copy directly
     LLVMTypeRef val_type = LLVMTypeOf(rhs_val);
+    if (val_type == any_struct_type)
+    {
+        LLVMBuildStore(ctx->builder, rhs_val, lhs_ptr);
+        return;
+    }
+
+    LLVMValueRef data_ptr;
     LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
     if (val_kind == LLVMPointerTypeKind)
     {
-        // Pointer values ARE the data — use directly
         data_ptr = LLVMBuildBitCast(ctx->builder, rhs_val, i8ptr, "anydata");
     }
     else
     {
-        // Allocate storage for the value and point to it
         LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, val_type, "anytmp");
         LLVMBuildStore(ctx->builder, rhs_val, tmp);
         data_ptr = LLVMBuildBitCast(ctx->builder, tmp, i8ptr, "anydata");
@@ -3231,7 +3287,9 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
             return NULL;
 
-        LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, proc_type->proc_metadata.func_type);
+        LLVMValueRef func = LLVMGetNamedFunction(ctx->module, name_node->text);
+        if (func == NULL)
+            func = LLVMAddFunction(ctx->module, name_node->text, proc_type->proc_metadata.func_type);
 
         odin_grammar_node_t * body_node = node_find_child(value_node, AST_NODE_COMPOUND_STATEMENT);
 
@@ -3597,6 +3655,9 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                         {
                             if (arg_types[pi] && arg_types[pi]->kind == TD_KIND_BASIC
                                 && arg_types[pi]->as.basic.name && strcmp(arg_types[pi]->as.basic.name, "any") == 0)
+                                continue;
+                            // Also skip if the LLVM value type matches any struct type
+                            if (args[pi] != NULL && LLVMTypeOf(args[pi]) == any_llvm)
                                 continue;
                             LLVMValueRef any_alloca = LLVMBuildAlloca(ctx->builder, any_llvm, "any.arg");
                             ir_gen_pack_any(ctx, any_alloca, args[pi], any_llvm, arg_types[pi]);

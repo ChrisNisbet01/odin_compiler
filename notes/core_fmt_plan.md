@@ -47,14 +47,20 @@ Support `import "core:fmt"` with `fmt.println()`, `fmt.printf()` using Odin-leve
 - `LLVMFunctionType` only marked variadic for bare `...` or C convention, not `..any`
 - `foo :: proc(args: ..any) -> int` and `foo(1, 2, 3)` work end-to-end
 
-### Phase 5: String Formatting (for `printf`)
-- Integer-to-string conversion in Odin
-- Format specifier parser (`%d`, `%s`, `%x`, `%v`)
-- `fmt.printf` procedure with format string + args
+### Phase 5: String Formatting (for `printf`) ✅ DONE
+- Integer-to-string conversion and `print_byte` built-ins
+- String subscript `s[i]` → `u8` for per-byte iteration
+- `printf` procedure with `%d` (int), `%s` (string), `%%` (literal %) specifiers
+- `any` arg wrapping for non-variadic `any` parameters
+- `COMP_EXPRESSION`/`LOG_AND_EXPRESSION`/`LOG_OR_EXPRESSION` resolve to `bool`
+- For-loop condition expressions evaluated in `sem_pass2_node`
 
-### Phase 6: Testing
-- `test_fmt.odin` with `fmt.println(42)`, `fmt.printf("%d %s", 99, "hello")`
-- Escape sequence tests
+### Phase 6: Extended Formatting and Testing
+- `%v` format specifier (type_of-based dispatch: int → decimal, string → direct)
+- `%x` hex format specifier (int → lowercase hex)
+- Helper hex digit function in Odin
+- `test_fmt.odin` with `fmt.println(42)`, `fmt.printf("%d %s %x %v", 99, "hello", 255, 42)`
+- Escape sequence handling (future work)
 
 ## Design Decisions
 - No C `printf` delegation — formatting logic implemented in Odin or compiler built-ins
@@ -69,5 +75,5 @@ Support `import "core:fmt"` with `fmt.println()`, `fmt.printf()` using Odin-leve
 - [x] Phase 2: I/O output mechanism (`print_string` built-in)
 - [x] Phase 3: `fmt` package stub with `println`
 - [x] Phase 4: Variadic `..any` parameters
-- [ ] Phase 5: String formatting
-- [ ] Phase 6: Testing
+- [x] Phase 5: String formatting
+- [ ] Phase 6: Extended formatting and testing
