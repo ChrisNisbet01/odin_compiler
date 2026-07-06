@@ -815,6 +815,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                             pt = get_or_create_slice_type(ctx->type_registry, pt);
                             if (pt == NULL)
                                 continue;
+                            type_node->resolved_type = (TypeDescriptor *)pt;
                         }
 
                         // Grow params array
@@ -1462,6 +1463,30 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return void_type;
     }
 
+    case AST_NODE_INT_TO_STRING_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * operand = node->list.children[0];
+        sem_evaluate_expr(ctx, operand);
+        TypeDescriptor const * operand_type = operand->resolved_type;
+        if (operand_type == NULL)
+            return NULL;
+
+        if (operand_type->kind != TD_KIND_BASIC
+            || (operand_type->as.basic.name[0] != 'i' && operand_type->as.basic.name[0] != 'u'))
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "int_to_string requires an integer argument");
+            return NULL;
+        }
+
+        TypeDescriptor const * str_type = get_basic_type_by_name(ctx->type_registry, "string");
+        if (str_type == NULL)
+            return NULL;
+        node->resolved_type = (TypeDescriptor *)str_type;
+        return str_type;
+    }
+
     case AST_NODE_MAKE_EXPR:
     {
         if (node->list.count < 2)
@@ -1957,12 +1982,18 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
     {
         if (node->list.count > 0)
         {
-            TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
-            if (inner_type)
+            TypeDescriptor const * type = NULL;
+            for (size_t i = 0; i < node->list.count; i++)
             {
-                node->resolved_type = (TypeDescriptor *)inner_type;
+                if (node->list.children[i] != NULL)
+                {
+                    TypeDescriptor const * child_type = sem_evaluate_expr(ctx, node->list.children[i]);
+                    if (child_type)
+                        type = child_type;
+                }
             }
-            return inner_type;
+            node->resolved_type = (TypeDescriptor *)type;
+            return type;
         }
         return NULL;
     }
@@ -2046,6 +2077,19 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                         case AST_NODE_POSTFIX_CALL:
                             if (type && type->kind == TD_KIND_PROC)
                             {
+                                // Evaluate argument expressions to populate resolved_type
+                                if (op->list.count > 0 && op->list.children[0] != NULL)
+                                {
+                                    odin_grammar_node_t * arg_list = op->list.children[0];
+                                    if (arg_list->type == AST_NODE_ARGUMENT_LIST)
+                                    {
+                                        for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                                        {
+                                            if (arg_list->list.children[ai])
+                                                sem_evaluate_expr(ctx, arg_list->list.children[ai]);
+                                        }
+                                    }
+                                }
                                 if (type->proc_metadata.return_count > 1)
                                 {
                                     op->resolved_type = (TypeDescriptor *)type;
@@ -2108,6 +2152,19 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             case AST_NODE_POSTFIX_CALL:
                 if (type && type->kind == TD_KIND_PROC)
                 {
+                    // Evaluate argument expressions
+                    if (op->list.count > 0 && op->list.children[0] != NULL)
+                    {
+                        odin_grammar_node_t * arg_list = op->list.children[0];
+                        if (arg_list->type == AST_NODE_ARGUMENT_LIST)
+                        {
+                            for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                            {
+                                if (arg_list->list.children[ai])
+                                    sem_evaluate_expr(ctx, arg_list->list.children[ai]);
+                            }
+                        }
+                    }
                     if (type->proc_metadata.return_count > 1)
                     {
                         op->resolved_type = (TypeDescriptor *)type;
@@ -2585,6 +2642,26 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
                     continue;
                 param_type_node->resolved_type = (TypeDescriptor *)pt;
 
+                // If this is a variadic .. parameter, wrap the type in a slice
+                // e.g. ..any → []any
+                bool is_variadic_param = false;
+                for (size_t ci = 0; ci < param->list.count; ci++)
+                {
+                    if (param->list.children[ci] != NULL
+                        && param->list.children[ci]->type == AST_NODE_ELLIPSIS)
+                    {
+                        is_variadic_param = true;
+                        break;
+                    }
+                }
+                if (is_variadic_param && pt != NULL)
+                {
+                    pt = get_or_create_slice_type(ctx->type_registry, pt);
+                    if (pt == NULL)
+                        continue;
+                    param_type_node->resolved_type = (TypeDescriptor *)pt;
+                }
+
                 if (param_count >= (int)param_cap)
                 {
                     size_t new_cap = param_cap == 0 ? 4 : param_cap * 2;
@@ -2669,7 +2746,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-    // Detect variadic (...)
+    // Detect variadic (... or ..any)
     bool is_variadic = false;
     if (param_list_node != NULL && param_list_node->list.count > 0)
     {
@@ -2678,10 +2755,26 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
         {
             for (size_t k = 0; k < params->list.count; k++)
             {
-                if (params->list.children[k] != NULL && params->list.children[k]->type == AST_NODE_ELLIPSIS)
+                odin_grammar_node_t * p = params->list.children[k];
+                if (p == NULL)
+                    continue;
+                if (p->type == AST_NODE_ELLIPSIS)
                 {
                     is_variadic = true;
                     break;
+                }
+                if (p->type == AST_NODE_PARAMETER)
+                {
+                    for (size_t ci = 0; ci < p->list.count; ci++)
+                    {
+                        if (p->list.children[ci] != NULL && p->list.children[ci]->type == AST_NODE_ELLIPSIS)
+                        {
+                            is_variadic = true;
+                            break;
+                        }
+                    }
+                    if (is_variadic)
+                        break;
                 }
             }
         }

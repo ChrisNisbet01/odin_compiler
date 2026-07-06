@@ -1150,37 +1150,44 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             }
             else if (var_type && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
             {
-                LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
-                LLVMValueRef zero_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                LLVMValueRef data_ptr;
-                LLVMTypeRef val_type = LLVMTypeOf(init_val);
-                LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
-                if (val_kind == LLVMIntegerTypeKind)
+                // If the initializer is already an any struct, store directly
+                if (init_node->resolved_type == var_type)
                 {
-                    data_ptr = LLVMBuildIntToPtr(ctx->builder, init_val, i8ptr, "anydata");
-                }
-                else if (val_kind == LLVMPointerTypeKind)
-                {
-                    data_ptr = LLVMBuildBitCast(ctx->builder, init_val, i8ptr, "anydata");
+                    LLVMTypeRef ivt = LLVMTypeOf(init_val);
+                    if (LLVMGetTypeKind(ivt) == LLVMPointerTypeKind)
+                        init_val = LLVMBuildLoad2(ctx->builder, var_type->llvm_type, init_val, "loadtmp");
+                    LLVMBuildStore(ctx->builder, init_val, alloca);
                 }
                 else
                 {
-                    LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, val_type, "anytmp");
-                    LLVMBuildStore(ctx->builder, init_val, tmp);
-                    data_ptr = LLVMBuildBitCast(ctx->builder, tmp, i8ptr, "anydata");
+                    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+                    LLVMValueRef zero_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                    LLVMValueRef data_ptr;
+                    LLVMTypeRef val_type = LLVMTypeOf(init_val);
+                    LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
+                    if (val_kind == LLVMPointerTypeKind)
+                    {
+                        data_ptr = LLVMBuildBitCast(ctx->builder, init_val, i8ptr, "anydata");
+                    }
+                    else
+                    {
+                        LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, val_type, "anytmp");
+                        LLVMBuildStore(ctx->builder, init_val, tmp);
+                        data_ptr = LLVMBuildBitCast(ctx->builder, tmp, i8ptr, "anydata");
+                    }
+                    int64_t init_tid = (init_node->resolved_type != NULL) ? (int64_t)init_node->resolved_type->type_id : 0;
+                    LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), init_tid, false);
+                    LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                    LLVMValueRef gep0[2] = {zero_idx, idx1};
+                    LLVMValueRef data_field
+                        = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, gep0, 2, "any.data");
+                    LLVMBuildStore(ctx->builder, data_ptr, data_field);
+                    LLVMValueRef idx2 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+                    LLVMValueRef gep1[2] = {zero_idx, idx2};
+                    LLVMValueRef id_field
+                        = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, gep1, 2, "any.typeid");
+                    LLVMBuildStore(ctx->builder, type_id, id_field);
                 }
-                int64_t init_tid = (init_node->resolved_type != NULL) ? (int64_t)init_node->resolved_type->type_id : 0;
-                LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), init_tid, false);
-                LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                LLVMValueRef gep0[2] = {zero_idx, idx1};
-                LLVMValueRef data_field
-                    = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, gep0, 2, "any.data");
-                LLVMBuildStore(ctx->builder, data_ptr, data_field);
-                LLVMValueRef idx2 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
-                LLVMValueRef gep1[2] = {zero_idx, idx2};
-                LLVMValueRef id_field
-                    = LLVMBuildInBoundsGEP2(ctx->builder, var_type->llvm_type, alloca, gep1, 2, "any.typeid");
-                LLVMBuildStore(ctx->builder, type_id, id_field);
             }
             else if (init_val != NULL)
             {
@@ -2095,16 +2102,14 @@ ir_gen_pack_any(
     LLVMValueRef data_ptr;
     LLVMTypeRef val_type = LLVMTypeOf(rhs_val);
     LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
-    if (val_kind == LLVMIntegerTypeKind)
+    if (val_kind == LLVMPointerTypeKind)
     {
-        data_ptr = LLVMBuildIntToPtr(ctx->builder, rhs_val, i8ptr, "anydata");
-    }
-    else if (val_kind == LLVMPointerTypeKind)
-    {
+        // Pointer values ARE the data — use directly
         data_ptr = LLVMBuildBitCast(ctx->builder, rhs_val, i8ptr, "anydata");
     }
     else
     {
+        // Allocate storage for the value and point to it
         LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, val_type, "anytmp");
         LLVMBuildStore(ctx->builder, rhs_val, tmp);
         data_ptr = LLVMBuildBitCast(ctx->builder, tmp, i8ptr, "anydata");
@@ -3456,7 +3461,7 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 // chainl1(AssignExpression, Comma) produces a left-associative tree:
 //   Expr(Expr(a, b), c)   for a, b, c
 static int
-ir_gen_collect_call_args(IrGenContext * ctx, odin_grammar_node_t * node, LLVMValueRef * args, int max_args)
+ir_gen_collect_call_args(IrGenContext * ctx, odin_grammar_node_t * node, LLVMValueRef * args, TypeDescriptor const ** arg_types, int max_args)
 {
     if (node == NULL || max_args <= 0)
         return 0;
@@ -3467,10 +3472,12 @@ ir_gen_collect_call_args(IrGenContext * ctx, odin_grammar_node_t * node, LLVMVal
         // children[0] is the left sub-chain, children[last] is the rightmost
         // operand
         odin_grammar_node_t * last = node->list.children[node->list.count - 1];
-        int count = ir_gen_collect_call_args(ctx, node->list.children[0], args, max_args);
+        int count = ir_gen_collect_call_args(ctx, node->list.children[0], args, arg_types, max_args);
         if (count < max_args && last != NULL)
         {
             args[count] = ir_gen_node(ctx, last);
+            if (arg_types)
+                arg_types[count] = last->resolved_type;
             count++;
         }
         return count;
@@ -3478,6 +3485,8 @@ ir_gen_collect_call_args(IrGenContext * ctx, odin_grammar_node_t * node, LLVMVal
 
     // Single expression — evaluate directly
     args[0] = ir_gen_node(ctx, node);
+    if (arg_types)
+        arg_types[0] = node->resolved_type;
     return args[0] ? 1 : 0;
 }
 
@@ -3544,6 +3553,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             LLVMTypeRef func_type = proc_type->proc_metadata.func_type;
 
             LLVMValueRef args[128];
+            TypeDescriptor const * arg_types[128];
             int arg_count = 0;
 
             if (op->list.count > 0 && op->list.children[0] != NULL)
@@ -3551,7 +3561,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 odin_grammar_node_t * arg_expr = op->list.children[0];
                 if (arg_expr->type == AST_NODE_ARGUMENT_LIST && arg_expr->list.count > 0)
                     arg_expr = arg_expr->list.children[0];
-                arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, 128);
+                arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, arg_types, 128);
             }
 
             // Variadic ..any packing: build []any slice from extra args (ODIN convention)
@@ -3588,14 +3598,14 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                             };
                             LLVMValueRef slot = LLVMBuildInBoundsGEP2(ctx->builder,
                                 LLVMArrayType(any_llvm, variadic_count), backing, gep_idx, 2, "var.slot");
-                            ir_gen_pack_any(ctx, slot, args[fixed_count + vi], any_llvm, NULL);
+                            ir_gen_pack_any(ctx, slot, args[fixed_count + vi], any_llvm, arg_types[fixed_count + vi]);
                         }
                         LLVMValueRef backing_ptr = LLVMBuildBitCast(ctx->builder, backing,
                             LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), "var.backing.cast");
                         LLVMValueRef slice_val = LLVMGetUndef(slice_llvm);
+                        slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, backing_ptr, 0, "var.ptr");
                         slice_val = LLVMBuildInsertValue(ctx->builder, slice_val,
-                            LLVMConstInt(LLVMInt64TypeInContext(ctx->context), variadic_count, false), 0, "var.len");
-                        slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, backing_ptr, 1, "var.ptr");
+                            LLVMConstInt(LLVMInt64TypeInContext(ctx->context), variadic_count, false), 1, "var.len");
                         args[fixed_count] = slice_val;
                         arg_count = fixed_count + 1;
                     }
@@ -4031,6 +4041,9 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 && strcmp(cur_type->as.basic.name, "any") == 0)
             {
                 // Store the any struct to alloca so we can GEP into it
+                LLVMTypeRef any_val_type = LLVMTypeOf(val);
+                if (LLVMGetTypeKind(any_val_type) == LLVMPointerTypeKind)
+                    val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "assert.any.load");
                 LLVMValueRef tmp_alloca = LLVMBuildAlloca(ctx->builder, cur_type->llvm_type, "assert.tmp");
                 LLVMBuildStore(ctx->builder, val, tmp_alloca);
                 LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
@@ -4065,7 +4078,9 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 if (target_type->kind == TD_KIND_BASIC && !target_type->as.basic.is_float
                     && target_type->as.basic.width > 0 && target_type->as.basic.width <= 64)
                 {
-                    val = LLVMBuildPtrToInt(ctx->builder, data_ptr, target_type->llvm_type, "assert.val");
+                    LLVMValueRef typed_ptr = LLVMBuildBitCast(ctx->builder, data_ptr,
+                        LLVMPointerType(target_type->llvm_type, 0), "assert.typed");
+                    val = LLVMBuildLoad2(ctx->builder, target_type->llvm_type, typed_ptr, "assert.val");
                 }
                 else if (target_type->kind == TD_KIND_POINTER)
                 {
@@ -4699,15 +4714,172 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
+    case AST_NODE_INT_TO_STRING_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * operand = node->list.children[0];
+        LLVMValueRef val = ir_gen_node(ctx, operand);
+        if (val == NULL)
+            return NULL;
+
+        TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
+        if (str_desc == NULL || str_desc->llvm_type == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "int_to_string: string type not found");
+            return NULL;
+        }
+        LLVMTypeRef str_struct_type = str_desc->llvm_type;
+
+        // Load through pointer if needed
+        LLVMTypeRef val_type = LLVMTypeOf(val);
+        if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
+            val = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), val, "its.val");
+
+        if (LLVMGetTypeKind(val_type) != LLVMIntegerTypeKind)
+        {
+            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "int_to_string requires an integer value");
+            return NULL;
+        }
+        unsigned src_width = LLVMGetIntTypeWidth(val_type);
+        LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+        LLVMValueRef i64_val = val;
+        if (src_width < 64)
+            i64_val = LLVMBuildSExt(ctx->builder, val, i64_type, "its.ext");
+        else if (src_width > 64)
+            i64_val = LLVMBuildTrunc(ctx->builder, val, i64_type, "its.trunc");
+
+        LLVMValueRef current_func = func_current_function(ctx);
+        LLVMValueRef zero = LLVMConstInt(i64_type, 0, false);
+
+        // Sign check and absolute value (as unsigned, safe for INT64_MIN)
+        LLVMValueRef is_neg = LLVMBuildICmp(ctx->builder, LLVMIntSLT, i64_val, zero, "its.isneg");
+        LLVMValueRef neg_val = LLVMBuildSub(ctx->builder, zero, i64_val, "its.neg");
+        LLVMValueRef abs_val = LLVMBuildSelect(ctx->builder, is_neg, neg_val, i64_val, "its.abs");
+
+        // Allocas for loop state
+        LLVMValueRef abs_saved = LLVMBuildAlloca(ctx->builder, i64_type, "its.abs.saved");
+        LLVMBuildStore(ctx->builder, abs_val, abs_saved);
+        LLVMValueRef n_digits_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.ndigits");
+        LLVMBuildStore(ctx->builder, zero, n_digits_a);
+        LLVMValueRef temp_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.temp");
+        LLVMBuildStore(ctx->builder, abs_val, temp_a);
+
+        // --- Count digits (do-while: n_digits++, temp/=10; while temp > 0) ---
+        LLVMBasicBlockRef ck_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.ck");
+        LLVMBasicBlockRef cb_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.cb");
+        LLVMBasicBlockRef cd_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.cd");
+
+        LLVMBuildBr(ctx->builder, ck_bb);
+        // Check: run if n_digits == 0 (first iteration) or temp > 0 (subsequent)
+        LLVMPositionBuilderAtEnd(ctx->builder, ck_bb);
+        LLVMValueRef nd = LLVMBuildLoad2(ctx->builder, i64_type, n_digits_a, "its.nd");
+        LLVMValueRef tp = LLVMBuildLoad2(ctx->builder, i64_type, temp_a, "its.tp");
+        LLVMValueRef first_iter = LLVMBuildICmp(ctx->builder, LLVMIntEQ, nd, zero, "its.first");
+        LLVMValueRef still_has = LLVMBuildICmp(ctx->builder, LLVMIntUGT, tp, zero, "its.still");
+        LLVMValueRef run_count = LLVMBuildOr(ctx->builder, first_iter, still_has, "its.run");
+        LLVMBuildCondBr(ctx->builder, run_count, cb_bb, cd_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, cb_bb);
+        LLVMValueRef nd_new = LLVMBuildAdd(ctx->builder, nd, LLVMConstInt(i64_type, 1, false), "its.nd+");
+        LLVMBuildStore(ctx->builder, nd_new, n_digits_a);
+        LLVMValueRef tp_new = LLVMBuildUDiv(ctx->builder, tp, LLVMConstInt(i64_type, 10, false), "its.tp/");
+        LLVMBuildStore(ctx->builder, tp_new, temp_a);
+        LLVMBuildBr(ctx->builder, ck_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, cd_bb);
+        LLVMValueRef n_digits = LLVMBuildLoad2(ctx->builder, i64_type, n_digits_a, "its.n");
+        LLVMValueRef sign_ext = LLVMBuildZExt(ctx->builder, is_neg, i64_type, "its.sx");
+        LLVMValueRef total_len = LLVMBuildAdd(ctx->builder, n_digits, sign_ext, "its.len");
+
+        // Allocate 21-byte buffer, bitcast to i8*
+        LLVMValueRef buf_a = LLVMBuildAlloca(ctx->builder, LLVMArrayType(LLVMInt8TypeInContext(ctx->context), 21), "its.buf");
+        LLVMValueRef buf_p = LLVMBuildBitCast(ctx->builder, buf_a, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), "its.bp");
+
+        // --- Fill digits right-to-left (do-while: pos--, *pos=digit; while remaining>0) ---
+        LLVMValueRef rem_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.rem");
+        LLVMBuildStore(ctx->builder, LLVMBuildLoad2(ctx->builder, i64_type, abs_saved, "its.abs"), rem_a);
+        LLVMValueRef pos_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.pos");
+        LLVMBuildStore(ctx->builder, LLVMConstInt(i64_type, 20, false), pos_a);
+
+        LLVMBasicBlockRef fck_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.fck");
+        LLVMBasicBlockRef fbd_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.fbd");
+        LLVMBasicBlockRef fdn_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.fdn");
+        LLVMMoveBasicBlockAfter(fck_bb, cd_bb);
+        LLVMMoveBasicBlockAfter(fbd_bb, fck_bb);
+        LLVMMoveBasicBlockAfter(fdn_bb, fbd_bb);
+
+        LLVMBuildBr(ctx->builder, fck_bb);
+        // Check: run if pos == 20 (first) or remaining > 0 (subsequent)
+        LLVMPositionBuilderAtEnd(ctx->builder, fck_bb);
+        LLVMValueRef pos_v = LLVMBuildLoad2(ctx->builder, i64_type, pos_a, "its.pv");
+        LLVMValueRef rem_v = LLVMBuildLoad2(ctx->builder, i64_type, rem_a, "its.rv");
+        LLVMValueRef at_end = LLVMBuildICmp(ctx->builder, LLVMIntEQ, pos_v, LLVMConstInt(i64_type, 20, false), "its.atend");
+        LLVMValueRef more_dig = LLVMBuildICmp(ctx->builder, LLVMIntUGT, rem_v, zero, "its.more");
+        LLVMValueRef run_fill = LLVMBuildOr(ctx->builder, at_end, more_dig, "its.runfill");
+        LLVMBuildCondBr(ctx->builder, run_fill, fbd_bb, fdn_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, fbd_bb);
+        LLVMValueRef new_pos = LLVMBuildSub(ctx->builder, pos_v, LLVMConstInt(i64_type, 1, false), "its.p-");
+        LLVMBuildStore(ctx->builder, new_pos, pos_a);
+        LLVMValueRef digit = LLVMBuildURem(ctx->builder, rem_v, LLVMConstInt(i64_type, 10, false), "its.digit");
+        LLVMValueRef ch = LLVMBuildAdd(ctx->builder, digit, LLVMConstInt(i64_type, '0', false), "its.ch");
+        LLVMValueRef ch8 = LLVMBuildTrunc(ctx->builder, ch, LLVMInt8TypeInContext(ctx->context), "its.ch8");
+        LLVMValueRef cp = LLVMBuildInBoundsGEP2(ctx->builder, LLVMInt8TypeInContext(ctx->context), buf_p, &new_pos, 1, "its.cp");
+        LLVMBuildStore(ctx->builder, ch8, cp);
+        LLVMValueRef new_rem = LLVMBuildUDiv(ctx->builder, rem_v, LLVMConstInt(i64_type, 10, false), "its.r/");
+        LLVMBuildStore(ctx->builder, new_rem, rem_a);
+        LLVMBuildBr(ctx->builder, fck_bb);
+
+        // --- Handle sign and build string struct ---
+        LLVMPositionBuilderAtEnd(ctx->builder, fdn_bb);
+        LLVMValueRef final_pos = LLVMBuildLoad2(ctx->builder, i64_type, pos_a, "its.fp");
+        LLVMValueRef neg_pos = LLVMBuildSub(ctx->builder, final_pos, LLVMConstInt(i64_type, 1, false), "its.np");
+        LLVMValueRef data_start = LLVMBuildSelect(ctx->builder, is_neg, neg_pos, final_pos, "its.ds");
+
+        LLVMBasicBlockRef sy_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.sy");
+        LLVMBasicBlockRef sa_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.sa");
+        LLVMMoveBasicBlockAfter(sy_bb, fdn_bb);
+        LLVMMoveBasicBlockAfter(sa_bb, sy_bb);
+        LLVMBuildCondBr(ctx->builder, is_neg, sy_bb, sa_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, sy_bb);
+        LLVMValueRef np = LLVMBuildInBoundsGEP2(ctx->builder, LLVMInt8TypeInContext(ctx->context), buf_p, &neg_pos, 1, "its.np");
+        LLVMBuildStore(ctx->builder, LLVMConstInt(LLVMInt8TypeInContext(ctx->context), '-', false), np);
+        LLVMBuildBr(ctx->builder, sa_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, sa_bb);
+        LLVMValueRef dp = LLVMBuildInBoundsGEP2(ctx->builder, LLVMInt8TypeInContext(ctx->context), buf_p, &data_start, 1, "its.dp");
+        LLVMValueRef sv = LLVMGetUndef(str_struct_type);
+        sv = LLVMBuildInsertValue(ctx->builder, sv, dp, 0, "its.sd");
+        sv = LLVMBuildInsertValue(ctx->builder, sv, total_len, 1, "its.sl");
+        return sv;
+    }
+
     case AST_NODE_TYPE_OF_EXPR:
     {
         if (node->list.count < 1)
             return NULL;
-        ir_gen_node(ctx, node->list.children[0]);
-        TypeDescriptor const * td = node->list.children[0]->resolved_type;
-        if (td == NULL)
+        LLVMValueRef operand = ir_gen_node(ctx, node->list.children[0]);
+        if (operand == NULL)
             return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)td->type_id, false);
+        TypeDescriptor const * operand_type = node->list.children[0]->resolved_type;
+        if (operand_type && operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name
+            && strcmp(operand_type->as.basic.name, "any") == 0)
+        {
+            // Runtime type: extract type_id field (field 1) from the any struct
+            LLVMTypeRef any_type = operand_type->llvm_type;
+            LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, any_type, "typeof.tmp");
+            LLVMBuildStore(ctx->builder, operand, tmp);
+            LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+            LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+            LLVMValueRef gep[2] = {idx0, idx1};
+            LLVMValueRef id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, tmp, gep, 2, "typeof.typeid");
+            return LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), id_field, "typeof.tid");
+        }
+        if (operand_type == NULL)
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)operand_type->type_id, false);
     }
 
     case AST_NODE_SIZE_OF_EXPR:

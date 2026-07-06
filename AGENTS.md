@@ -101,3 +101,18 @@
 - **Added error reporting for ~30 silent-failure sites in IR generation**: Added `ir_gen_error_collection_add` calls at ~30 locations across `ir_gen_lvalue`, `ir_gen_postfix_expression`, `ir_gen_node`, `ir_gen_binary_expression`, `ir_gen_unary_expression`, and `ir_gen_in_expression`. Covers P0 (silently-skipped operations on wrong types), P1 (symbol/type lookup failures including cast/transmute/len/make/new/incl/excl), and P2-P4 (tracked in `notes/ir_gen_error_reporting.md`).
 - **Handled false-positive edge cases**: Package names in expression context return NULL from `ir_gen_identifier` without error (PostfixMember handler resolves via `op->resolved_symbol`). Blank identifier `_` returns NULL from `ir_gen_lvalue` without error. Outer PostfixExpression node does not add cascading error when inner `ir_gen_lvalue` already reported the cause.
 - **All 73 tests pass**.
+- **All 89 tests pass**.
+
+## Accomplishments (session 2026-07-05, continued)
+
+### Implemented `..any` variadic parameters
+- **Grammar**: Added `VariadicMarker = DotDot @AST_ACTION_ELLIPSIS` wrapper rule. Updated `Parameter` rule: `Identifier Colon VariadicMarker? TypePrefix`.
+- **Semantic analyser**: Detects `AST_NODE_ELLIPSIS` child inside `AST_NODE_PARAMETER` from `..` marker; resolves `..any` to `[]any` via `get_or_create_slice_type`.
+- **LLVM function type fix**: `LLVMFunctionType` only gets `is_variadic = true` for bare `...` or C convention. `..any` uses a fixed `[]any` slice param, not LLVM varargs. Distinguishes by checking whether last param type is `TD_KIND_SLICE`.
+- **Call-site packing**: Extra args packed into `[]any` slice (backing array of `any` structs, each packed via `ir_gen_pack_any`; slice struct built with `LLVMBuildInsertValue`). Distinguishes `..any` from bare `...` (no packing for bare `...`).
+- **All 89 tests pass** (test_variadic_any.odin added).
+
+## Summary
+- **Maybe(T)** optional type with `.value`, `x.(T)`, `or_else`, `none` init.
+- **`..any` variadic parameters**: grammar, semantic analysis (resolves to `[]any`), call-site packing into slice.
+- **All 89 tests pass**.
