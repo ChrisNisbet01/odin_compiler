@@ -1463,6 +1463,32 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return void_type;
     }
 
+    case AST_NODE_PRINT_BYTE_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * operand = node->list.children[0];
+        sem_evaluate_expr(ctx, operand);
+        TypeDescriptor const * operand_type = operand->resolved_type;
+        if (operand_type == NULL)
+            return NULL;
+
+        if (operand_type->kind != TD_KIND_BASIC
+            || (operand_type->as.basic.name[0] != 'i' && operand_type->as.basic.name[0] != 'u'
+                && strcmp(operand_type->as.basic.name, "rune") != 0
+                && strcmp(operand_type->as.basic.name, "byte") != 0))
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_byte requires an integer argument");
+            return NULL;
+        }
+
+        TypeDescriptor const * void_type = get_basic_type_by_name(ctx->type_registry, "void");
+        if (void_type == NULL)
+            return NULL;
+        node->resolved_type = (TypeDescriptor *)void_type;
+        return void_type;
+    }
+
     case AST_NODE_INT_TO_STRING_EXPR:
     {
         if (node->list.count < 1)
@@ -2117,6 +2143,13 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 type = type->element_type;
                                 op->resolved_type = (TypeDescriptor *)type;
                             }
+                            else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
+                                     && strcmp(type->as.basic.name, "string") == 0)
+                            {
+                                // String subscript: s[i] returns u8
+                                type = get_basic_type_by_name(ctx->type_registry, "u8");
+                                op->resolved_type = (TypeDescriptor *)type;
+                            }
                             break;
 
                         case AST_NODE_POSTFIX_DEREF:
@@ -2253,6 +2286,12 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 else if (type && type->kind == TD_KIND_MAP)
                 {
                     type = type->as.map.value_type;
+                    op->resolved_type = (TypeDescriptor *)type;
+                }
+                else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
+                         && strcmp(type->as.basic.name, "string") == 0)
+                {
+                    type = get_basic_type_by_name(ctx->type_registry, "u8");
                     op->resolved_type = (TypeDescriptor *)type;
                 }
                 break;
@@ -3502,6 +3541,13 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 }
                 break;
             }
+        }
+
+        // For non-range for loops, evaluate condition expressions before pushing scope
+        if (!is_for_range && node->list.count >= 1 && node->list.children[0] != NULL
+            && node->list.children[0]->type != AST_NODE_COMPOUND_STATEMENT)
+        {
+            sem_evaluate_expr(ctx, node->list.children[0]);
         }
 
         generator_push_scope(ctx->gen_ctx);

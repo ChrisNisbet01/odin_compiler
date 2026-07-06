@@ -15,3 +15,35 @@ println :: proc(args: ..any) {
     }
     print_string("\n")
 }
+
+printf :: proc(format: string, args: ..any) {
+    arg_idx := 0
+    i := 0
+    for i < len(format) {
+        if format[i] == '%' {
+            i += 1
+            if i < len(format) {
+                spec := format[i]
+                if spec == 'd' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx].(int)
+                        s := int_to_string(v)
+                        print_string(s)
+                    }
+                    arg_idx += 1
+                } else if spec == 's' {
+                    if arg_idx < len(args) {
+                        s := args[arg_idx].(string)
+                        print_string(s)
+                    }
+                    arg_idx += 1
+                } else if spec == '%' {
+                    print_byte('%')
+                }
+            }
+        } else {
+            print_byte(format[i])
+        }
+        i += 1
+    }
+}

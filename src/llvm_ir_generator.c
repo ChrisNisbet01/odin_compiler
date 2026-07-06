@@ -1464,6 +1464,24 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                     if (cur_type->element_type)
                         cur_type = cur_type->element_type;
                 }
+                else if (cur_type->kind == TD_KIND_BASIC && cur_type->as.basic.name != NULL
+                         && strcmp(cur_type->as.basic.name, "string") == 0)
+                {
+                    // String subscript: extract data ptr from {ptr, i64} struct, GEP, store ptr for load
+                    LLVMValueRef data_indices[]
+                        = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                           LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+                    LLVMValueRef data_field = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->llvm_type, ptr, data_indices, 2, "str.data.ptr"
+                    );
+                    LLVMValueRef data = LLVMBuildLoad2(
+                        ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_field, "str.data"
+                    );
+                    ptr = LLVMBuildInBoundsGEP2(
+                        ctx->builder, LLVMInt8TypeInContext(ctx->context), data, &index_val, 1, "str.subs"
+                    );
+                    cur_type = get_basic_type_by_name(ctx->type_registry, "u8");
+                }
                 else if (cur_type->kind == TD_KIND_MAP)
                 {
                     LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
@@ -3748,6 +3766,23 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                     ctx->builder, cur_type->element_type->llvm_type, data, &index_val, 1, "slice.subs"
                 );
             }
+            else if (cur_type->kind == TD_KIND_BASIC && cur_type->as.basic.name != NULL
+                     && strcmp(cur_type->as.basic.name, "string") == 0)
+            {
+                LLVMValueRef struct_val;
+                LLVMTypeRef val_type = LLVMTypeOf(val);
+                if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
+                    struct_val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "str.load");
+                else
+                    struct_val = val;
+
+                LLVMValueRef data = LLVMBuildExtractValue(ctx->builder, struct_val, 0, "str.data");
+                LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(
+                    ctx->builder, LLVMInt8TypeInContext(ctx->context), data, &index_val, 1, "str.subs"
+                );
+                val = LLVMBuildLoad2(ctx->builder, LLVMInt8TypeInContext(ctx->context), elem_ptr, "str.char");
+                cur_type = get_basic_type_by_name(ctx->type_registry, "u8");
+            }
             else if (cur_type->kind == TD_KIND_MAP)
             {
                 LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
@@ -3890,6 +3925,8 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 cur_type = op->resolved_type;
             else if (cur_type->element_type)
                 cur_type = cur_type->element_type;
+            else if (op->resolved_type)
+                cur_type = op->resolved_type;
             break;
         }
 
@@ -4735,6 +4772,38 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMBuildBr(ctx->builder, loop_bb);
 
         LLVMPositionBuilderAtEnd(ctx->builder, end_bb);
+        return NULL;
+    }
+
+    case AST_NODE_PRINT_BYTE_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * operand = node->list.children[0];
+        LLVMValueRef byte_val = ir_gen_node(ctx, operand);
+        if (byte_val == NULL)
+            return NULL;
+
+        LLVMTypeRef val_type = LLVMTypeOf(byte_val);
+        if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
+            byte_val = LLVMBuildLoad2(ctx->builder, LLVMInt8TypeInContext(ctx->context), byte_val, "pb.val");
+
+        // Extend to i32 for putchar call
+        LLVMValueRef char_ext = LLVMBuildZExt(ctx->builder, byte_val, LLVMInt32TypeInContext(ctx->context), "pb.ext");
+
+        // Declare/use putchar
+        LLVMTypeRef putchar_param_types[] = {LLVMInt32TypeInContext(ctx->context)};
+        LLVMTypeRef putchar_ftype = LLVMFunctionType(
+            LLVMInt32TypeInContext(ctx->context), putchar_param_types, 1, false
+        );
+        LLVMValueRef putchar_fn = LLVMGetNamedFunction(ctx->module, "putchar");
+        if (putchar_fn == NULL)
+        {
+            putchar_fn = LLVMAddFunction(ctx->module, "putchar", putchar_ftype);
+            LLVMSetLinkage(putchar_fn, LLVMExternalLinkage);
+        }
+        LLVMValueRef putchar_args[] = {char_ext};
+        LLVMBuildCall2(ctx->builder, putchar_ftype, putchar_fn, putchar_args, 1, "");
         return NULL;
     }
 

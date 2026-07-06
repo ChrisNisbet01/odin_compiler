@@ -422,6 +422,7 @@ DEFINE_ACTION(ast_action_complex_expr_action, AST_NODE_COMPLEX_EXPR)
 DEFINE_ACTION(ast_action_quaternion_expr_action, AST_NODE_QUATERNION_EXPR)
 DEFINE_ACTION(ast_action_maybe_type_action, AST_NODE_MAYBE_TYPE)
 DEFINE_ACTION(ast_action_print_string_expr_action, AST_NODE_PRINT_STRING_EXPR)
+DEFINE_ACTION(ast_action_print_byte_expr_action, AST_NODE_PRINT_BYTE_EXPR)
 DEFINE_ACTION(ast_action_int_to_string_expr_action, AST_NODE_INT_TO_STRING_EXPR)
 
 // --- Terminal nodes (text captured for semantic use) ---
@@ -597,6 +598,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_QUATERNION_EXPR, ast_action_quaternion_expr_action);
     REGISTER(AST_ACTION_MAYBE_TYPE, ast_action_maybe_type_action);
     REGISTER(AST_ACTION_PRINT_STRING_EXPR, ast_action_print_string_expr_action);
+    REGISTER(AST_ACTION_PRINT_BYTE_EXPR, ast_action_print_byte_expr_action);
     REGISTER(AST_ACTION_INT_TO_STRING_EXPR, ast_action_int_to_string_expr_action);
 
 #undef REGISTER
