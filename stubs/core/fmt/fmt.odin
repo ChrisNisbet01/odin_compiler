@@ -6,7 +6,7 @@ println :: proc(args: ..any) {
             print_string(" ")
         }
         v := args[i]
-        if type_of(v) == 8 {
+        if type_of(v) == type_of(int) {
             s := int_to_string(v.(int))
             print_string(s)
         } else {
@@ -60,26 +60,25 @@ printf :: proc(format: string, args: ..any) {
 }
 
 print_value :: proc(v: any) {
-    // NOTE: type_ids depend on registration order in the compiler
-    if type_of(v) == 8 {
+    if type_of(v) == type_of(int) {
         s := int_to_string(v.(int))
         print_string(s)
-    } else if type_of(v) == 2 {
+    } else if type_of(v) == type_of(i8) {
         s := int_to_string(v.(i8))
         print_string(s)
-    } else if type_of(v) == 3 {
+    } else if type_of(v) == type_of(i32) {
         s := int_to_string(v.(i32))
         print_string(s)
-    } else if type_of(v) == 4 {
+    } else if type_of(v) == type_of(i64) {
         s := int_to_string(v.(i64))
         print_string(s)
-    } else if type_of(v) == 45 {
+    } else if type_of(v) == type_of(string) {
         s := v.(string)
         print_string(s)
-    } else if type_of(v) == 14 {
+    } else if type_of(v) == type_of(u8) {
         b := v.(u8)
         print_byte(b)
-    } else if type_of(v) == 23 {
+    } else if type_of(v) == type_of(byte) {
         b := v.(byte)
         print_byte(b)
     } else {

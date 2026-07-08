@@ -9,6 +9,7 @@ epc_generate_grammar(
 
 add_executable(${app}
     main.c
+    hash.c
     odin_grammar_ast_actions.c
     generic_hash_table.c
     debug.c

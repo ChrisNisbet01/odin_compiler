@@ -1,5 +1,7 @@
 #include "type_descriptors.h"
+#include "hash.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -38,7 +40,7 @@ type_descriptor_alloc(TypeDescriptors * registry)
     TypeDescriptor * td = calloc(1, sizeof(*td));
     if (td == NULL)
         return NULL;
-    td->type_id = registry->count;
+    td->type_id = 0;
     registry->types[registry->count++] = td;
     return td;
 }
@@ -309,7 +311,255 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         reg->basic_types[reg->basic_count++] = any_td;
     }
 
+    // Compute hashes for all types created during registry initialization
+    for (int i = 0; i < reg->count; i++)
+    {
+        type_compute_hash(reg->types[i]);
+    }
+
     return reg;
+}
+
+static void
+type_write_canonical_name_internal(TypeDescriptor const * td, char * buf, size_t buf_size, int depth)
+{
+    if (td == NULL || buf_size == 0)
+    {
+        if (buf_size > 0) buf[0] = '\0';
+        return;
+    }
+    if (depth > 32)
+    {
+        snprintf(buf, buf_size, "...");
+        return;
+    }
+
+    switch (td->kind)
+    {
+    case TD_KIND_BASIC:
+        snprintf(buf, buf_size, "%s", td->as.basic.name ? td->as.basic.name : "?");
+        break;
+
+    case TD_KIND_POINTER:
+    {
+        char inner[512];
+        type_write_canonical_name_internal(td->pointee, inner, sizeof(inner), depth + 1);
+        snprintf(buf, buf_size, "^%s", inner);
+        break;
+    }
+
+    case TD_KIND_SLICE:
+    {
+        char inner[512];
+        type_write_canonical_name_internal(td->element_type, inner, sizeof(inner), depth + 1);
+        snprintf(buf, buf_size, "[]%s", inner);
+        break;
+    }
+
+    case TD_KIND_ARRAY:
+    {
+        char inner[512];
+        type_write_canonical_name_internal(td->element_type, inner, sizeof(inner), depth + 1);
+        snprintf(buf, buf_size, "[%zu]%s", td->as.array.count, inner);
+        break;
+    }
+
+    case TD_KIND_DYNAMIC_ARRAY:
+    {
+        char inner[512];
+        type_write_canonical_name_internal(td->element_type, inner, sizeof(inner), depth + 1);
+        snprintf(buf, buf_size, "[dynamic]%s", inner);
+        break;
+    }
+
+    case TD_KIND_PROC:
+    {
+        size_t pos = 0;
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "proc(");
+        for (int i = 0; i < td->proc_metadata.param_count; i++)
+        {
+            if (i > 0)
+                pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, ", ");
+            char pbuf[256];
+            type_write_canonical_name_internal(td->proc_metadata.params[i], pbuf, sizeof(pbuf), depth + 1);
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s", pbuf);
+        }
+        if (td->proc_metadata.is_variadic)
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, ", ..any");
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, ")");
+        if (td->proc_metadata.return_type && td->proc_metadata.return_type != td->proc_metadata.return_type)
+        {
+            // placeholder — skip for now
+        }
+        else if (td->proc_metadata.return_count > 0)
+        {
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, " -> (");
+            for (int i = 0; i < td->proc_metadata.return_count; i++)
+            {
+                if (i > 0) pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, ", ");
+                char rbuf[256];
+                type_write_canonical_name_internal(
+                    td->proc_metadata.returns[i], rbuf, sizeof(rbuf), depth + 1
+                );
+                pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s", rbuf);
+            }
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, ")");
+        }
+        else if (!td->proc_metadata.is_void_return && td->proc_metadata.return_type)
+        {
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, " -> ");
+            char rbuf[256];
+            type_write_canonical_name_internal(td->proc_metadata.return_type, rbuf, sizeof(rbuf), depth + 1);
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s", rbuf);
+        }
+        break;
+    }
+
+    case TD_KIND_STRUCT:
+    {
+        size_t pos = 0;
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "struct{");
+        for (int i = 0; i < td->struct_metadata.members.count; i++)
+        {
+            if (i > 0)
+                pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "; ");
+            struct_field_t const * f = &td->struct_metadata.members.fields[i];
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s:", f->name ? f->name : "?");
+            char fbuf[256];
+            type_write_canonical_name_internal(f->type_desc, fbuf, sizeof(fbuf), depth + 1);
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s", fbuf);
+        }
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "}");
+        break;
+    }
+
+    case TD_KIND_UNION:
+    {
+        size_t pos = 0;
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "union{");
+        for (int i = 0; i < td->union_metadata.members.count; i++)
+        {
+            if (i > 0)
+                pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "; ");
+            struct_field_t const * f = &td->union_metadata.members.fields[i];
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s:", f->name ? f->name : "?");
+            char fbuf[256];
+            type_write_canonical_name_internal(f->type_desc, fbuf, sizeof(fbuf), depth + 1);
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s", fbuf);
+        }
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "}");
+        break;
+    }
+
+    case TD_KIND_ENUM:
+    {
+        char const * tag = td->as.enum_type.tag ? td->as.enum_type.tag : "?";
+        snprintf(buf, buf_size, "enum(%s)", tag);
+        break;
+    }
+
+    case TD_KIND_MAP:
+    {
+        char kbuf[256], vbuf[256];
+        type_write_canonical_name_internal(td->as.map.key_type, kbuf, sizeof(kbuf), depth + 1);
+        type_write_canonical_name_internal(td->as.map.value_type, vbuf, sizeof(vbuf), depth + 1);
+        snprintf(buf, buf_size, "map[%s]%s", kbuf, vbuf);
+        break;
+    }
+
+    case TD_KIND_BIT_SET:
+    {
+        char ebuf[256];
+        type_write_canonical_name_internal(td->as.bit_set.element_type, ebuf, sizeof(ebuf), depth + 1);
+        snprintf(buf, buf_size, "bit_set(%s,%d)", ebuf, td->as.bit_set.num_bits);
+        break;
+    }
+
+    case TD_KIND_BIT_FIELD:
+    {
+        size_t pos = 0;
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "bit_field{");
+        for (int i = 0; i < td->as.bit_field.num_fields; i++)
+        {
+            if (i > 0)
+                pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "; ");
+            bit_field_field_info const * f = &td->as.bit_field.fields[i];
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s:", f->name ? f->name : "?");
+            if (f->type)
+            {
+                char fbuf[256];
+                type_write_canonical_name_internal(f->type, fbuf, sizeof(fbuf), depth + 1);
+                pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s", fbuf);
+            }
+            pos += snprintf(
+                buf + pos, buf_size > pos ? buf_size - pos : 0, "|%d:%d", f->offset_bits, f->width_bits
+            );
+        }
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "}");
+        break;
+    }
+
+    case TD_KIND_RANGE:
+    {
+        snprintf(buf, buf_size, "range(%s)", td->as.range.is_inclusive ? "inclusive" : "exclusive");
+        break;
+    }
+
+    case TD_KIND_SOA:
+    {
+        size_t pos = 0;
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "#soa[");
+        for (int i = 0; i < td->struct_metadata.members.count; i++)
+        {
+            if (i > 0)
+                pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "; ");
+            struct_field_t const * f = &td->struct_metadata.members.fields[i];
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s:", f->name ? f->name : "?");
+            char fbuf[256];
+            type_write_canonical_name_internal(f->type_desc, fbuf, sizeof(fbuf), depth + 1);
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s", fbuf);
+        }
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "]");
+        break;
+    }
+
+    case TD_KIND_DISTINCT:
+    {
+        char inner[512];
+        type_write_canonical_name_internal(td->distinct_base_type, inner, sizeof(inner), depth + 1);
+        snprintf(buf, buf_size, "distinct %s", inner);
+        break;
+    }
+
+    case TD_KIND_MAYBE:
+    {
+        char inner[512];
+        type_write_canonical_name_internal(td->as.maybe.inner_type, inner, sizeof(inner), depth + 1);
+        snprintf(buf, buf_size, "Maybe(%s)", inner);
+        break;
+    }
+
+    default:
+        snprintf(buf, buf_size, "?");
+        break;
+    }
+}
+
+void
+type_write_canonical_name(TypeDescriptor const * td, char * buf, size_t buf_size)
+{
+    type_write_canonical_name_internal(td, buf, buf_size, 0);
+}
+
+void
+type_compute_hash(TypeDescriptor * td)
+{
+    if (td == NULL || td->type_id != 0)
+        return;
+
+    char buf[2048];
+    type_write_canonical_name(td, buf, sizeof(buf));
+    td->type_id = (int64_t)hash_string(buf, strlen(buf));
 }
 
 void
@@ -422,6 +672,7 @@ get_or_create_pointer_type(TypeDescriptors * registry, TypeDescriptor const * po
     td->kind = TD_KIND_POINTER;
     td->pointee = pointee;
     td->llvm_type = LLVMPointerType(pointee->llvm_type, 0);
+    type_compute_hash(td);
     return td;
 }
 
@@ -442,6 +693,7 @@ get_or_create_array_type(TypeDescriptors * registry, TypeDescriptor const * elem
     td->element_type = element_type;
     td->as.array.count = count;
     td->llvm_type = LLVMArrayType(element_type->llvm_type, (unsigned)count);
+    type_compute_hash(td);
     return td;
 }
 
@@ -463,6 +715,7 @@ get_or_create_slice_type(TypeDescriptors * registry, TypeDescriptor const * elem
 
     LLVMTypeRef elems[2] = {LLVMPointerType(element_type->llvm_type, 0), LLVMInt64TypeInContext(registry->context)};
     td->llvm_type = LLVMStructTypeInContext(registry->context, elems, 2, false);
+    type_compute_hash(td);
     return td;
 }
 
@@ -487,6 +740,7 @@ get_or_create_dynamic_array_type(TypeDescriptors * registry, TypeDescriptor cons
            LLVMInt64TypeInContext(registry->context),
            LLVMInt64TypeInContext(registry->context)};
     td->llvm_type = LLVMStructTypeInContext(registry->context, elems, 3, false);
+    type_compute_hash(td);
     return td;
 }
 
@@ -509,6 +763,7 @@ get_or_create_map_type(TypeDescriptors * registry, TypeDescriptor const * key_ty
 
     LLVMTypeRef elems[1] = {LLVMPointerType(LLVMInt8TypeInContext(registry->context), 0)};
     td->llvm_type = LLVMStructTypeInContext(registry->context, elems, 1, false);
+    type_compute_hash(td);
     return td;
 }
 
@@ -566,6 +821,7 @@ get_or_create_bit_field_type(TypeDescriptors * registry, bit_field_field_info * 
     else
         td->llvm_type = LLVMInt64TypeInContext(registry->context);
 
+    type_compute_hash(td);
     return td;
 }
 
@@ -610,6 +866,7 @@ get_or_create_bit_set_type(TypeDescriptors * registry, TypeDescriptor const * el
     else
         td->llvm_type = LLVMInt64TypeInContext(registry->context);
 
+    type_compute_hash(td);
     return td;
 }
 
@@ -728,6 +985,7 @@ get_or_create_proc_type(
     td->llvm_type = LLVMPointerType(td->proc_metadata.func_type, 0);
     free(llvm_params);
 
+    type_compute_hash(td);
     return td;
 }
 
@@ -761,6 +1019,7 @@ register_struct_type(
         td->struct_metadata.alignment = LLVMABIAlignmentOfType(registry->data_layout, llvm_struct);
     }
 
+    type_compute_hash(td);
     return td;
 }
 
@@ -839,6 +1098,7 @@ get_or_create_union_type(TypeDescriptors * registry, struct_or_union_members_st 
         td->llvm_type = LLVMStructTypeInContext(registry->context, NULL, 0, false);
     }
 
+    type_compute_hash(td);
     return td;
 }
 
@@ -898,6 +1158,7 @@ get_or_create_soa_type(TypeDescriptors * registry, struct_or_union_members_st co
         td->struct_metadata.alignment = LLVMABIAlignmentOfType(registry->data_layout, llvm_struct);
     }
 
+    type_compute_hash(td);
     return td;
 }
 
@@ -943,6 +1204,7 @@ get_or_create_enum_type(TypeDescriptors * registry, char const * tag, LLVMTypeRe
     td->llvm_type = llvm_type ? llvm_type : LLVMInt32TypeInContext(registry->context);
     if (tag)
         td->as.enum_type.tag = tag;
+    type_compute_hash(td);
     return td;
 }
 
@@ -964,6 +1226,7 @@ get_or_create_range_type(TypeDescriptors * registry, bool is_inclusive)
 
     LLVMTypeRef elems[2] = {LLVMInt64TypeInContext(registry->context), LLVMInt64TypeInContext(registry->context)};
     td->llvm_type = LLVMStructTypeInContext(registry->context, elems, 2, false);
+    type_compute_hash(td);
     return td;
 }
 
@@ -992,6 +1255,7 @@ get_or_create_maybe_type(TypeDescriptors * registry, TypeDescriptor const * inne
     LLVMTypeRef fields[2] = {i64_type, inner_type->llvm_type};
     td->llvm_type = LLVMStructTypeInContext(registry->context, fields, 2, false);
 
+    type_compute_hash(td);
     return td;
 }
 

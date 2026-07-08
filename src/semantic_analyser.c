@@ -1754,7 +1754,17 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             node->resolved_type = NULL;
             return NULL;
         }
-        sem_evaluate_expr(ctx, node->list.children[0]);
+        odin_grammar_node_t * operand = node->list.children[0];
+        if (is_type_node(operand))
+        {
+            TypeDescriptor const * td = sem_resolve_type_expr(ctx, operand);
+            if (td)
+                operand->resolved_type = (TypeDescriptor *)td;
+        }
+        else
+        {
+            sem_evaluate_expr(ctx, operand);
+        }
         TypeDescriptor const * typeid_type = get_basic_type_by_name(ctx->type_registry, "typeid");
         node->resolved_type = (TypeDescriptor *)typeid_type;
         return typeid_type;

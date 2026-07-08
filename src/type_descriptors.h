@@ -80,7 +80,7 @@ typedef struct
 typedef struct TypeDescriptor
 {
     td_kind_t kind;
-    int type_id;
+    int64_t type_id;
     LLVMTypeRef llvm_type;
 
     TypeDescriptor const * pointee;
@@ -236,3 +236,7 @@ typedef struct
 bool type_descriptor_find_struct_field_path(TypeDescriptor const * desc, char const * name, field_access_path_t * path);
 
 void register_builtin_context_types(TypeDescriptors * registry);
+
+void type_write_canonical_name(TypeDescriptor const * td, char * buf, size_t buf_size);
+
+void type_compute_hash(TypeDescriptor * td);

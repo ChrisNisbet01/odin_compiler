@@ -5014,14 +5014,17 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         if (node->list.count < 1)
             return NULL;
-        LLVMValueRef operand = ir_gen_node(ctx, node->list.children[0]);
-        if (operand == NULL)
+        odin_grammar_node_t * operand_node = node->list.children[0];
+        TypeDescriptor const * operand_type = operand_node->resolved_type;
+        if (operand_type == NULL)
             return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-        TypeDescriptor const * operand_type = node->list.children[0]->resolved_type;
-        if (operand_type && operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name
+        // Runtime path: for 'any' type, extract type_id from struct field 1
+        if (operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name
             && strcmp(operand_type->as.basic.name, "any") == 0)
         {
-            // Runtime type: extract type_id field (field 1) from the any struct
+            LLVMValueRef operand = ir_gen_node(ctx, operand_node);
+            if (operand == NULL)
+                return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
             LLVMTypeRef any_type = operand_type->llvm_type;
             LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, any_type, "typeof.tmp");
             LLVMBuildStore(ctx->builder, operand, tmp);
@@ -5031,8 +5034,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             LLVMValueRef id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, tmp, gep, 2, "typeof.typeid");
             return LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), id_field, "typeof.tid");
         }
-        if (operand_type == NULL)
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+        // Compile-time path: emit the type_id hash directly
         return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)operand_type->type_id, false);
     }
 
