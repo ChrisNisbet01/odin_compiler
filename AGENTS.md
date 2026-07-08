@@ -1,4 +1,13 @@
-## Accomplishments (session 2026-07-05)
+## Accomplishments (session 2026-07-09)
+
+### Phase 6: Extended formatting, escape sequences, `%u`
+- **Extended escape sequences in `ir_gen_string_literal`**: Added `\a` (0x07), `\b` (0x08), `\e` (0x1B), `\f` (0x0C), `\v` (0x0B), `\'` (0x27), `\0` (0x00), `\xNN` (hex escape). Split dispatch to pass `process_escapes` flag — raw strings (backtick) skip escape processing.
+- **Rune literal escape handling**: Rewrote `ir_gen_rune_literal` to handle all escape sequences instead of broken `strtoull` fallback.
+- **`%u` format specifier**: Added to `printf` in `stubs/core/fmt/fmt.odin`. Delegates to `print_value` for proper unsigned type dispatch.
+- **Extended `print_value`**: Added `u16`, `u32`, `u64` cases; `println` now uses `print_value` for unified type dispatch. `u8` and `byte` updated — `byte` uses `print_byte`, `u8` uses `int_to_string`.
+- **Tests**: `tests/test_escape.odin` (47 subtests covering all escapes, hex, mixed, raw strings). `test_fmt.odin` extended with `%u` and unsigned type coverage.
+- **Cleaned up `notes/unsupported_features.md`**: Removed supported features, ordered remaining by complexity.
+- **All 101 tests pass**.
 
 ### Implemented Maybe(T) optional type
 - **Grammar**: Added `KwMaybe` keyword, `MaybeType` rule (`KwMaybe LParen TypePrefix RParen`), added to `TypePrefix`/`AllReservedWords`.
