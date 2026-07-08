@@ -5,13 +5,7 @@ println :: proc(args: ..any) {
         if i > 0 {
             print_string(" ")
         }
-        v := args[i]
-        if type_of(v) == type_of(int) {
-            s := int_to_string(v.(int))
-            print_string(s)
-        } else {
-            print_string(v.(string))
-        }
+        print_value(args[i])
     }
     print_string("\n")
 }
@@ -41,6 +35,11 @@ printf :: proc(format: string, args: ..any) {
                     if arg_idx < len(args) {
                         v := args[arg_idx].(int)
                         print_hex(v)
+                    }
+                    arg_idx += 1
+                } else if spec == 'u' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
                     }
                     arg_idx += 1
                 } else if spec == 'v' {
@@ -76,8 +75,17 @@ print_value :: proc(v: any) {
         s := v.(string)
         print_string(s)
     } else if type_of(v) == type_of(u8) {
-        b := v.(u8)
-        print_byte(b)
+        s := int_to_string(v.(u8))
+        print_string(s)
+    } else if type_of(v) == type_of(u16) {
+        s := int_to_string(v.(u16))
+        print_string(s)
+    } else if type_of(v) == type_of(u32) {
+        s := int_to_string(v.(u32))
+        print_string(s)
+    } else if type_of(v) == type_of(u64) {
+        s := int_to_string(v.(u64))
+        print_string(s)
     } else if type_of(v) == type_of(byte) {
         b := v.(byte)
         print_byte(b)

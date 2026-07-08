@@ -295,7 +295,7 @@ ir_gen_bool_value(IrGenContext * ctx, odin_grammar_node_t * node)
 }
 
 static LLVMValueRef
-ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node)
+ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node, bool process_escapes)
 {
     if (node->text == NULL)
         return LLVMConstNull(LLVMStructType(NULL, 0, false));
@@ -312,9 +312,43 @@ ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node)
         content_len = text_len - 2;
     }
 
+    LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
+
+    // For raw strings (backtick), copy verbatim without escape processing
+    if (!process_escapes)
+    {
+        size_t arr_len = content_len + 1;
+        LLVMValueRef * elements = malloc(arr_len * sizeof(LLVMValueRef));
+        if (elements == NULL)
+            return NULL;
+        for (size_t i = 0; i < content_len; i++)
+            elements[i] = LLVMConstInt(i8_type, (unsigned char)content[i], false);
+        elements[content_len] = LLVMConstInt(i8_type, 0, false);
+
+        LLVMTypeRef arr_type = LLVMArrayType(i8_type, arr_len);
+        LLVMValueRef arr_const = LLVMConstArray(i8_type, elements, arr_len);
+        free(elements);
+
+        LLVMValueRef global = LLVMAddGlobal(ctx->module, arr_type, ".str");
+        LLVMSetInitializer(global, arr_const);
+        LLVMSetLinkage(global, LLVMPrivateLinkage);
+        LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
+        LLVMSetGlobalConstant(global, true);
+
+        LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+        LLVMValueRef indices[] = {zero, zero};
+        LLVMValueRef ptr = LLVMConstInBoundsGEP2(arr_type, global, indices, 2);
+
+        TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
+        LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : LLVMStructType(NULL, 0, false);
+
+        LLVMValueRef len_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)content_len, false);
+        LLVMValueRef struct_vals[] = {ptr, len_val};
+        return LLVMConstNamedStruct(str_type, struct_vals, 2);
+    }
+
     // Process escape sequences: first pass to count output length
     size_t arr_len = content_len + 1; // max possible (no escapes)
-    LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
 
     // First pass: count escaped length
     size_t escaped_len = 0;
@@ -324,8 +358,27 @@ ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             switch (content[i + 1])
             {
-            case 'n': case 't': case 'r': case '\\': case '"':
+            case 'a': case 'b': case 'e': case 'f': case 'n':
+            case 'r': case 't': case 'v': case '\\': case '\'':
+            case '"': case '0':
                 escaped_len++; i++; break;
+            case 'x':
+                if (i + 3 < content_len
+                    && ((content[i + 2] >= '0' && content[i + 2] <= '9')
+                     || (content[i + 2] >= 'a' && content[i + 2] <= 'f')
+                     || (content[i + 2] >= 'A' && content[i + 2] <= 'F'))
+                    && ((content[i + 3] >= '0' && content[i + 3] <= '9')
+                     || (content[i + 3] >= 'a' && content[i + 3] <= 'f')
+                     || (content[i + 3] >= 'A' && content[i + 3] <= 'F')))
+                {
+                    escaped_len++;
+                    i += 3;
+                }
+                else
+                {
+                    escaped_len++;
+                }
+                break;
             default: escaped_len++; break;
             }
         }
@@ -348,12 +401,46 @@ ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             switch (content[i + 1])
             {
+            case 'a':  elements[out_idx++] = LLVMConstInt(i8_type, 0x07, false); i++; break;
+            case 'b':  elements[out_idx++] = LLVMConstInt(i8_type, 0x08, false); i++; break;
+            case 'e':  elements[out_idx++] = LLVMConstInt(i8_type, 0x1B, false); i++; break;
+            case 'f':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0C, false); i++; break;
             case 'n':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0A, false); i++; break;
-            case 't':  elements[out_idx++] = LLVMConstInt(i8_type, 0x09, false); i++; break;
             case 'r':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0D, false); i++; break;
+            case 't':  elements[out_idx++] = LLVMConstInt(i8_type, 0x09, false); i++; break;
+            case 'v':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0B, false); i++; break;
             case '\\': elements[out_idx++] = LLVMConstInt(i8_type, 0x5C, false); i++; break;
+            case '\'': elements[out_idx++] = LLVMConstInt(i8_type, 0x27, false); i++; break;
             case '"':  elements[out_idx++] = LLVMConstInt(i8_type, 0x22, false); i++; break;
-            default:   elements[out_idx++] = LLVMConstInt(i8_type, (unsigned char)content[i], false); break;
+            case '0':  elements[out_idx++] = LLVMConstInt(i8_type, 0x00, false); i++; break;
+            case 'x':
+                if (i + 3 < content_len
+                    && ((content[i + 2] >= '0' && content[i + 2] <= '9')
+                     || (content[i + 2] >= 'a' && content[i + 2] <= 'f')
+                     || (content[i + 2] >= 'A' && content[i + 2] <= 'F'))
+                    && ((content[i + 3] >= '0' && content[i + 3] <= '9')
+                     || (content[i + 3] >= 'a' && content[i + 3] <= 'f')
+                     || (content[i + 3] >= 'A' && content[i + 3] <= 'F')))
+                {
+                    unsigned char hi = (content[i + 2] >= '0' && content[i + 2] <= '9')
+                        ? (unsigned char)(content[i + 2] - '0')
+                        : (content[i + 2] >= 'a' && content[i + 2] <= 'f')
+                            ? (unsigned char)(content[i + 2] - 'a' + 10)
+                            : (unsigned char)(content[i + 2] - 'A' + 10);
+                    unsigned char lo = (content[i + 3] >= '0' && content[i + 3] <= '9')
+                        ? (unsigned char)(content[i + 3] - '0')
+                        : (content[i + 3] >= 'a' && content[i + 3] <= 'f')
+                            ? (unsigned char)(content[i + 3] - 'a' + 10)
+                            : (unsigned char)(content[i + 3] - 'A' + 10);
+                    elements[out_idx++] = LLVMConstInt(i8_type, (unsigned long long)((hi << 4) | lo), false);
+                    i += 3;
+                }
+                else
+                {
+                    elements[out_idx++] = LLVMConstInt(i8_type, 0x5C, false);
+                }
+                break;
+            default:   elements[out_idx++] = LLVMConstInt(i8_type, 0x5C, false); break;
             }
         }
         else
@@ -396,17 +483,70 @@ ir_gen_rune_literal(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     if (node->text == NULL)
         return NULL;
-    // For now, treat rune as i32 value
-    char * endptr = NULL;
+    char const * text = node->text;
+    size_t text_len = strlen(text);
+    // Expect format: 'X' or '\Y'
+    if (text_len < 3 || text[0] != '\'' || text[text_len - 1] != '\'')
+        return NULL;
+    char const * content = text + 1;
+    size_t content_len = text_len - 2;
     unsigned long long val = 0;
-    if (node->text[0] == '\'' && node->text[1] != '\\')
+    if (content_len == 1)
     {
         // Simple character: 'a'
-        val = (unsigned char)node->text[1];
+        val = (unsigned char)content[0];
+    }
+    else if (content_len >= 2 && content[0] == '\\')
+    {
+        // Escape sequence
+        switch (content[1])
+        {
+        case 'a':  val = 0x07; break;
+        case 'b':  val = 0x08; break;
+        case 'e':  val = 0x1B; break;
+        case 'f':  val = 0x0C; break;
+        case 'n':  val = 0x0A; break;
+        case 'r':  val = 0x0D; break;
+        case 't':  val = 0x09; break;
+        case 'v':  val = 0x0B; break;
+        case '\\': val = 0x5C; break;
+        case '\'': val = 0x27; break;
+        case '"':  val = 0x22; break;
+        case '0':  val = 0x00; break;
+        case 'x':
+            if (content_len >= 4)
+            {
+                unsigned long long d = 0;
+                for (size_t i = 2; i < content_len; i++)
+                {
+                    char c = content[i];
+                    unsigned long long n;
+                    if (c >= '0' && c <= '9')
+                        n = (unsigned long long)(c - '0');
+                    else if (c >= 'a' && c <= 'f')
+                        n = (unsigned long long)(c - 'a' + 10);
+                    else if (c >= 'A' && c <= 'F')
+                        n = (unsigned long long)(c - 'A' + 10);
+                    else
+                        break;
+                    d = d * 16 + n;
+                }
+                val = d;
+            }
+            else
+            {
+                val = (unsigned char)content[1];
+            }
+            break;
+        default:
+            val = (unsigned char)content[1];
+            break;
+        }
     }
     else
     {
-        val = strtoull(node->text + 2, &endptr, 0);
+        // Multi-char or unknown
+        val = (unsigned char)content[0];
     }
     return LLVMConstInt(LLVMInt32TypeInContext(ctx->context), val, false);
 }
@@ -4550,8 +4690,9 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return ir_gen_float_value(ctx, node);
 
     case AST_NODE_STRING_LITERAL:
+        return ir_gen_string_literal(ctx, node, true);
     case AST_NODE_RAW_STRING_LITERAL:
-        return ir_gen_string_literal(ctx, node);
+        return ir_gen_string_literal(ctx, node, false);
 
     case AST_NODE_RUNE_LITERAL:
         return ir_gen_rune_literal(ctx, node);
