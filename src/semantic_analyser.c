@@ -126,13 +126,14 @@ static void sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDes
 static void sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast);
 static void sem_pass2_analyse_bodies_ast(SemContext * ctx, odin_grammar_node_t * program);
 
-// --- Compile-time constant evaluation ---
-// Returns:  1 = true, 0 = false, -1 = unknown (can't evaluate at compile time)
-static int
-sem_evaluate_constant_bool(SemContext * ctx, odin_grammar_node_t * node)
+// --- Compile-time constant integer evaluation ---
+// Evaluates a constant expression to an integer at compile time.
+// Returns the value and sets *ok = 1 on success, or sets *ok = 0 on failure.
+static long long
+sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok)
 {
-    if (node == NULL)
-        return -1;
+    if (node == NULL) { *ok = 0; return 0; }
+
     // Unwrap through expression chain to reach a node type we can evaluate
     while (1)
     {
@@ -144,6 +145,14 @@ sem_evaluate_constant_bool(SemContext * ctx, odin_grammar_node_t * node)
         case AST_NODE_INTEGER_VALUE:
         case AST_NODE_UNARY_EXPRESSION:
         case AST_NODE_COMP_EXPRESSION:
+        case AST_NODE_ADD_EXPRESSION:
+        case AST_NODE_MUL_EXPRESSION:
+        case AST_NODE_BIT_AND_EXPRESSION:
+        case AST_NODE_BIT_XOR_EXPRESSION:
+        case AST_NODE_BIT_OR_EXPRESSION:
+        case AST_NODE_SHIFT_EXPRESSION:
+        case AST_NODE_LOG_AND_EXPRESSION:
+        case AST_NODE_LOG_OR_EXPRESSION:
             can_eval = 1;
             break;
         default:
@@ -154,142 +163,116 @@ sem_evaluate_constant_bool(SemContext * ctx, odin_grammar_node_t * node)
         if ((node->type == AST_NODE_POSTFIX_EXPRESSION || node->list.count == 1) && node->list.children[0])
             node = node->list.children[0];
         else
-            break;
+            { *ok = 0; return 0; }
     }
 
     switch (node->type)
     {
     case AST_NODE_BOOL_TRUE:
-        return 1;
+        *ok = 1; return 1;
     case AST_NODE_BOOL_FALSE:
-        return 0;
+        *ok = 1; return 0;
 
     case AST_NODE_INTEGER_VALUE:
     {
-        if (node->text == NULL)
-            return -1;
+        if (node->text == NULL) { *ok = 0; return 0; }
         char * end = NULL;
         long long val = strtoll(node->text, &end, 0);
-        if (end == node->text)
-            return -1;
-        return (val != 0) ? 1 : 0;
+        if (end == node->text) { *ok = 0; return 0; }
+        *ok = 1;
+        return val;
     }
 
     case AST_NODE_UNARY_EXPRESSION:
     {
         odin_grammar_node_t * op_node = node_find_op(node);
-        if (op_node == NULL)
-            return -1;
+        if (op_node == NULL) { *ok = 0; return 0; }
         AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
-        if (md == NULL || md->kind != OP_UNARY_NOT)
-            return -1;
-        if (node->list.count < 1)
-            return -1;
-        int inner = sem_evaluate_constant_bool(ctx, node->list.children[0]);
-        if (inner < 0)
-            return -1;
-        return inner ? 0 : 1;
-    }
+        if (md == NULL) { *ok = 0; return 0; }
 
-    case AST_NODE_COMP_EXPRESSION:
-    {
-        odin_grammar_node_t * op_node = node_find_op(node);
-        if (op_node == NULL)
-            return -1;
-        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
-        if (md == NULL)
-            return -1;
-        if (node->list.count < 3)
-            return -1;
-        // For equality/inequality, evaluate both sides as integers
-        if (md->kind != OP_EQ && md->kind != OP_NE)
-            return -1;
-
-        odin_grammar_node_t * lhs = node->list.children[0];
-        odin_grammar_node_t * rhs = node->list.children[2];
-        if (lhs == NULL || rhs == NULL)
-            return -1;
-
-        // Use integer evaluation for comparison
-        long long lv = 0, rv = 0;
-        bool l_ok = false, r_ok = false;
-
-        if (lhs->type == AST_NODE_INTEGER_VALUE && lhs->text)
+        odin_grammar_node_t * operand = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
         {
-            char * end = NULL;
-            lv = strtoll(lhs->text, &end, 0);
-            l_ok = (end != lhs->text);
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child != NULL && child != op_node) { operand = child; break; }
         }
-        if (rhs->type == AST_NODE_INTEGER_VALUE && rhs->text)
+        if (operand == NULL) { *ok = 0; return 0; }
+
+        int inner_ok = 0;
+        long long inner_val = sem_evaluate_constant_int(ctx, operand, &inner_ok);
+        if (!inner_ok) { *ok = 0; return 0; }
+
+        switch (md->kind)
         {
-            char * end = NULL;
-            rv = strtoll(rhs->text, &end, 0);
-            r_ok = (end != rhs->text);
+        case OP_UNARY_NEG: *ok = 1; return -inner_val;
+        case OP_UNARY_POS: *ok = 1; return inner_val;
+        case OP_UNARY_XOR: *ok = 1; return ~inner_val;
+        case OP_UNARY_NOT: *ok = 1; return inner_val ? 0 : 1;
+        default: *ok = 0; return 0;
         }
-
-        if (!l_ok || !r_ok)
-        {
-            // Try bool evaluation
-            int lb = sem_evaluate_constant_bool(ctx, lhs);
-            int rb = sem_evaluate_constant_bool(ctx, rhs);
-            if (lb < 0 || rb < 0)
-                return -1;
-            lv = lb;
-            rv = rb;
-        }
-
-        if (md->kind == OP_EQ)
-            return (lv == rv) ? 1 : 0;
-        else
-            return (lv != rv) ? 1 : 0;
     }
 
-    case AST_NODE_LOG_AND_EXPRESSION:
-    {
-        if (node->list.count < 3)
-            return -1;
-        int lval = sem_evaluate_constant_bool(ctx, node->list.children[0]);
-        if (lval <= 0)
-            return (lval < 0) ? -1 : 0;
-        return sem_evaluate_constant_bool(ctx, node->list.children[2]);
-    }
-
-    case AST_NODE_LOG_OR_EXPRESSION:
-    {
-        if (node->list.count < 3)
-            return -1;
-        int lval = sem_evaluate_constant_bool(ctx, node->list.children[0]);
-        if (lval < 0)
-            return -1;
-        if (lval > 0)
-            return 1;
-        return sem_evaluate_constant_bool(ctx, node->list.children[2]);
-    }
-
-    // Expression wrapper nodes - recurse on first child
-    case AST_NODE_ASSIGN_EXPRESSION:
-    case AST_NODE_EXPRESSION:
-    case AST_NODE_PRIMARY_EXPRESSION:
-    case AST_NODE_POSTFIX_EXPRESSION:
-    case AST_NODE_TERNARY_EXPRESSION:
-    case AST_NODE_OR_ELSE:
-    case AST_NODE_OR_RETURN:
-    case AST_NODE_MUL_EXPRESSION:
     case AST_NODE_ADD_EXPRESSION:
-    case AST_NODE_SHIFT_EXPRESSION:
+    case AST_NODE_MUL_EXPRESSION:
     case AST_NODE_BIT_AND_EXPRESSION:
     case AST_NODE_BIT_XOR_EXPRESSION:
     case AST_NODE_BIT_OR_EXPRESSION:
-    case AST_NODE_RANGE_EXPRESSION:
+    case AST_NODE_SHIFT_EXPRESSION:
+    case AST_NODE_COMP_EXPRESSION:
+    case AST_NODE_LOG_AND_EXPRESSION:
+    case AST_NODE_LOG_OR_EXPRESSION:
     {
-        if (node->list.count > 0 && node->list.children[0] != NULL)
-            return sem_evaluate_constant_bool(ctx, node->list.children[0]);
-        return -1;
+        odin_grammar_node_t * op_node = node_find_op(node);
+        if (op_node == NULL) { *ok = 0; return 0; }
+        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
+        if (md == NULL) { *ok = 0; return 0; }
+        if (node->list.count < 3) { *ok = 0; return 0; }
+
+        int lhs_ok = 0, rhs_ok = 0;
+        long long lhs_val = sem_evaluate_constant_int(ctx, node->list.children[0], &lhs_ok);
+        long long rhs_val = sem_evaluate_constant_int(ctx, node->list.children[node->list.count - 1], &rhs_ok);
+        if (!lhs_ok || !rhs_ok) { *ok = 0; return 0; }
+
+        switch (md->kind)
+        {
+        case OP_ADD: *ok = 1; return lhs_val + rhs_val;
+        case OP_SUB: *ok = 1; return lhs_val - rhs_val;
+        case OP_MUL: *ok = 1; return lhs_val * rhs_val;
+        case OP_DIV: if (rhs_val == 0) { *ok = 0; return 0; } *ok = 1; return lhs_val / rhs_val;
+        case OP_MOD: if (rhs_val == 0) { *ok = 0; return 0; } *ok = 1; return lhs_val % rhs_val;
+        case OP_SHL: *ok = 1; return lhs_val << rhs_val;
+        case OP_SHR: *ok = 1; return lhs_val >> rhs_val;
+        case OP_BIT_AND: *ok = 1; return lhs_val & rhs_val;
+        case OP_BIT_OR:  *ok = 1; return lhs_val | rhs_val;
+        case OP_BIT_XOR: *ok = 1; return lhs_val ^ rhs_val;
+        case OP_EQ: *ok = 1; return (lhs_val == rhs_val) ? 1 : 0;
+        case OP_NE: *ok = 1; return (lhs_val != rhs_val) ? 1 : 0;
+        case OP_LT: *ok = 1; return (lhs_val < rhs_val) ? 1 : 0;
+        case OP_GT: *ok = 1; return (lhs_val > rhs_val) ? 1 : 0;
+        case OP_LE: *ok = 1; return (lhs_val <= rhs_val) ? 1 : 0;
+        case OP_GE: *ok = 1; return (lhs_val >= rhs_val) ? 1 : 0;
+        default: *ok = 0; return 0;
+        }
     }
 
     default:
-        return -1;
+        *ok = 0;
+        return 0;
     }
+}
+
+// Compile-time constant boolean evaluation.
+// Returns:  1 = true, 0 = false, -1 = unknown (can't evaluate at compile time)
+static int
+sem_evaluate_constant_bool(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node == NULL)
+        return -1;
+    int ok = 0;
+    long long val = sem_evaluate_constant_int(ctx, node, &ok);
+    if (!ok)
+        return -1;
+    return val ? 1 : 0;
 }
 
 // --- Type expression resolution ---
