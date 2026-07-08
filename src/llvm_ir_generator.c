@@ -5179,6 +5179,17 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)operand_type->type_id, false);
     }
 
+    case AST_NODE_TYPEID_OF_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * operand_node = node->list.children[0];
+        TypeDescriptor const * operand_type = operand_node->resolved_type;
+        if (operand_type == NULL)
+            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)operand_type->type_id, false);
+    }
+
     case AST_NODE_SIZE_OF_EXPR:
     {
         if (node->list.count < 1)

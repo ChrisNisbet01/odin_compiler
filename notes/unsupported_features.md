@@ -13,8 +13,8 @@ Marks a procedure so callers who ignore its return value get a warning. Add flag
 ### `@(private)` — Visibility control
 Restricts symbol access to the declaring package. Add flag to `PackageScope` entries; check during cross-package lookup.
 
-### `typeid_of(T)` — Get typeid from a type
-Returns the hash-based typeid of a compile-time-known type. Very similar to `type_of(T)` — trivial given our hash-based type ID system.
+### `typeid_of(T)` — Get typeid from a type ✅ DONE
+Returns the hash-based typeid of a compile-time-known type. Very similar to `type_of(T)` — uses the hash-based type ID system.
 
 ### `#caller_location` — Built-in caller location parameter
 Injects source location (`file:line:col`) as an implicit proc parameter. Similar mechanism to context threading.

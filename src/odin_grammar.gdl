@@ -48,6 +48,7 @@ KwRawData = lexeme("raw_data" IdBoundary);
 KwMin = lexeme("min" IdBoundary);
 KwMax = lexeme("max" IdBoundary);
 KwTypeOf = lexeme("type_of" IdBoundary);
+KwTypeidOf = lexeme("typeid_of" IdBoundary);
 KwPrintString = lexeme("print_string" IdBoundary);
 KwPrintByte = lexeme("print_byte" IdBoundary);
 KwIntToString = lexeme("int_to_string" IdBoundary);
@@ -154,7 +155,8 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwComplex | KwComplex32 | KwComplex64 | KwComplex128
     | KwQuaternion | KwQuaternion64 | KwQuaternion128 | KwQuaternion256
         | KwBitField | KwBitSet | KwIncl | KwExcl
-        | KwMaybe;
+        | KwMaybe
+        | KwTypeidOf;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
 
@@ -385,6 +387,7 @@ RawDataExpr = KwRawData LParen Expression RParen @AST_ACTION_RAW_DATA_EXPR;
 MinExpr = KwMin LParen AssignExpression Comma AssignExpression RParen @AST_ACTION_MIN_EXPR;
 MaxExpr = KwMax LParen AssignExpression Comma AssignExpression RParen @AST_ACTION_MAX_EXPR;
 TypeOfExpr = KwTypeOf LParen (Expression | TypeName) RParen @AST_ACTION_TYPE_OF_EXPR;
+TypeidOfExpr = KwTypeidOf LParen TypeName RParen @AST_ACTION_TYPEID_OF_EXPR;
 MakeExpr = KwMake LParen TypePrefix Comma Expression RParen @AST_ACTION_MAKE_EXPR;
 NewExpr = KwNew LParen TypePrefix RParen @AST_ACTION_NEW_EXPR;
 DeleteExpr = KwDelete LParen Expression RParen @AST_ACTION_DELETE_EXPR;
@@ -396,7 +399,7 @@ PrintStringExpr = KwPrintString LParen SuffixExpression RParen @AST_ACTION_PRINT
 PrintByteExpr = KwPrintByte LParen SuffixExpression RParen @AST_ACTION_PRINT_BYTE_EXPR;
 IntToStringExpr = KwIntToString LParen SuffixExpression RParen @AST_ACTION_INT_TO_STRING_EXPR;
 TypeCastByJuxtaposition = TypeName LParen Expression RParen @AST_ACTION_CAST_EXPR;
-UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | SizeOfExpr | AlignOfExpr | OffsetOfExpr | RawDataExpr | MinExpr | MaxExpr | TypeOfExpr | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | ComplexExpr | QuaternionExpr | PrintStringExpr | PrintByteExpr | IntToStringExpr | UnaryPrefix | PostfixExpression | TypeCastByJuxtaposition;
+UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | SizeOfExpr | AlignOfExpr | OffsetOfExpr | RawDataExpr | MinExpr | MaxExpr | TypeOfExpr | TypeidOfExpr | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | ComplexExpr | QuaternionExpr | PrintStringExpr | PrintByteExpr | IntToStringExpr | UnaryPrefix | PostfixExpression | TypeCastByJuxtaposition;
 
 MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
 MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;
