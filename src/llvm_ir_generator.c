@@ -6065,17 +6065,10 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
 
         LLVMTypeRef odin_main_func_type = LLVMGlobalGetValueType(odin_main);
         LLVMValueRef odin_main_args[] = {context_ptr};
-        LLVMValueRef result = LLVMBuildCall2(ctx->builder, odin_main_func_type, odin_main, odin_main_args, 1, "");
+        LLVMBuildCall2(ctx->builder, odin_main_func_type, odin_main, odin_main_args, 1, "");
 
-        if (LLVMGetTypeKind(LLVMGetReturnType(odin_main_func_type)) == LLVMVoidTypeKind)
-        {
-            LLVMBuildRet(ctx->builder, LLVMConstInt(i32t, 0, false));
-        }
-        else
-        {
-            LLVMValueRef ret_val = LLVMBuildTrunc(ctx->builder, result, i32t, "");
-            LLVMBuildRet(ctx->builder, ret_val);
-        }
+        // Odin main is always void; exit code is set via os.exit()
+        LLVMBuildRet(ctx->builder, LLVMConstInt(i32t, 0, false));
     }
 
     return !ir_gen_error_collection_has_errors(&ctx->errors);

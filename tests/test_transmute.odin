@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // transmute between same-size types
     a: int = 0x12345678
     b: int = transmute(int) a
@@ -28,5 +29,5 @@ main :: proc() -> int {
         result = result + 4
     }
 
-    return result
+    os.exit(result)
 }

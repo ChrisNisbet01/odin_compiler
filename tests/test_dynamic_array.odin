@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
 
     // Test make with dynamic array
@@ -47,5 +48,5 @@ main :: proc() -> int {
     }
     delete(da2)
 
-    return result
+    os.exit(result)
 }

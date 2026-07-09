@@ -1,8 +1,9 @@
 package main
 
 import "core:fmt"
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     fmt.println(42)
-    return 0
+    os.exit(0)
 }

@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
 
     // Test make with slice
@@ -35,5 +36,5 @@ main :: proc() -> int {
     p2^ = 33
     delete(p2)
 
-    return result
+    os.exit(result)
 }

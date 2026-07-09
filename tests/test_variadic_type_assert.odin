@@ -1,4 +1,5 @@
 package main
+import "core:os"
 
 // Just test that the type assertion from packed variadic works
 check_type :: proc(x: any) -> bool {
@@ -6,7 +7,7 @@ check_type :: proc(x: any) -> bool {
     return v == 42
 }
 
-main :: proc() -> int {
+main :: proc() {
     result: bool = check_type(42)
-    return result ? 0 : 1
+    os.exit(result ? 0 : 1)
 }

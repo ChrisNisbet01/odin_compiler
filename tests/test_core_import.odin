@@ -1,8 +1,9 @@
 package test_core_import
 
 import "core:fmt"
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     fmt.println("hello from core:fmt!")
-    return 0
+    os.exit(0)
 }

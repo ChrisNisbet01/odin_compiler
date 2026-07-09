@@ -1,12 +1,13 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Basic cstring declaration and initialization
     s: cstring = "hello"
     
     // Comparison with nil
     if s == nil {
-        return 1
+        os.exit(1)
     }
     
     // Multiple cstring vars
@@ -17,5 +18,5 @@ main :: proc() -> int {
     if s != nil { result = result + 1 }
     if s2 != nil { result = result + 1 }
     if s3 != nil { result = result + 1 }
-    return result - 3
+    os.exit(result - 3)
 }

@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     a := 5
     b := 10
     c := min(a, b)
@@ -8,5 +9,5 @@ main :: proc() -> int {
     result: int = 0
     if c == 5 { result = result + 1 }
     if d == 10 { result = result + 1 }
-    return result - 2
+    os.exit(result - 2)
 }

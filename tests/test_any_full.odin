@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Basic 'any' variable declaration
     a: any = 42
     b: any = "hello"
@@ -12,5 +13,5 @@ main :: proc() -> int {
     if x < y {
         y = 20
     }
-    return y - 20
+    os.exit(y - 20)
 }

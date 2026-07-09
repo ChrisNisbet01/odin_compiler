@@ -1,7 +1,8 @@
 package main
 
 import "mem"
+import "core:os"
 
-main :: proc() -> int {
-    return 0
+main :: proc() {
+    os.exit(0)
 }

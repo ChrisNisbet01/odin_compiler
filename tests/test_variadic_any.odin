@@ -1,4 +1,5 @@
 package main
+import "core:os"
 
 // Variadic with fixed params
 foo :: proc(a: int, args: ..any) -> int {
@@ -15,11 +16,11 @@ baz :: proc(a: int, args: ..any) -> int {
     return a + 1
 }
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
     result += foo(42, 1, 2, 3)          // 42
     result += bar(10, 20, 30)            // 42
     result += baz(0)                     // 1
     result -= 85
-    return result
+    os.exit(result)
 }

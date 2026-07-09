@@ -3,6 +3,7 @@
 Features present in the official Odin language that our compiler does not yet support, ordered by estimated implementation complexity (easiest first).
 
 ## Recently fixed
+- **`core:os` support**: `os.exit()` via foreign libc (`stubs/core/os/os.odin`). Entry point wrapper always returns 0 from C `main()`. Void-only main enforced via semantic error. 95 test files batch-converted to `main :: proc() { os.exit(X) }`.
 - **Recursive function calls**: Fixed link error (`fib.4` undefined) by moving `generator_add_symbol` before body generation in IR generator. Fixed recursive call semantic analysis (returned NULL type for recursive calls) by pre-registering procedure type in symbol table before body analysis. `fibonacci.odin` now compiles without any casts.
 - **Implicit conversion of untyped literals**: Added `sem_can_implicitly_convert()` — recognizes `AST_NODE_INTEGER_VALUE`/`AST_NODE_FLOAT_VALUE` as untyped literals that can convert to any matching numeric type. Applied to return statement type checks. IR generator coerces return values to match function return type.
 - **`printf %d/%x` with unsigned types**: Delegated `%d` and `%x` to `print_value` in stubs `fmt.odin` (handles all integer types uniformly).
@@ -30,36 +31,6 @@ Attribute to skip bounds checks on array/slice subscript. Grammar change for `#`
 Switch without the default exhaustiveness check. Simple grammar modifier.
 
 ## Medium Complexity
-
-### `import "core:os"` support
-Add enough support so that a simple executable like this...
-`
-package main
-
-import "core:os"
-import "core:fmt"
-
-main :: proc() {
-    // 1. Run your actual application logic
-    exit_code := run()
-    
-    // 2. Terminate the program with the returned status code
-    os.exit(exit_code) 
-}
-
-run :: proc() -> int {
-    // Do your work here
-    has_error := false
-    
-    if has_error {
-        fmt.eprintln("An error occurred!")
-        return 1 // Failure code
-    }
-    
-    return 0 // Success code
-}
-`
-can compiler and run
 
 ### `odinc run` command line support
 compile and run an odin file directly from the odin compiler command line.
@@ -150,3 +121,5 @@ The following features were previously listed as unsupported but are now impleme
 - `fallthrough` statement
 - `defer` statement (LIFO order on scope exit)
 - Logical `&&`/`||` short-circuit evaluation
+- `core:os` package with `os.exit()` (foreign libc)
+- Void-only `main :: proc()` (exit code via `os.exit()`; semantic error for non-void main)

@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // type_of with type-name operand
     id_int := type_of(int)
     id_u8 := type_of(u8)
@@ -44,5 +45,5 @@ main :: proc() -> int {
     // type_of of typeid itself
     #assert[type_of(typeid) == type_of(typeid)]
 
-    return 0
+    os.exit(0)
 }

@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result := 0
     when true {
         result = 99
@@ -8,5 +9,5 @@ main :: proc() -> int {
     when false {
         result = result + 1
     }
-    return result - 99
+    os.exit(result - 99)
 }

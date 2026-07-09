@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     s1 := size_of(int)
     s2 := size_of(i32)
     s3 := size_of(f64)
@@ -28,5 +29,5 @@ main :: proc() -> int {
     if m2 == 20 { result = result + 1 }
     if m3 == -5 { result = result + 1 }
     if m4 == 3 { result = result + 1 }
-    return result - 13
+    os.exit(result - 13)
 }

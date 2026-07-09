@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Basic f16 declaration and initialization
     x: f16 = 1.0
     y: f16 = 2.5
@@ -28,5 +29,5 @@ main :: proc() -> int {
         result = result + 1
     }
 
-    return result - 3
+    os.exit(result - 3)
 }

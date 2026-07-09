@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Test 1: Variable decl with any (already worked)
     a: any = 42
     b: any = 3.14
@@ -20,8 +21,8 @@ main :: proc() -> int {
     // Verify: z should be 42, result should be 52
     // Return 0 if result == 52, else 1
     if result != 52 {
-        return 1
+        os.exit(1)
     }
 
-    return 0
+    os.exit(0)
 }

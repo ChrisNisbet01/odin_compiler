@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     x: i128 = 100
     y: i128 = 200
     zu: u128 = 300
@@ -43,5 +44,5 @@ main :: proc() -> int {
     if m1 == 100 { result = result + 1 }
     if m2 == 200 { result = result + 1 }
     if ucmp1 == 1 { result = result + 1 }
-    return result - 15
+    os.exit(result - 15)
 }

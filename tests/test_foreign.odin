@@ -1,10 +1,11 @@
 package main
+import "core:os"
 
 foreign libc {
     abs :: proc "c" (x: i32) -> i32 ---
 }
 
-main :: proc() -> int {
+main :: proc() {
     result := abs(-5)
-    return cast(int) (result - 5)
+    os.exit(cast(int) (result - 5))
 }

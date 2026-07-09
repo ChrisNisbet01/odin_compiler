@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result := 0
 
     // Test basic ternary: condition is true, pick first branch
@@ -18,5 +19,5 @@ main :: proc() -> int {
     d := (3 < 1) ? 100 : 200
     if d != 200 { result = result + 8 }
 
-    return result
+    os.exit(result)
 }

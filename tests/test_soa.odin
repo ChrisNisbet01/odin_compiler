@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Test 1: struct #soa with slice-backed fields
     s1: struct #soa { x: int; y: int }
     lx1 := len(s1.x)
@@ -28,5 +29,5 @@ main :: proc() -> int {
     zv := s3.z[0]
 
     total := lx1 + ly1 + la + lb + sum + ca + zv
-    return cast(int)(total - (0 + 0 + 10 + 10 + 12 + 10 + 42))
+    os.exit(cast(int)(total - (0 + 0 + 10 + 10 + 12 + 10 + 42)))
 }

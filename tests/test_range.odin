@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Test half-open range: 0..<10
     sum1: int = 0
     for i in 0..<10 {
@@ -16,5 +17,5 @@ main :: proc() -> int {
     // sum2 should be 1+2+3+4+5 = 15
 
     // Combined check
-    return (sum1 - 45) + (sum2 - 15)
+    os.exit((sum1 - 45) + (sum2 - 15))
 }

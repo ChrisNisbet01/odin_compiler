@@ -1,7 +1,8 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     a: any = 0
     // just ensure variable can be declared and returned 0
-    return 0
+    os.exit(0)
 }

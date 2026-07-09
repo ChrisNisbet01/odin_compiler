@@ -1,9 +1,10 @@
 package main
+import "core:os"
 
 my_proc :: proc(x: int) -> int where true {
     return x
 }
 
-main :: proc() -> int {
-    return my_proc(0)
+main :: proc() {
+    os.exit(my_proc(0))
 }

@@ -1,10 +1,11 @@
 package main
+import "core:os"
 
 helper :: proc() -> int { return 42 }
 
 helper2 :: proc() -> int { return 0 }
 
-main :: proc() -> int {
+main :: proc() {
     result := 0
 
     // --- or_else tests ---
@@ -25,5 +26,5 @@ main :: proc() -> int {
     // helper2() returns 0, so or_return should return from main with 0.
     // If we reach the line below, or_return did NOT fire = bug.
     e := helper2() or_return
-    return result + e + 99
+    os.exit(result + e + 99)
 }

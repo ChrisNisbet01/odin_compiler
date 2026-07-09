@@ -1,7 +1,8 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     x: distinct int
     x = 42
-    return cast(int) x - 42
+    os.exit(cast(int) x - 42)
 }

@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Basic complex type declarations (zero-initialized)
     z32: complex32
     z64: complex64
@@ -30,5 +31,5 @@ main :: proc() -> int {
     if qs128 == 16 { result = result + 1 }
     if qs256 == 32 { result = result + 1 }
 
-    return result - 6
+    os.exit(result - 6)
 }

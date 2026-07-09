@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Test int_to_string with various values
     s1: string = int_to_string(0)
     print_string(s1)
@@ -18,5 +19,5 @@ main :: proc() -> int {
     print_string(s4)
     print_string("\n")
 
-    return 0
+    os.exit(0)
 }

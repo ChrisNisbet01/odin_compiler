@@ -1,10 +1,11 @@
 package main
+import "core:os"
 
 add :: proc(a: int, b: int) -> int {
     return a + b
 }
 
-main :: proc() -> int {
+main :: proc() {
     result: int = add(3, 4)
-    return result - result
+    os.exit(result - result)
 }

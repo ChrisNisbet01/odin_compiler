@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Basic typeid declaration and assignment
     t: typeid = 0
     t = 42
@@ -12,7 +13,7 @@ main :: proc() -> int {
     result: int = cast(int) z
 
     if result != 42 {
-        return 1
+        os.exit(1)
     }
-    return 0
+    os.exit(0)
 }

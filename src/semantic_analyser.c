@@ -3628,6 +3628,19 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         TypeDescriptor const * val_type = value_node->resolved_type;
         TypedValue tv = create_typed_value(NULL, val_type, false);
         scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+
+        // Error: main proc must not have a return type; use os.exit() to set exit codes
+        if (value_node->type == AST_NODE_PROCEDURE_LITERAL && strcmp(name_node->text, "main") == 0)
+        {
+            if (val_type != NULL && val_type->kind == TD_KIND_PROC
+                && val_type->proc_metadata.return_count > 0
+                && val_type->proc_metadata.return_type != NULL
+                && val_type->proc_metadata.return_type != type_descriptor_get_void_type(ctx->type_registry))
+            {
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, name_node,
+                                   "main procedure must not return a value; use os.exit() to set exit codes");
+            }
+        }
         break;
     }
 

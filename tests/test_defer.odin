@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result := 0
 
     // Test 1: Basic defer in a scope
@@ -115,5 +116,5 @@ main :: proc() -> int {
         result = 10
     }
 
-    return result
+    os.exit(result)
 }

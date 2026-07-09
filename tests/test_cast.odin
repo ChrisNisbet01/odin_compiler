@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // int -> int widening
     a: int = 42
     b: i64 = cast(i64) a
@@ -44,5 +45,5 @@ main :: proc() -> int {
         result = result + 16
     }
 
-    return result
+    os.exit(result)
 }

@@ -1,7 +1,8 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     c: enum { A, B, C }
     val := cast(int) B
-    return val - 1
+    os.exit(val - 1)
 }

@@ -1,4 +1,5 @@
 package main
+import "core:os"
 
 test_proc :: proc(args: ..any) {
     for i in 0..<len(args) {
@@ -10,7 +11,7 @@ test_proc :: proc(args: ..any) {
     print_string("\n")
 }
 
-main :: proc() -> int {
+main :: proc() {
     test_proc(42, -7, 0, 100)
-    return 0
+    os.exit(0)
 }

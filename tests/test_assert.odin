@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     #assert[true]
     #assert[!false]
     #assert[1 + 1 == 2]
@@ -25,5 +26,5 @@ main :: proc() -> int {
     #assert[1 + 2 + 3 + 4 + 5 == 15]
     #assert[1 * 2 * 3 * 4 == 24]
     #assert[typeid_of(int) == typeid_of(int)]
-    return 0
+    os.exit(0)
 }

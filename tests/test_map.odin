@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
 
     // Test make with map
@@ -67,5 +68,5 @@ main :: proc() -> int {
         // Just checking delete doesn't crash
     }
 
-    return result
+    os.exit(result)
 }

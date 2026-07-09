@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
 
     // Test basic bit_set variable declaration
@@ -51,5 +52,5 @@ main :: proc() -> int {
         result = result + 128
     }
 
-    return result
+    os.exit(result)
 }

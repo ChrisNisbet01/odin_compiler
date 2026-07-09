@@ -1,4 +1,5 @@
 package main
+import "core:os"
 
 // Procedure with various parameter types to test parameter type analysis
 // All procs declared at top level with different param type patterns
@@ -34,7 +35,7 @@ mixed :: proc(a: int, b: bool, c: f64) -> int {
     return 0
 }
 
-main :: proc() -> int {
+main :: proc() {
     // Test int params
     r1 := add(10, 20)
 
@@ -59,5 +60,5 @@ main :: proc() -> int {
     r3 := cast(int) r3f
     result := r1 + r2 + r3 + r4 + r5
 
-    return result - 87
+    os.exit(result - 87)
 }

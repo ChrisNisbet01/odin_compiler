@@ -1,4 +1,5 @@
 package main
+import "core:os"
 
 @(require_results)
 add_one :: proc(x: i32) -> i32 {
@@ -15,9 +16,9 @@ mul :: proc(x: i32, y: i32) -> i32 {
     return x * y
 }
 
-main :: proc() -> int {
+main :: proc() {
     _ := add_one(10)
     _ := add_two(20)
     _ := mul(6, 7)
-    return 0
+    os.exit(0)
 }

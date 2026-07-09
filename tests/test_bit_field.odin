@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
 
     // Test simple bit_field with two fields
@@ -65,5 +66,5 @@ main :: proc() -> int {
     if bf_wide.a != 255 { result = result + 256 }
     if bf_wide.c != 64 { result = result + 512 }
 
-    return result
+    os.exit(result)
 }

@@ -1,8 +1,9 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     x: int = 5
     y: int = 10
     lt: int = x < y
-    return lt - lt
+    os.exit(lt - lt)
 }

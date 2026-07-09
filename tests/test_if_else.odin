@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     x: int = 5
     y: int = 10
     if x > 10 {
@@ -8,5 +9,5 @@ main :: proc() -> int {
     } else {
         y = 200
     }
-    return y - y
+    os.exit(y - y)
 }

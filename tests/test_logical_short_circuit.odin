@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result := 0
 
     // Test 1: && short-circuit when LHS is false (RHS can't affect result)
@@ -71,5 +72,5 @@ main :: proc() -> int {
         result = result + 2048
     }
 
-    return result
+    os.exit(result)
 }

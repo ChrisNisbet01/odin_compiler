@@ -1,4 +1,5 @@
 package test_multi_return
+import "core:os"
 // Procedure returning multiple anonymous values
 foo :: proc() -> (int, bool)
 {
@@ -17,7 +18,7 @@ baz :: proc()
     return
 }
 
-main :: proc() -> int
+main :: proc()
 {
     a, b := foo()
     // a = 42, b = true
@@ -27,16 +28,16 @@ main :: proc() -> int
 
     // Check values
     if a != 42 {
-        return 1
+        os.exit(1)
     }
     if b != true {
-        return 2
+        os.exit(2)
     }
     if c != 10 {
-        return 3
+        os.exit(3)
     }
     
     baz()
 
-    return 0
+    os.exit(0)
 }

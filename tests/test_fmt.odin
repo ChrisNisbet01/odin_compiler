@@ -1,8 +1,9 @@
 package main
 
 import "core:fmt"
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     fmt.printf("int: %d\n", 42)
     fmt.printf("hex: %x\n", 255)
     fmt.printf("hex: %x\n", 3735928559)
@@ -16,5 +17,5 @@ main :: proc() -> int {
     fmt.printf("mixed: %d + %s = %x\n", 42, "test", 255)
     fmt.println("one", 2, "three", 4)
     fmt.println("u8:", u8(100), "u16:", u16(200), "u32:", u32(300), "u64:", u64(400))
-    return 0
+    os.exit(0)
 }

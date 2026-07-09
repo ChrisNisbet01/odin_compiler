@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     print_string("Hello, World!")
-    return 0
+    os.exit(0)
 }

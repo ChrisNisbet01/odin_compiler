@@ -1,4 +1,5 @@
 package main
+import "core:os"
 
 foo :: proc(args: ..any) -> int {
     // Print the raw typeid from the any struct for debugging
@@ -9,7 +10,7 @@ foo :: proc(args: ..any) -> int {
     return result
 }
 
-main :: proc() -> int {
+main :: proc() {
     result := foo(42)
-    return result - 42
+    os.exit(result - 42)
 }

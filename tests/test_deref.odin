@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     x: int = 42
     p: ^int = &x
 
@@ -19,5 +20,5 @@ main :: proc() -> int {
         result = result + 2
     }
 
-    return result
+    os.exit(result)
 }

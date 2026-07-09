@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
 
     // Test 1: incl basic
@@ -182,5 +183,5 @@ main :: proc() -> int {
         result = result + 536870912
     }
 
-    return result
+    os.exit(result)
 }

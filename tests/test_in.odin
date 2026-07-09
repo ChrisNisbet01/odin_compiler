@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
 
     arr: [5]int
@@ -84,5 +85,5 @@ main :: proc() -> int {
         // pass
     }
 
-    return result
+    os.exit(result)
 }

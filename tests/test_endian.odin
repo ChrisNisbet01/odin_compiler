@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Endian-specific integer types (on x86_64 LE, same as native)
     a: i32le = 42
     b: i32be = 100
@@ -27,5 +28,5 @@ main :: proc() -> int {
         result = result + 1
     }
 
-    return result - 3
+    os.exit(result - 3)
 }

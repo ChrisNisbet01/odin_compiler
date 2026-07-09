@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     x := 5
-    return x - x
+    os.exit(x - x)
 }

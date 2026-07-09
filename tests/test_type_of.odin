@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     x: i32
     y: f64
     id_x := type_of(x)
@@ -16,5 +17,5 @@ main :: proc() -> int {
     z: i32 = 42
     #assert[type_of(z) == id_x]
 
-    return 0
+    os.exit(0)
 }

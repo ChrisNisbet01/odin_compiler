@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // complex() constructor with f64 args -> complex128
     c := complex(1.0, 2.0)
     #assert[size_of(complex128) == 16]
@@ -25,5 +26,5 @@ main :: proc() -> int {
     q3: quaternion128
     #assert[size_of(quaternion128) == 16]
 
-    return 0
+    os.exit(0)
 }

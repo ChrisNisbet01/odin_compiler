@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     // Test 1: basic nested proc
     add :: proc(a: int, b: int) -> int {
         return a + b
@@ -32,5 +33,5 @@ main :: proc() -> int {
     // Total: r1=7, r2=7, r3=20, r4=11, r5=15
     // Expected: 60
     // Return 0 on success, non-zero on failure
-    return (r1 + r2 + r3 + r4 + r5) - 60
+    os.exit((r1 + r2 + r3 + r4 + r5) - 60)
 }

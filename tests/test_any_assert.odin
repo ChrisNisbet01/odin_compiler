@@ -1,10 +1,11 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     x: any = 42
     y := x.(int)
     s := int_to_string(y)
     print_string(s)
     print_string("\n")
-    return 0
+    os.exit(0)
 }

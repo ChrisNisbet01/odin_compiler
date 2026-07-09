@@ -177,5 +177,13 @@
 - **Three implicit coercion sites refactored**: variable declaration initialization (`ir_gen_variable_decl`), return statement (`ir_gen_return_statement`), and binary expression RHS (`ir_gen_binary_expression`) — all now call `coerce_value_to_type` instead of inline `LLVMBuildIntCast2`/`LLVMBuildFPCast`.
 - All 106 tests pass.
 
+### `core:os` support — `os.exit()` and void-only main
+- **`stubs/core/os/os.odin`**: New file — `exit` declared as `proc "c" (code: int) ---` via foreign libc.
+- **Entry point wrapper updated**: `ir_generate()` always returns 0 from C `main()`. Exit code set via `os.exit()` calls (which terminate before the wrapper's `ret`).
+- **Batch conversion script** (`scripts/convert_tests.py`): Mechanically transforms all test files from `main :: proc() -> int { return X }` to `main :: proc() { os.exit(X) }`. Handles inline `{ return X }` patterns, skips nested proc returns, skips `return` in comments.
+- **Semantic error for non-void main**: `AST_NODE_CONSTANT_DECL` handler now checks if a `main` procedure has a non-void return type and emits a clear error.
+- **`tests/test_param.odin` deleted**: Incompatible with void-only main; coverage provided by `test_proc_params.odin` and `test_call.odin`.
+- **All 105 tests pass**.
+
 ### Key insight
 The `any` type system had two fundamental flaws: (a) integer arguments were stored as `inttoptr` values (data pointer = integer cast to pointer) instead of storing the integer in memory and pointing to it; (b) the `type_of` builtin only worked at compile time, making runtime type dispatch impossible. Fixing both enabled proper runtime type identification and safe type assertion through the `any` struct's `{ptr data, i64 type_id}` layout.

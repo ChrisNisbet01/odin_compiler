@@ -1,4 +1,5 @@
 package main
+import "core:os"
 
 when true {
     X :: 100
@@ -14,7 +15,7 @@ when false {
     W :: 400
 }
 
-main :: proc() -> int {
+main :: proc() {
     result := X + W
-    return result - 500
+    os.exit(result - 500)
 }

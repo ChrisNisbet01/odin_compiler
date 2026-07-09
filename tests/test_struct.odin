@@ -1,8 +1,9 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     s: struct { x: int; y: int }
     s.x = 10
     s.y = 20
-    return s.x + s.y - 30
+    os.exit(s.x + s.y - 30)
 }

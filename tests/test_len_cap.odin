@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
 
     // len on fixed array (compile-time constant)
@@ -25,5 +26,5 @@ main :: proc() -> int {
         result = result + 8
     }
 
-    return result
+    os.exit(result)
 }

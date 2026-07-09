@@ -1,6 +1,7 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     result: int = 0
 
     // Test basic union with different sized fields
@@ -70,5 +71,5 @@ main :: proc() -> int {
         result = result + 512
     }
 
-    return result
+    os.exit(result)
 }
