@@ -159,6 +159,9 @@ typedef enum
     AST_NODE_CONTEXT_EXPR,
     AST_NODE_TRIPLE_DASH,
     AST_NODE_IDENTIFIER_LIST,
+    AST_NODE_ATTRIBUTE,
+    AST_NODE_ATTR_LIST,
+    AST_NODE_ATTR_ITEM,
 } odin_grammar_node_type_t;
 
 typedef struct

@@ -15,4 +15,5 @@ typedef struct symbol
     char const * name;
     SymbolKind kind;
     TypedValue value;
+    bool is_private;
 } symbol_t;

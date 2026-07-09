@@ -77,6 +77,13 @@ typedef struct
     int width_bits;
 } bit_field_field_info;
 
+typedef struct
+{
+    char * link_name;
+    bool require_results;
+    bool is_private;
+} ProcDeclAttributes;
+
 typedef struct TypeDescriptor
 {
     td_kind_t kind;

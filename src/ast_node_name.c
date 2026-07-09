@@ -307,6 +307,12 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "IntToStringExpr";
     case AST_NODE_ELLIPSIS:
         return "Ellipsis";
+    case AST_NODE_ATTRIBUTE:
+        return "Attribute";
+    case AST_NODE_ATTR_LIST:
+        return "AttrList";
+    case AST_NODE_ATTR_ITEM:
+        return "AttrItem";
     }
     return "Unknown";
 }

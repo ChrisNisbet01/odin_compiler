@@ -2,16 +2,20 @@
 
 Features present in the official Odin language that our compiler does not yet support, ordered by estimated implementation complexity (easiest first).
 
+## Urgent bug fix
+### Diagnose problems with fibonacci.odin
+There are multiple problems seen when the odinc compiler attempts to compile that file. They mostly appear to be related to this line of code
+```
+    return u64(fib(v - 1) + fib(v - 2))
+```
+- Should the cast be required? (I would think not)
+- I get this link error when attempting to compile/link
+`/usr/bin/ld: main:(.text+0x29ee): undefined reference to 'fib.4'`
+- If I replace that line with a simple `return u64(1)`, compilation succeeds but I get an illegal instruction error when I attempt to run the program
+
 ## Low Complexity
-
-### `@(link_name="...")` — Custom link name
-Use to rename symbols at link time for FFI. Grammar needs `@(...)` attribute syntax on declarations; IR generator uses the string as the LLVM symbol name.
-
-### `@(require_results)` — Require results annotation
-Marks a procedure so callers who ignore its return value get a warning. Add flag to proc descriptor; check at call sites.
-
-### `@(private)` — Visibility control
-Restricts symbol access to the declaring package. Add flag to `PackageScope` entries; check during cross-package lookup.
+### `core:fmt` support
+add support for fmt.printfln() and fmt.eprintln() and other similar variants.
 
 ### `typeid_of(T)` — Get typeid from a type ✅ DONE
 Returns the hash-based typeid of a compile-time-known type. Very similar to `type_of(T)` — uses the hash-based type ID system.
@@ -32,6 +36,39 @@ Attribute to skip bounds checks on array/slice subscript. Grammar change for `#`
 Switch without the default exhaustiveness check. Simple grammar modifier.
 
 ## Medium Complexity
+
+### `import "core:os"` support
+Add enough support so that a simple executable like this...
+`
+package main
+
+import "core:os"
+import "core:fmt"
+
+main :: proc() {
+    // 1. Run your actual application logic
+    exit_code := run()
+    
+    // 2. Terminate the program with the returned status code
+    os.exit(exit_code) 
+}
+
+run :: proc() -> int {
+    // Do your work here
+    has_error := false
+    
+    if has_error {
+        fmt.eprintln("An error occurred!")
+        return 1 // Failure code
+    }
+    
+    return 0 // Success code
+}
+`
+can compiler and run
+
+### `odinc run` command line support
+compile and run an odin file directly from the odin compiler command line.
 
 ### `"contextless"` calling convention
 Parsed and used in stubs, but IR gen doesn't correctly suppress the context parameter. Fix: skip context alloca prepend for `contextless` calls.
@@ -99,6 +136,9 @@ The following features were previously listed as unsupported but are now impleme
 - `Maybe(T)` with `none` / `or_else` / `.value`
 - Tagged `union` with `.variant` syntax and type assertions
 - `transmute` (always bitcast)
+- `@(link_name="...")` — Custom link name (rename symbols at link time)
+- `@(require_results)` — Require results annotation
+- `@(private)` — Visibility control (cross-package access restriction)
 - `distinct` (parsed — still transparent, see Medium Complexity above)
 - `bit_set` range syntax (e.g. `bit_set[0..<32]`)
 - `struct #soa { ... }` (slice-backed SOA struct)

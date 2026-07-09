@@ -125,6 +125,7 @@ static TypeDescriptor const * sem_evaluate_expr(SemContext * ctx, odin_grammar_n
 static void sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type);
 static void sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast);
 static void sem_pass2_analyse_bodies_ast(SemContext * ctx, odin_grammar_node_t * program);
+static void sem_analyse_attributes(odin_grammar_node_t * decl_node);
 
 // --- Compile-time constant integer evaluation ---
 // Evaluates a constant expression to an integer at compile time.
@@ -2113,9 +2114,18 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 symbol_t * sym = scope_find_symbol_entry(access_pkg->package_scope, member_name);
                                 if (sym)
                                 {
-                                    op->resolved_symbol = sym;
-                                    type = sym->value.type_info;
-                                    op->resolved_type = (TypeDescriptor *)type;
+                                    if (sym->is_private)
+                                    {
+                                        char buf[256];
+                                        snprintf(buf, sizeof(buf), "symbol '%s' is private in package '%s'", member_name, access_pkg->package_name ? access_pkg->package_name : "unknown");
+                                        sem_error_list_add(&ctx->errors, ctx->source_file_path, op, buf);
+                                    }
+                                    else
+                                    {
+                                        op->resolved_symbol = sym;
+                                        type = sym->value.type_info;
+                                        op->resolved_type = (TypeDescriptor *)type;
+                                    }
                                 }
                                 else
                                 {
@@ -2874,16 +2884,38 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
 // --- Top-level analysis ---
 
 static void
+sem_set_symbol_private(scope_t * scope, char const * name, bool is_private)
+{
+    if (name == NULL || !is_private)
+        return;
+    symbol_t * sym = scope_find_symbol_entry(scope, name);
+    if (sym)
+        sym->is_private = true;
+}
+
+static void
 sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
 {
     if (node == NULL || node->list.count < 2)
         return;
 
-    odin_grammar_node_t * name_node = node->list.children[0];
+    sem_analyse_attributes(node);
+
+    bool is_private = false;
+    if (node->metadata)
+    {
+        ProcDeclAttributes * attrs = (ProcDeclAttributes *)node->metadata;
+        is_private = attrs->is_private;
+    }
+
+    odin_grammar_node_t * name_node = node_find_child(node, AST_NODE_IDENTIFIER);
+    if (name_node == NULL)
+        name_node = node->list.children[0];
     if (name_node->type == AST_NODE_IDENTIFIER)
     {
         TypedValue tv = create_typed_value(NULL, NULL, false);
         scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+        sem_set_symbol_private(generator_current_scope(ctx->gen_ctx), name_node->text, is_private);
     }
     else if (name_node->type == AST_NODE_IDENTIFIER_LIST)
     {
@@ -2894,6 +2926,7 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
                 continue;
             TypedValue tv = create_typed_value(NULL, NULL, false);
             scope_add_symbol(generator_current_scope(ctx->gen_ctx), id->text, tv);
+            sem_set_symbol_private(generator_current_scope(ctx->gen_ctx), id->text, is_private);
         }
     }
 }
@@ -2923,7 +2956,7 @@ import_using_copy_symbol(void * value, void * user_data)
 {
     symbol_t * sym = (symbol_t *)value;
     scope_t * target_scope = (scope_t *)user_data;
-    if (sym == NULL || sym->name == NULL || target_scope == NULL)
+    if (sym == NULL || sym->name == NULL || target_scope == NULL || sym->is_private)
         return;
     scope_add_symbol(target_scope, sym->name, sym->value);
 }
@@ -2963,6 +2996,68 @@ import_pop_path(SemContext * ctx)
         free(ctx->import_stack[ctx->import_stack_count]);
         ctx->import_stack[ctx->import_stack_count] = NULL;
     }
+}
+
+static void
+sem_analyse_attributes(odin_grammar_node_t * decl_node)
+{
+    if (decl_node == NULL || decl_node->list.count < 3)
+        return;
+    odin_grammar_node_t * first = decl_node->list.children[0];
+    if (first == NULL || first->type != AST_NODE_ATTRIBUTE)
+        return;
+
+    odin_grammar_node_t * attr_list = NULL;
+    for (size_t i = 0; i < first->list.count; i++)
+    {
+        if (first->list.children[i] && first->list.children[i]->type == AST_NODE_ATTR_LIST)
+        {
+            attr_list = first->list.children[i];
+            break;
+        }
+    }
+    if (attr_list == NULL)
+        return;
+
+    ProcDeclAttributes * attrs = calloc(1, sizeof(ProcDeclAttributes));
+    for (size_t i = 0; i < attr_list->list.count; i++)
+    {
+        odin_grammar_node_t * item = attr_list->list.children[i];
+        if (item == NULL || item->type != AST_NODE_ATTR_ITEM)
+            continue;
+        odin_grammar_node_t * name_node = NULL;
+        odin_grammar_node_t * value_node = NULL;
+        for (size_t j = 0; j < item->list.count; j++)
+        {
+            odin_grammar_node_t * child = item->list.children[j];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_IDENTIFIER)
+                name_node = child;
+            else
+                value_node = child;
+        }
+        if (name_node == NULL || name_node->text == NULL)
+            continue;
+
+        if (strcmp(name_node->text, "link_name") == 0 && value_node != NULL && value_node->text)
+        {
+            size_t len = strlen(value_node->text);
+            if (len >= 2 && (value_node->text[0] == '"' || value_node->text[0] == '`'))
+            {
+                attrs->link_name = strndup(value_node->text + 1, len - 2);
+            }
+        }
+        else if (strcmp(name_node->text, "require_results") == 0)
+        {
+            attrs->require_results = true;
+        }
+        else if (strcmp(name_node->text, "private") == 0)
+        {
+            attrs->is_private = true;
+        }
+    }
+    decl_node->metadata = attrs;
 }
 
 static void
@@ -3458,8 +3553,19 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
     {
         if (node->list.count < 2)
             break;
-        odin_grammar_node_t * name_node = node->list.children[0];
-        odin_grammar_node_t * value_node = node->list.children[1];
+        sem_analyse_attributes(node);
+
+        odin_grammar_node_t * name_node = node_find_child(node, AST_NODE_IDENTIFIER);
+        odin_grammar_node_t * value_node = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child != NULL && child != name_node && child->type != AST_NODE_ATTRIBUTE)
+            {
+                value_node = child;
+                break;
+            }
+        }
         if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
             break;
         if (value_node == NULL)

@@ -365,6 +365,9 @@ DEFINE_ACTION(ast_action_procedure_literal_action, AST_NODE_PROCEDURE_LITERAL)
 DEFINE_ACTION(ast_action_identifier_list_action, AST_NODE_IDENTIFIER_LIST)
 DEFINE_ACTION(ast_action_variable_decl_action, AST_NODE_VARIABLE_DECL)
 DEFINE_ACTION(ast_action_constant_decl_action, AST_NODE_CONSTANT_DECL)
+DEFINE_ACTION(ast_action_attribute_action, AST_NODE_ATTRIBUTE)
+DEFINE_ACTION(ast_action_attr_list_action, AST_NODE_ATTR_LIST)
+DEFINE_ACTION(ast_action_attr_item_action, AST_NODE_ATTR_ITEM)
 DEFINE_ACTION(ast_action_foreign_import_action, AST_NODE_FOREIGN_IMPORT)
 DEFINE_ACTION(ast_action_foreign_block_action, AST_NODE_FOREIGN_BLOCK)
 DEFINE_ACTION(ast_action_when_decl_action, AST_NODE_WHEN_DECL)
@@ -550,6 +553,9 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_IDENTIFIER_LIST, ast_action_identifier_list_action);
     REGISTER(AST_ACTION_VARIABLE_DECL, ast_action_variable_decl_action);
     REGISTER(AST_ACTION_CONSTANT_DECL, ast_action_constant_decl_action);
+    REGISTER(AST_ACTION_ATTRIBUTE, ast_action_attribute_action);
+    REGISTER(AST_ACTION_ATTR_LIST, ast_action_attr_list_action);
+    REGISTER(AST_ACTION_ATTR_ITEM, ast_action_attr_item_action);
     REGISTER(AST_ACTION_FOREIGN_IMPORT, ast_action_foreign_import_action);
     REGISTER(AST_ACTION_FOREIGN_BLOCK, ast_action_foreign_block_action);
     REGISTER(AST_ACTION_WHEN_DECL, ast_action_when_decl_action);

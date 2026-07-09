@@ -3415,10 +3415,19 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     if (node->list.count < 2)
         return NULL;
 
-    odin_grammar_node_t * name_node = node->list.children[0];
-    odin_grammar_node_t * value_node = node->list.children[1];
+    odin_grammar_node_t * name_node = node_find_child(node, AST_NODE_IDENTIFIER);
+    odin_grammar_node_t * value_node = NULL;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child != NULL && child != name_node && child->type != AST_NODE_ATTRIBUTE)
+        {
+            value_node = child;
+            break;
+        }
+    }
 
-    if (name_node->type != AST_NODE_IDENTIFIER)
+    if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
         return NULL;
 
     if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
@@ -3427,9 +3436,12 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
             return NULL;
 
-        LLVMValueRef func = LLVMGetNamedFunction(ctx->module, name_node->text);
+        ProcDeclAttributes * attrs = (ProcDeclAttributes *)node->metadata;
+        char const * func_name = (attrs && attrs->link_name) ? attrs->link_name : name_node->text;
+
+        LLVMValueRef func = LLVMGetNamedFunction(ctx->module, func_name);
         if (func == NULL)
-            func = LLVMAddFunction(ctx->module, name_node->text, proc_type->proc_metadata.func_type);
+            func = LLVMAddFunction(ctx->module, func_name, proc_type->proc_metadata.func_type);
 
         odin_grammar_node_t * body_node = node_find_child(value_node, AST_NODE_COMPOUND_STATEMENT);
 
@@ -3579,12 +3591,21 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     if (node->list.count < 2)
         return NULL;
-    odin_grammar_node_t * name_node = node->list.children[0];
-    odin_grammar_node_t * value_node = node->list.children[1];
-    if (name_node->type != AST_NODE_IDENTIFIER)
+    odin_grammar_node_t * name_node = node_find_child(node, AST_NODE_IDENTIFIER);
+    odin_grammar_node_t * value_node = NULL;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child != NULL && child != name_node && child->type != AST_NODE_ATTRIBUTE)
+        {
+            value_node = child;
+            break;
+        }
+    }
+    if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
         return NULL;
 
-    if (value_node->type != AST_NODE_PROCEDURE_LITERAL)
+    if (value_node == NULL || value_node->type != AST_NODE_PROCEDURE_LITERAL)
         return NULL;
 
     TypeDescriptor const * proc_type = value_node->resolved_type;
@@ -3595,7 +3616,9 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMBasicBlockRef outer_block = LLVMGetInsertBlock(ctx->builder);
 
     // Build nested function
-    LLVMValueRef func = LLVMAddFunction(ctx->module, name_node->text, proc_type->proc_metadata.func_type);
+    ProcDeclAttributes * attrs = (ProcDeclAttributes *)node->metadata;
+    char const * func_name = (attrs && attrs->link_name) ? attrs->link_name : name_node->text;
+    LLVMValueRef func = LLVMAddFunction(ctx->module, func_name, proc_type->proc_metadata.func_type);
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
     LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
@@ -5938,7 +5961,7 @@ import_using_copy_symbol(void * value, void * user_data)
 {
     symbol_t * sym = (symbol_t *)value;
     scope_t * target_scope = (scope_t *)user_data;
-    if (sym == NULL || sym->name == NULL || target_scope == NULL)
+    if (sym == NULL || sym->name == NULL || target_scope == NULL || sym->is_private)
         return;
     scope_add_symbol(target_scope, sym->name, sym->value);
 }
