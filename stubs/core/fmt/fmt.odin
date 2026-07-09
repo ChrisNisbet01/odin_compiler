@@ -20,9 +20,7 @@ printf :: proc(format: string, args: ..any) {
                 spec := format[i]
                 if spec == 'd' {
                     if arg_idx < len(args) {
-                        v := args[arg_idx].(int)
-                        s := int_to_string(v)
-                        print_string(s)
+                        print_value(args[arg_idx])
                     }
                     arg_idx += 1
                 } else if spec == 's' {
@@ -33,8 +31,7 @@ printf :: proc(format: string, args: ..any) {
                     arg_idx += 1
                 } else if spec == 'x' {
                     if arg_idx < len(args) {
-                        v := args[arg_idx].(int)
-                        print_hex(v)
+                        print_value(args[arg_idx])
                     }
                     arg_idx += 1
                 } else if spec == 'u' {

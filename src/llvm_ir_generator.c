@@ -223,9 +223,13 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
     if (sym->value.value == NULL && sym->value.type_info
         && sym->value.type_info->kind == TD_KIND_PROC)
     {
-        sym->value.value = LLVMAddFunction(
-            ctx->module, node->text, sym->value.type_info->proc_metadata.func_type
-        );
+        LLVMValueRef existing = LLVMGetNamedFunction(ctx->module, node->text);
+        if (existing)
+            sym->value.value = existing;
+        else
+            sym->value.value = LLVMAddFunction(
+                ctx->module, node->text, sym->value.type_info->proc_metadata.func_type
+            );
     }
 
     if (sym->value.is_lvalue && sym->value.value != NULL)
@@ -3445,6 +3449,9 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
         odin_grammar_node_t * body_node = node_find_child(value_node, AST_NODE_COMPOUND_STATEMENT);
 
+        TypedValue tv = create_typed_value(func, proc_type, false);
+        generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
+
         if (body_node)
         {
             LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
@@ -3497,9 +3504,6 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
             func_pop(ctx);
         }
-
-        TypedValue tv = create_typed_value(func, proc_type, false);
-        generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
 
         return func;
     }
@@ -3622,6 +3626,11 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
     LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
+    // Register in enclosing scope BEFORE body generation
+    // so recursive calls can find this function
+    TypedValue tv = create_typed_value(func, proc_type, false);
+    generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
+
     func_push(ctx, func, proc_type->proc_metadata.return_type);
 
     generator_push_scope(ctx->gen_ctx);
@@ -3678,10 +3687,6 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 
     generator_pop_scope(ctx->gen_ctx);
-
-    // Register in current (enclosing) scope
-    TypedValue tv = create_typed_value(func, proc_type, false);
-    generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
 
     // Restore outer function context
     func_pop(ctx);

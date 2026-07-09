@@ -145,5 +145,22 @@
 - 5 previously-failing tests now pass: `test_core_import`, `test_fmt_int`, `test_fmt_simple`, `test_variadic_assert`, `test_variadic_print`.
 - Full suite: **97/98 pass** (only `test_variadic_type_assert` fails — pre-existing semantic return-type mismatch for type assertion in `-> bool` function).
 
+## Accomplishments (session 2026-07-10)
+
+### `@(private)`, `@(link_name)`, `@(require_results)` attributes
+- **`@()` attribute grammar**: Added `AttrValue`, `AttrItem`, `AttrList`, `Attribute` grammar rules.
+- **New AST nodes**: `AST_NODE_ATTRIBUTE`, `AST_NODE_ATTR_LIST`, `AST_NODE_ATTR_ITEM`.
+- **`sem_analyse_attributes()`**: Extracts `link_name`, `require_results`, `is_private` into `ProcDeclAttributes` on `ConstantDecl` metadata.
+- **`@(link_name="...")`**: IR gen uses attribute string for `LLVMAddFunction` name.
+- **`@(require_results)`**: Parsed and stored (warning emission needs infra).
+- **`@(private)`**: `sem_set_symbol_private` marks symbols; cross-package member access checks `sym->is_private`; `import_using_copy_symbol` skips private symbols in both `semantic_analyser.c` and `llvm_ir_generator.c`.
+- **Tests**: `test_attribute.odin` (pass), `test_private_local.odin` (pass), `test_private_external.odin` (expected fail). All 105 tests pass.
+
+### Recursive function call fix — fibonacci.odin
+- **Link error `undefined reference to 'fib.4'`**: `ir_gen_top_level_decl` and `ir_gen_nested_procedure_decl` stored function value in symbol table AFTER body generation. Recursive calls inside body found `sym->value.value == NULL`, triggering spurious `LLVMAddFunction("fib", ...)` which created `fib.4` (LLVM uniquification). Fixed by moving `generator_add_symbol` before `ir_gen_node` in both functions.
+- **Forward-declaration robustness**: Changed `LLVMAddFunction` to first try `LLVMGetNamedFunction` in `ir_gen_identifier`, preventing duplicate forward declarations.
+- **Illegal instruction in `printf`**: `%d` handler type-asserted argument is `int`; `u64` argument caused `llvm.trap()`. Fixed by delegating `%d` and `%x` to `print_value` in stubs `fmt.odin`.
+- **`fibonacci.odin`**: Fixed format string to use `%d` (now works with `print_value` dispatch), removed redundant `u64()` outer wrapper (inner `u64(1)` still needed for literal type inference). Output: `fib(6) = 13`.
+
 ### Key insight
 The `any` type system had two fundamental flaws: (a) integer arguments were stored as `inttoptr` values (data pointer = integer cast to pointer) instead of storing the integer in memory and pointing to it; (b) the `type_of` builtin only worked at compile time, making runtime type dispatch impossible. Fixing both enabled proper runtime type identification and safe type assertion through the `any` struct's `{ptr data, i64 type_id}` layout.

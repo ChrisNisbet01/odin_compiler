@@ -2,16 +2,10 @@
 
 Features present in the official Odin language that our compiler does not yet support, ordered by estimated implementation complexity (easiest first).
 
-## Urgent bug fix
-### Diagnose problems with fibonacci.odin
-There are multiple problems seen when the odinc compiler attempts to compile that file. They mostly appear to be related to this line of code
-```
-    return u64(fib(v - 1) + fib(v - 2))
-```
-- Should the cast be required? (I would think not)
-- I get this link error when attempting to compile/link
-`/usr/bin/ld: main:(.text+0x29ee): undefined reference to 'fib.4'`
-- If I replace that line with a simple `return u64(1)`, compilation succeeds but I get an illegal instruction error when I attempt to run the program
+## Recently fixed — fibonacci.odin
+These issues with fibonacci.odin have been fixed:
+1. **Link error `undefined reference to 'fib.4'`**: Caused by storing function value in symbol table AFTER body generation. Recursive calls forward-declared a new function via `LLVMAddFunction`, creating `fib.4`. Fixed by moving `generator_add_symbol` to before body generation in both `ir_gen_top_level_decl` and `ir_gen_nested_procedure_decl`.
+2. **Illegal instruction at runtime**: Caused by `printf("fib: %d: %d", u64, u64)` — the `%d` specifier type-asserts the argument is `int` but `u64` was passed. Fixed by delegating `%d` and `%x` to `print_value` in stubs `fmt.odin` (which properly handles all integer types).
 
 ## Low Complexity
 ### `core:fmt` support
