@@ -2,10 +2,10 @@
 
 Features present in the official Odin language that our compiler does not yet support, ordered by estimated implementation complexity (easiest first).
 
-## Recently fixed — fibonacci.odin
-These issues with fibonacci.odin have been fixed:
-1. **Link error `undefined reference to 'fib.4'`**: Caused by storing function value in symbol table AFTER body generation. Recursive calls forward-declared a new function via `LLVMAddFunction`, creating `fib.4`. Fixed by moving `generator_add_symbol` to before body generation in both `ir_gen_top_level_decl` and `ir_gen_nested_procedure_decl`.
-2. **Illegal instruction at runtime**: Caused by `printf("fib: %d: %d", u64, u64)` — the `%d` specifier type-asserts the argument is `int` but `u64` was passed. Fixed by delegating `%d` and `%x` to `print_value` in stubs `fmt.odin` (which properly handles all integer types).
+## Recently fixed
+- **Recursive function calls**: Fixed link error (`fib.4` undefined) by moving `generator_add_symbol` before body generation in IR generator. Fixed recursive call semantic analysis (returned NULL type for recursive calls) by pre-registering procedure type in symbol table before body analysis. `fibonacci.odin` now compiles without any casts.
+- **Implicit conversion of untyped literals**: Added `sem_can_implicitly_convert()` — recognizes `AST_NODE_INTEGER_VALUE`/`AST_NODE_FLOAT_VALUE` as untyped literals that can convert to any matching numeric type. Applied to return statement type checks. IR generator coerces return values to match function return type.
+- **`printf %d/%x` with unsigned types**: Delegated `%d` and `%x` to `print_value` in stubs `fmt.odin` (handles all integer types uniformly).
 
 ## Low Complexity
 ### `core:fmt` support
