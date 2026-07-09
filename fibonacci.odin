@@ -4,9 +4,9 @@ import "core:fmt"
 
 fib :: proc(v: u64) -> u64 {
     if v == 0 || v == 1 {
-        return u64(1)
+        return 1
     }
-    return u64(fib(v - 1) + fib(v - 2))
+    return fib(v - 1) + fib(v - 2)
 }
 
 main :: proc() {
