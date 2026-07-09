@@ -160,7 +160,22 @@
 - **Link error `undefined reference to 'fib.4'`**: `ir_gen_top_level_decl` and `ir_gen_nested_procedure_decl` stored function value in symbol table AFTER body generation. Recursive calls inside body found `sym->value.value == NULL`, triggering spurious `LLVMAddFunction("fib", ...)` which created `fib.4` (LLVM uniquification). Fixed by moving `generator_add_symbol` before `ir_gen_node` in both functions.
 - **Forward-declaration robustness**: Changed `LLVMAddFunction` to first try `LLVMGetNamedFunction` in `ir_gen_identifier`, preventing duplicate forward declarations.
 - **Illegal instruction in `printf`**: `%d` handler type-asserted argument is `int`; `u64` argument caused `llvm.trap()`. Fixed by delegating `%d` and `%x` to `print_value` in stubs `fmt.odin`.
-- **`fibonacci.odin`**: Fixed format string to use `%d` (now works with `print_value` dispatch), removed redundant `u64()` outer wrapper (inner `u64(1)` still needed for literal type inference). Output: `fib(6) = 13`.
+
+### Recursive call semantic fix — variable decl init
+- **Root cause of `r: u64 = fib(v - 1) + fib(v - 2)` returning 0**: Top-level procedures registered with `type_info = NULL` during pass1; symbol table only updated with correct proc type AFTER body analysis. Recursive calls found `type_info = NULL`, causing `sem_evaluate_expr` to return NULL, so `resolved_type` was NULL. The IR generator's `init_node` check `child->resolved_type` failed → skipped init generation → variable stayed zero-filled.
+- **Fix**: Added `proc_name` parameter to `sem_analyse_procedure_literal`. Symbol table is updated with the full procedure type BEFORE body analysis via `scope_add_symbol`.
+- **`fibonacci.odin`**: Now uses clean code with zero casts — `return 1` and `return fib(v - 1) + fib(v - 2)` both work. Output: `fib(6) = 13`.
+
+### Implicit conversion of untyped literals
+- **`sem_can_implicitly_convert()`**: New function that checks whether an untyped integer/float literal can be implicitly converted to a target numeric type. Unwraps expression wrapper chains to find the underlying `AST_NODE_INTEGER_VALUE` or `AST_NODE_FLOAT_VALUE`. Used in `sem_analyse_return_statement` (both single and multi-return checks).
+- **IR coercion for return values**: Added integer type coercion in `ir_gen_return_statement` — when the generated return value's LLVM type doesn't match the function's return type, a `LLVMBuildIntCast2` is inserted.
+- **Tests**: `test_implicit_conv.odin` covers recursive fib with var-decl init, literal-to-u8/u16/u32/u64/i32/i64/f64, and u64+u64 addition.
+
+### Centralized type coercion (`coerce_value_to_type`)
+- **New function** `coerce_value_to_type(ctx, value, target_type, src_is_unsigned, name_hint)` handles all numeric type conversions in one place: integer↔integer (trunc/zext/sext), float↔float (fptrunc/fpext), integer↔float (sitofp/uitofp/fptosi/fptoui), pointer↔integer (ptrtoint/inttoptr).
+- **Refactored `ir_gen_auto_cast_value`** to delegate to `coerce_value_to_type`, eliminating duplicate conversion logic.
+- **Three implicit coercion sites refactored**: variable declaration initialization (`ir_gen_variable_decl`), return statement (`ir_gen_return_statement`), and binary expression RHS (`ir_gen_binary_expression`) — all now call `coerce_value_to_type` instead of inline `LLVMBuildIntCast2`/`LLVMBuildFPCast`.
+- All 106 tests pass.
 
 ### Key insight
 The `any` type system had two fundamental flaws: (a) integer arguments were stored as `inttoptr` values (data pointer = integer cast to pointer) instead of storing the integer in memory and pointing to it; (b) the `type_of` builtin only worked at compile time, making runtime type dispatch impossible. Fixing both enabled proper runtime type identification and safe type assertion through the `any` struct's `{ptr data, i64 type_id}` layout.

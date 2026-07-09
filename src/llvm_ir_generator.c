@@ -144,50 +144,95 @@ ir_gen_implicit_return(IrGenContext * ctx)
     }
 }
 
-// --- Auto-cast helper ---
+// --- Centralized type coercion ---
+
+static LLVMValueRef
+coerce_value_to_type(IrGenContext * ctx, LLVMValueRef value, LLVMTypeRef target_type,
+                     bool src_is_unsigned, char const * name_hint)
+{
+    if (value == NULL || target_type == NULL)
+        return value;
+
+    LLVMTypeRef src_type = LLVMTypeOf(value);
+    if (src_type == target_type)
+        return value;
+
+    LLVMTypeKind src_kind = LLVMGetTypeKind(src_type);
+    LLVMTypeKind dst_kind = LLVMGetTypeKind(target_type);
+
+    // Integer to Integer (trunc, zext, sext)
+    if (src_kind == LLVMIntegerTypeKind && dst_kind == LLVMIntegerTypeKind)
+    {
+        unsigned src_w = LLVMGetIntTypeWidth(src_type);
+        unsigned dst_w = LLVMGetIntTypeWidth(target_type);
+        if (dst_w < src_w)
+            return LLVMBuildIntCast2(ctx->builder, value, target_type, false, name_hint ? name_hint : "trunc");
+        else if (dst_w > src_w)
+        {
+            if (src_is_unsigned)
+                return LLVMBuildIntCast2(ctx->builder, value, target_type, false, name_hint ? name_hint : "zext");
+            else
+                return LLVMBuildIntCast2(ctx->builder, value, target_type, true,  name_hint ? name_hint : "sext");
+        }
+        return value;
+    }
+
+    // Float to Float (fptrunc, fpext)
+    if ((src_kind == LLVMHalfTypeKind || src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
+        && (dst_kind == LLVMHalfTypeKind || dst_kind == LLVMFloatTypeKind || dst_kind == LLVMDoubleTypeKind))
+    {
+        unsigned src_w = (src_kind == LLVMDoubleTypeKind) ? 64 : (src_kind == LLVMFloatTypeKind ? 32 : 16);
+        unsigned dst_w = (dst_kind == LLVMDoubleTypeKind) ? 64 : (dst_kind == LLVMFloatTypeKind ? 32 : 16);
+        if (dst_w < src_w)
+            return LLVMBuildFPTrunc(ctx->builder, value, target_type, name_hint ? name_hint : "fptrunc");
+        else if (dst_w > src_w)
+            return LLVMBuildFPExt(ctx->builder, value, target_type, name_hint ? name_hint : "fpext");
+        return value;
+    }
+
+    // Integer to Float (sitofp, uitofp)
+    if (src_kind == LLVMIntegerTypeKind
+        && (dst_kind == LLVMHalfTypeKind || dst_kind == LLVMFloatTypeKind || dst_kind == LLVMDoubleTypeKind))
+    {
+        if (src_is_unsigned)
+            return LLVMBuildUIToFP(ctx->builder, value, target_type, name_hint ? name_hint : "uitofp");
+        else
+            return LLVMBuildSIToFP(ctx->builder, value, target_type, name_hint ? name_hint : "sitofp");
+    }
+
+    // Float to Integer (fptosi, fptoui)
+    if ((src_kind == LLVMHalfTypeKind || src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
+        && dst_kind == LLVMIntegerTypeKind)
+    {
+        if (src_is_unsigned)
+            return LLVMBuildFPToUI(ctx->builder, value, target_type, name_hint ? name_hint : "fptoui");
+        else
+            return LLVMBuildFPToSI(ctx->builder, value, target_type, name_hint ? name_hint : "fptosi");
+    }
+
+    // Pointer to Integer
+    if (src_kind == LLVMPointerTypeKind && dst_kind == LLVMIntegerTypeKind)
+        return LLVMBuildPtrToInt(ctx->builder, value, target_type, name_hint ? name_hint : "ptrtoint");
+
+    // Integer to Pointer
+    if (src_kind == LLVMIntegerTypeKind && dst_kind == LLVMPointerTypeKind)
+        return LLVMBuildIntToPtr(ctx->builder, value, target_type, name_hint ? name_hint : "inttoptr");
+
+    return value;
+}
+
+// --- Auto-cast helper (delegates to centralized coercion) ---
 
 static LLVMValueRef
 ir_gen_auto_cast_value(IrGenContext * ctx, LLVMValueRef src_val, LLVMTypeRef target_type)
 {
     if (src_val == NULL || target_type == NULL)
         return src_val;
-
     LLVMTypeRef src_llvm_type = LLVMTypeOf(src_val);
-    LLVMTypeKind src_kind = LLVMGetTypeKind(src_llvm_type);
-    LLVMTypeKind dest_kind = LLVMGetTypeKind(target_type);
-
-    if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMIntegerTypeKind)
-    {
-        unsigned src_w = LLVMGetIntTypeWidth(src_llvm_type);
-        unsigned dst_w = LLVMGetIntTypeWidth(target_type);
-        if (dst_w > src_w)
-            return LLVMBuildIntCast2(ctx->builder, src_val, target_type, false, "auto.zext");
-        else if (dst_w < src_w)
-            return LLVMBuildIntCast2(ctx->builder, src_val, target_type, false, "auto.trunc");
+    if (src_llvm_type == target_type)
         return src_val;
-    }
-    else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
-             && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
-    {
-        return LLVMBuildFPCast(ctx->builder, src_val, target_type, "auto.fpcast");
-    }
-    else if (src_kind == LLVMIntegerTypeKind && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
-    {
-        return LLVMBuildSIToFP(ctx->builder, src_val, target_type, "auto.sitofp");
-    }
-    else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind) && dest_kind == LLVMIntegerTypeKind)
-    {
-        return LLVMBuildFPToSI(ctx->builder, src_val, target_type, "auto.fptosi");
-    }
-    else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMIntegerTypeKind)
-    {
-        return LLVMBuildPtrToInt(ctx->builder, src_val, target_type, "auto.ptrint");
-    }
-    else if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMPointerTypeKind)
-    {
-        return LLVMBuildIntToPtr(ctx->builder, src_val, target_type, "auto.intptr");
-    }
-    return src_val;
+    // Auto-cast always treats source as signed, delegates to centralized coercion
+    return coerce_value_to_type(ctx, src_val, target_type, false, "auto");
 }
 
 // --- Expression codegen ---
@@ -816,20 +861,7 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     if (lhs_type != rhs_type && op_md->kind != OP_IN && op_md->kind != OP_NOT_IN && op_md->kind != OP_RANGE
         && op_md->kind != OP_RANGE_HALF)
     {
-        LLVMTypeKind lhs_tk = LLVMGetTypeKind(lhs_type);
-        LLVMTypeKind rhs_tk = LLVMGetTypeKind(rhs_type);
-        if (lhs_tk == LLVMIntegerTypeKind && rhs_tk == LLVMIntegerTypeKind)
-        {
-            unsigned lhs_bits = LLVMGetIntTypeWidth(lhs_type);
-            unsigned rhs_bits = LLVMGetIntTypeWidth(rhs_type);
-            bool sign_extend = (rhs_bits < lhs_bits);
-            rhs = LLVMBuildIntCast2(ctx->builder, rhs, lhs_type, sign_extend, "coerce");
-        }
-        else if ((lhs_tk == LLVMHalfTypeKind || lhs_tk == LLVMFloatTypeKind || lhs_tk == LLVMDoubleTypeKind)
-                 && (rhs_tk == LLVMHalfTypeKind || rhs_tk == LLVMFloatTypeKind || rhs_tk == LLVMDoubleTypeKind))
-        {
-            rhs = LLVMBuildFPCast(ctx->builder, rhs, lhs_type, "fltcoerce");
-        }
+        rhs = coerce_value_to_type(ctx, rhs, lhs_type, false, "coerce");
     }
 
     LLVMTypeKind type_kind = LLVMGetTypeKind(lhs_type);
@@ -1295,34 +1327,13 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             {
                 init_val = LLVMBuildExtractValue(ctx->builder, init_val, 0, "str2cstr");
             }
-            // Auto-convert integer types (e.g. int literal → i32 variable)
-            if (var_type && LLVMGetTypeKind(var_type->llvm_type) == LLVMIntegerTypeKind
-                && LLVMGetTypeKind(init_llvm_type) == LLVMIntegerTypeKind)
+            // Auto-convert variable initializer to match declared type
+            if (var_type && init_llvm_type != var_type->llvm_type)
             {
-                unsigned var_bits = LLVMGetIntTypeWidth(var_type->llvm_type);
-                unsigned init_bits = LLVMGetIntTypeWidth(init_llvm_type);
-                if (var_bits != init_bits)
-                {
-                    bool sign_extend = var_type->as.basic.is_unsigned ? false : (var_bits > init_bits);
-                    init_val = LLVMBuildIntCast2(ctx->builder, init_val, var_type->llvm_type, sign_extend, "int2int");
-                }
-            }
-            // Auto-convert float types (e.g. f64 literal → f16 variable)
-            if (var_type && var_type->kind == TD_KIND_BASIC && var_type->as.basic.is_float)
-            {
-                LLVMTypeKind var_kind = LLVMGetTypeKind(var_type->llvm_type);
-                LLVMTypeKind init_kind = LLVMGetTypeKind(init_llvm_type);
-                if (var_kind != init_kind)
-                {
-                    if (var_kind == LLVMHalfTypeKind || var_kind == LLVMFloatTypeKind)
-                    {
-                        init_val = LLVMBuildFPTrunc(ctx->builder, init_val, var_type->llvm_type, "flt2flt");
-                    }
-                    else
-                    {
-                        init_val = LLVMBuildFPExt(ctx->builder, init_val, var_type->llvm_type, "flt2flt");
-                    }
-                }
+                TypeDescriptor const * init_type = init_node->resolved_type;
+                bool src_unsigned = (init_type && init_type->kind == TD_KIND_BASIC)
+                                    ? init_type->as.basic.is_unsigned : false;
+                init_val = coerce_value_to_type(ctx, init_val, var_type->llvm_type, src_unsigned, "varinit");
             }
             if (var_type && var_type->kind == TD_KIND_MAYBE)
             {
@@ -2723,18 +2734,26 @@ ir_gen_return_statement(IrGenContext * ctx, odin_grammar_node_t * node)
 
     // Evaluate return values first (so defers can be emitted after)
     LLVMValueRef vals[16];
+    LLVMValueRef func_val = func_current_function(ctx);
+    LLVMTypeRef func_llvm_type = LLVMGlobalGetValueType(func_val);
+    LLVMTypeRef ret_llvm_type = LLVMGetReturnType(func_llvm_type);
+
     for (int i = 0; i < expr_count; i++)
     {
         if (expr_count == 1 && ir_gen_node_contains_auto_cast(exprs[i]))
         {
-            LLVMValueRef func = func_current_function(ctx);
-            LLVMTypeRef func_type = LLVMGlobalGetValueType(func);
-            ctx->auto_cast_target_type = LLVMGetReturnType(func_type);
+            ctx->auto_cast_target_type = ret_llvm_type;
         }
         vals[i] = ir_gen_node(ctx, exprs[i]);
         ctx->auto_cast_target_type = NULL;
         if (vals[i] == NULL && expr_count > 0)
             return NULL;
+
+        // Coerce return value to match expected function return type
+        if (expr_count == 1 && vals[i] != NULL && LLVMTypeOf(vals[i]) != ret_llvm_type)
+        {
+            vals[i] = coerce_value_to_type(ctx, vals[i], ret_llvm_type, false, "retcast");
+        }
     }
 
     // Emit all pending defers before the return instruction
