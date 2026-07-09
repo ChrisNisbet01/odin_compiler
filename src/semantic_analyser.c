@@ -2599,8 +2599,11 @@ sem_analyse_compound_statement(
     }
 }
 
-static void
-sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char const * proc_name)
+static TypeDescriptor const *
+sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
+                                TypeDescriptor const *** out_param_types, int * out_param_count,
+                                TypeDescriptor const ** out_return_type, int * out_return_count,
+                                calling_convention_t * out_cc, bool * out_is_variadic)
 {
     TypeDescriptor const * return_type = NULL;
     TypeDescriptor const ** return_types = NULL;
@@ -2609,10 +2612,9 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
     TypeDescriptor const ** param_types = NULL;
     size_t param_cap = 0;
     calling_convention_t cc = CALLING_CONV_ODIN;
+    bool is_variadic = false;
 
     odin_grammar_node_t * param_list_node = NULL;
-    odin_grammar_node_t * param_node = NULL; // single "Parameters" child of param_list_node
-    odin_grammar_node_t * comp_stmt_node = NULL;
 
     for (size_t i = 0; i < node->list.count; i++)
     {
@@ -2692,10 +2694,6 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                 }
             }
         }
-        else if (child->type == AST_NODE_COMPOUND_STATEMENT)
-        {
-            comp_stmt_node = child;
-        }
     }
 
     // Extract param type descriptors from the parameter list
@@ -2710,9 +2708,6 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                 if (param == NULL || param->type != AST_NODE_PARAMETER)
                     continue;
 
-                // Parameter: KwUsing? (PolyIdent Colon)? Identifier Colon TypePrefix
-                // The Identifier is the first non-NULL child with type AST_NODE_IDENTIFIER
-                // The TypePrefix is the last child (always a type or identifier node)
                 odin_grammar_node_t * param_ident = NULL;
                 odin_grammar_node_t * param_type_node = NULL;
                 for (size_t ci = 0; ci < param->list.count; ci++)
@@ -2721,18 +2716,12 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                     if (child == NULL)
                         continue;
                     if (child->type == AST_NODE_IDENTIFIER && param_ident == NULL)
-                    {
                         param_ident = child;
-                    }
                     else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child))
-                    {
                         param_type_node = child;
-                    }
                 }
-                // If no explicit type node found, use the last identifier (e.g., `x: MyStruct`)
                 if (param_type_node == NULL)
                 {
-                    // Find the last non-name identifier child
                     for (size_t ci = param->list.count; ci > 0; ci--)
                     {
                         odin_grammar_node_t * child = param->list.children[ci - 1];
@@ -2754,7 +2743,6 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                 param_type_node->resolved_type = (TypeDescriptor *)pt;
 
                 // If this is a variadic .. parameter, wrap the type in a slice
-                // e.g. ..any → []any
                 bool is_variadic_param = false;
                 for (size_t ci = 0; ci < param->list.count; ci++)
                 {
@@ -2771,6 +2759,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                     if (pt == NULL)
                         continue;
                     param_type_node->resolved_type = (TypeDescriptor *)pt;
+                    is_variadic = true;
                 }
 
                 if (param_count >= (int)param_cap)
@@ -2780,7 +2769,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                     if (tmp == NULL)
                     {
                         free(param_types);
-                        return;
+                        return NULL;
                     }
                     param_types = tmp;
                     param_cap = new_cap;
@@ -2790,76 +2779,8 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
         }
     }
 
-    // Push a new scope, register parameters, analyse body
-    generator_push_scope(ctx->gen_ctx);
-
-    // Register implicit 'context' variable in every procedure scope
-    {
-        TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
-        if (ctx_type)
-        {
-            TypedValue ctx_tv = create_typed_value(NULL, ctx_type, true);
-            generator_add_symbol(ctx->gen_ctx, "context", ctx_tv);
-        }
-    }
-
-    if (param_list_node != NULL && param_list_node->list.count > 0)
-    {
-        odin_grammar_node_t * params = param_list_node->list.children[0];
-        if (params != NULL && params->type == AST_NODE_PARAMETERS)
-        {
-            for (size_t k = 0; k < params->list.count; k++)
-            {
-                odin_grammar_node_t * param = params->list.children[k];
-                if (param == NULL || param->type != AST_NODE_PARAMETER)
-                    continue;
-
-                odin_grammar_node_t * param_ident = NULL;
-                odin_grammar_node_t * param_type_node = NULL;
-                for (size_t ci = 0; ci < param->list.count; ci++)
-                {
-                    odin_grammar_node_t * child = param->list.children[ci];
-                    if (child == NULL)
-                        continue;
-                    if (child->type == AST_NODE_IDENTIFIER && param_ident == NULL)
-                    {
-                        param_ident = child;
-                    }
-                    else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child))
-                    {
-                        param_type_node = child;
-                    }
-                }
-                if (param_type_node == NULL)
-                {
-                    for (size_t ci = param->list.count; ci > 0; ci--)
-                    {
-                        odin_grammar_node_t * child = param->list.children[ci - 1];
-                        if (child == NULL)
-                            continue;
-                        if (child->type == AST_NODE_IDENTIFIER && child != param_ident)
-                        {
-                            param_type_node = child;
-                            break;
-                        }
-                    }
-                }
-                if (param_ident == NULL || param_type_node == NULL)
-                    continue;
-
-                TypeDescriptor const * param_type = param_type_node->resolved_type;
-                if (param_type == NULL)
-                    continue;
-
-                TypedValue tv = create_typed_value(NULL, param_type, true);
-                generator_add_symbol(ctx->gen_ctx, param_ident->text, tv);
-            }
-        }
-    }
-
-    // Detect variadic (... or ..any)
-    bool is_variadic = false;
-    if (param_list_node != NULL && param_list_node->list.count > 0)
+    // Also detect bare ... variadic
+    if (!is_variadic && param_list_node != NULL && param_list_node->list.count > 0)
     {
         odin_grammar_node_t * params = param_list_node->list.children[0];
         if (params != NULL && params->type == AST_NODE_PARAMETERS)
@@ -2874,52 +2795,166 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                     is_variadic = true;
                     break;
                 }
-                if (p->type == AST_NODE_PARAMETER)
+            }
+        }
+    }
+
+    // Create the procedure type descriptor
+    if (return_count == 0)
+        return_types = NULL;
+
+    TypeDescriptor const * proc_type = get_or_create_proc_type(
+        ctx->type_registry, return_type, param_types, param_count, return_types, return_count, is_variadic, cc
+    );
+
+    if (out_param_types) *out_param_types = param_types; else free(param_types);
+    if (out_param_count) *out_param_count = param_count;
+    if (out_return_type) *out_return_type = return_type;
+    if (out_return_count) *out_return_count = return_count;
+    if (out_cc) *out_cc = cc;
+    if (out_is_variadic) *out_is_variadic = is_variadic;
+
+    if (return_types && out_return_count == NULL)
+        free((void *)return_types);
+
+    node->resolved_type = (TypeDescriptor *)proc_type;
+    return proc_type;
+}
+
+static void
+sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char const * proc_name)
+{
+    TypeDescriptor const * return_type = NULL;
+    TypeDescriptor const ** return_types = NULL;
+    int return_count = 0;
+    int param_count = 0;
+    TypeDescriptor const ** param_types = NULL;
+    calling_convention_t cc = CALLING_CONV_ODIN;
+    bool is_variadic = false;
+
+    odin_grammar_node_t * comp_stmt_node = NULL;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child && child->type == AST_NODE_COMPOUND_STATEMENT)
+        {
+            comp_stmt_node = child;
+            break;
+        }
+    }
+
+    // Resolve signature (param types, return types, calling convention)
+    TypeDescriptor const * proc_type = sem_resolve_procedure_signature(
+        ctx, node, &param_types, &param_count, &return_type, &return_count, &cc, &is_variadic
+    );
+    node->resolved_type = (TypeDescriptor *)proc_type;
+
+    // Push a new scope, register parameters, analyse body
+    generator_push_scope(ctx->gen_ctx);
+
+    // Register implicit 'context' variable in every procedure scope
+    {
+        TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
+        if (ctx_type)
+        {
+            TypedValue ctx_tv = create_typed_value(NULL, ctx_type, true);
+            generator_add_symbol(ctx->gen_ctx, "context", ctx_tv);
+        }
+    }
+
+    // Register parameters in the body scope (types already resolved by sem_resolve_procedure_signature)
+    {
+        odin_grammar_node_t * param_list_node = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child && child->type == AST_NODE_PROCEDURE_SIGNATURE)
+            {
+                for (size_t j = 0; j < child->list.count; j++)
                 {
-                    for (size_t ci = 0; ci < p->list.count; ci++)
+                    odin_grammar_node_t * sig_child = child->list.children[j];
+                    if (sig_child && sig_child->type == AST_NODE_PARAMETER_LIST)
                     {
-                        if (p->list.children[ci] != NULL && p->list.children[ci]->type == AST_NODE_ELLIPSIS)
+                        param_list_node = sig_child;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+
+        if (param_list_node != NULL && param_list_node->list.count > 0)
+        {
+            odin_grammar_node_t * params = param_list_node->list.children[0];
+            if (params != NULL && params->type == AST_NODE_PARAMETERS)
+            {
+                for (size_t k = 0; k < params->list.count; k++)
+                {
+                    odin_grammar_node_t * param = params->list.children[k];
+                    if (param == NULL || param->type != AST_NODE_PARAMETER)
+                        continue;
+
+                    odin_grammar_node_t * param_ident = NULL;
+                    odin_grammar_node_t * param_type_node = NULL;
+                    for (size_t ci = 0; ci < param->list.count; ci++)
+                    {
+                        odin_grammar_node_t * pc = param->list.children[ci];
+                        if (pc == NULL)
+                            continue;
+                        if (pc->type == AST_NODE_IDENTIFIER && param_ident == NULL)
+                            param_ident = pc;
+                        else if (pc->type == AST_NODE_IDENTIFIER || is_type_node(pc))
+                            param_type_node = pc;
+                    }
+                    if (param_type_node == NULL)
+                    {
+                        for (size_t ci = param->list.count; ci > 0; ci--)
                         {
-                            is_variadic = true;
-                            break;
+                            odin_grammar_node_t * pc = param->list.children[ci - 1];
+                            if (pc == NULL)
+                                continue;
+                            if (pc->type == AST_NODE_IDENTIFIER && pc != param_ident)
+                            {
+                                param_type_node = pc;
+                                break;
+                            }
                         }
                     }
-                    if (is_variadic)
-                        break;
+                    if (param_ident == NULL || param_type_node == NULL)
+                        continue;
+
+                    TypeDescriptor const * param_type = param_type_node->resolved_type;
+                    if (param_type == NULL)
+                        continue;
+
+                    TypedValue tv = create_typed_value(NULL, param_type, true);
+                    generator_add_symbol(ctx->gen_ctx, param_ident->text, tv);
                 }
             }
         }
     }
 
-    // Set resolved_type on the procedure literal
-    {
-        if (return_count == 0)
-        {
-            return_types = NULL;
-        }
-        TypeDescriptor const * proc_type = get_or_create_proc_type(
-            ctx->type_registry, return_type, param_types, param_count, return_types, return_count, is_variadic, cc
-        );
-        node->resolved_type = (TypeDescriptor *)proc_type;
-    }
-
-    free(param_types);
-    free((void *)return_types);
-
-    // Pre-register procedure type in symbol table for recursive calls
+    // Pre-register procedure name in body scope for recursion
     if (proc_name != NULL && node->resolved_type != NULL)
     {
         TypedValue tv = create_typed_value(NULL, node->resolved_type, false);
         scope_add_symbol(generator_current_scope(ctx->gen_ctx), proc_name, tv);
     }
+    // Also update the parent scope with the resolved type (forward reference support)
+    if (proc_name != NULL && node->resolved_type != NULL)
+    {
+        scope_t * parent = generator_current_scope(ctx->gen_ctx)->parent;
+        if (parent)
+        {
+            TypedValue tv = create_typed_value(NULL, node->resolved_type, false);
+            scope_add_symbol(parent, proc_name, tv);
+        }
+    }
 
     if (comp_stmt_node)
     {
-        TypeDescriptor const * expected_ret = node->resolved_type;
-        if (expected_ret == NULL || (return_count == 0))
-        {
-            expected_ret = type_descriptor_get_void_type(ctx->type_registry);
-        }
+        TypeDescriptor const * expected_ret = node->resolved_type
+            ? node->resolved_type : type_descriptor_get_void_type(ctx->type_registry);
         sem_analyse_compound_statement(ctx, comp_stmt_node, expected_ret);
     }
 
@@ -2956,9 +2991,28 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
     odin_grammar_node_t * name_node = node_find_child(node, AST_NODE_IDENTIFIER);
     if (name_node == NULL)
         name_node = node->list.children[0];
+
+    // Find the value node to resolve procedure types in pass 1
+    odin_grammar_node_t * value_node = NULL;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child != NULL && child != name_node && child->type != AST_NODE_ATTRIBUTE)
+        {
+            value_node = child;
+            break;
+        }
+    }
+
+    TypeDescriptor const * resolved_type = NULL;
+    if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_LITERAL)
+    {
+        resolved_type = sem_resolve_procedure_signature(ctx, value_node, NULL, NULL, NULL, NULL, NULL, NULL);
+    }
+
     if (name_node->type == AST_NODE_IDENTIFIER)
     {
-        TypedValue tv = create_typed_value(NULL, NULL, false);
+        TypedValue tv = create_typed_value(NULL, resolved_type, false);
         scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
         sem_set_symbol_private(generator_current_scope(ctx->gen_ctx), name_node->text, is_private);
     }
@@ -2969,7 +3023,7 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
             odin_grammar_node_t * id = name_node->list.children[i];
             if (id == NULL || id->type != AST_NODE_IDENTIFIER)
                 continue;
-            TypedValue tv = create_typed_value(NULL, NULL, false);
+            TypedValue tv = create_typed_value(NULL, resolved_type, false);
             scope_add_symbol(generator_current_scope(ctx->gen_ctx), id->text, tv);
             sem_set_symbol_private(generator_current_scope(ctx->gen_ctx), id->text, is_private);
         }
