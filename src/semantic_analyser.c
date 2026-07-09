@@ -2444,6 +2444,44 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
 // --- Statement analysis ---
 
+static bool
+sem_can_implicitly_convert(
+    SemContext * ctx, odin_grammar_node_t * expr_node, TypeDescriptor const * from_type, TypeDescriptor const * to_type
+)
+{
+    (void)ctx;
+    if (from_type == to_type)
+        return true;
+    if (from_type == NULL || to_type == NULL)
+        return false;
+
+    if (expr_node != NULL)
+    {
+        // Unwrap expression wrapper nodes to find the underlying terminal
+        odin_grammar_node_t * inner = expr_node;
+        while (inner != NULL && inner->list.count > 0
+               && (inner->type == AST_NODE_EXPRESSION || inner->type == AST_NODE_ASSIGN_EXPRESSION
+                   || inner->type == AST_NODE_OR_ELSE || inner->type == AST_NODE_TERNARY_EXPRESSION
+                   || inner->type == AST_NODE_RANGE_EXPRESSION || inner->type == AST_NODE_LOG_OR_EXPRESSION
+                   || inner->type == AST_NODE_LOG_AND_EXPRESSION || inner->type == AST_NODE_COMP_EXPRESSION
+                   || inner->type == AST_NODE_BIT_OR_EXPRESSION || inner->type == AST_NODE_BIT_XOR_EXPRESSION
+                   || inner->type == AST_NODE_BIT_AND_EXPRESSION || inner->type == AST_NODE_SHIFT_EXPRESSION
+                   || inner->type == AST_NODE_ADD_EXPRESSION || inner->type == AST_NODE_MUL_EXPRESSION
+                   || inner->type == AST_NODE_UNARY_EXPRESSION || inner->type == AST_NODE_POSTFIX_EXPRESSION
+                   || inner->type == AST_NODE_PRIMARY_EXPRESSION))
+        {
+            inner = inner->list.children[0];
+        }
+        // Untyped integer literal → any integer type
+        if (inner != NULL && inner->type == AST_NODE_INTEGER_VALUE && is_integer_kind(to_type))
+            return true;
+        // Untyped float literal → any float type
+        if (inner != NULL && inner->type == AST_NODE_FLOAT_VALUE && is_floating_kind(to_type))
+            return true;
+    }
+    return false;
+}
+
 static void
 sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type)
 {
@@ -2483,7 +2521,7 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
                     if (inner != NULL && inner->type == AST_NODE_AUTO_CAST_EXPR)
                         continue;
                 }
-                if (expr_type != pm->returns[i])
+                if (expr_type != pm->returns[i] && !sem_can_implicitly_convert(ctx, expr, expr_type, pm->returns[i]))
                 {
                     sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "return type mismatch");
                 }
@@ -2544,7 +2582,7 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
             return;
     }
 
-    if (expr_type != expected_return_type)
+    if (expr_type != expected_return_type && !sem_can_implicitly_convert(ctx, expr, expr_type, expected_return_type))
     {
         sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "return type mismatch");
     }
@@ -2562,7 +2600,7 @@ sem_analyse_compound_statement(
 }
 
 static void
-sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
+sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char const * proc_name)
 {
     TypeDescriptor const * return_type = NULL;
     TypeDescriptor const ** return_types = NULL;
@@ -2867,6 +2905,13 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node)
 
     free(param_types);
     free((void *)return_types);
+
+    // Pre-register procedure type in symbol table for recursive calls
+    if (proc_name != NULL && node->resolved_type != NULL)
+    {
+        TypedValue tv = create_typed_value(NULL, node->resolved_type, false);
+        scope_add_symbol(generator_current_scope(ctx->gen_ctx), proc_name, tv);
+    }
 
     if (comp_stmt_node)
     {
@@ -3573,7 +3618,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
 
         if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
         {
-            sem_analyse_procedure_literal(ctx, value_node);
+            sem_analyse_procedure_literal(ctx, value_node, name_node->text);
         }
         else
         {
