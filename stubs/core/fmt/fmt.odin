@@ -55,6 +55,155 @@ printf :: proc(format: string, args: ..any) {
     }
 }
 
+printfln :: proc(format: string, args: ..any) {
+    arg_idx := 0
+    i := 0
+    for i < len(format) {
+        if format[i] == '%' {
+            i += 1
+            if i < len(format) {
+                spec := format[i]
+                if spec == 'd' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 's' {
+                    if arg_idx < len(args) {
+                        s := args[arg_idx].(string)
+                        print_string(s)
+                    }
+                    arg_idx += 1
+                } else if spec == 'x' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'u' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'v' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == '%' {
+                    print_byte('%')
+                }
+            }
+        } else {
+            print_byte(format[i])
+        }
+        i += 1
+    }
+    print_string("\n")
+}
+
+// eprint variants — currently write to stdout (stderr not yet supported)
+eprintln :: proc(args: ..any) {
+    for i in 0..<len(args) {
+        if i > 0 {
+            print_string(" ")
+        }
+        print_value(args[i])
+    }
+    print_string("\n")
+}
+
+eprintf :: proc(format: string, args: ..any) {
+    arg_idx := 0
+    i := 0
+    for i < len(format) {
+        if format[i] == '%' {
+            i += 1
+            if i < len(format) {
+                spec := format[i]
+                if spec == 'd' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 's' {
+                    if arg_idx < len(args) {
+                        s := args[arg_idx].(string)
+                        print_string(s)
+                    }
+                    arg_idx += 1
+                } else if spec == 'x' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'u' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'v' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == '%' {
+                    print_byte('%')
+                }
+            }
+        } else {
+            print_byte(format[i])
+        }
+        i += 1
+    }
+}
+
+eprintfln :: proc(format: string, args: ..any) {
+    arg_idx := 0
+    i := 0
+    for i < len(format) {
+        if format[i] == '%' {
+            i += 1
+            if i < len(format) {
+                spec := format[i]
+                if spec == 'd' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 's' {
+                    if arg_idx < len(args) {
+                        s := args[arg_idx].(string)
+                        print_string(s)
+                    }
+                    arg_idx += 1
+                } else if spec == 'x' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'u' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'v' {
+                    if arg_idx < len(args) {
+                        print_value(args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == '%' {
+                    print_byte('%')
+                }
+            }
+        } else {
+            print_byte(format[i])
+        }
+        i += 1
+    }
+    print_string("\n")
+}
+
+// print_value — dispatch by runtime type
 print_value :: proc(v: any) {
     if type_of(v) == type_of(int) {
         s := int_to_string(v.(int))
