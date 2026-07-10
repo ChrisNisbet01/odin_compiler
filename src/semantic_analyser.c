@@ -1422,102 +1422,6 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return int_type;
     }
 
-    case AST_NODE_PRINT_STRING_EXPR:
-    {
-        if (node->list.count < 2)
-            return NULL;
-        odin_grammar_node_t * fd_node = node->list.children[0];
-        odin_grammar_node_t * str_node = node->list.children[1];
-        sem_evaluate_expr(ctx, fd_node);
-        sem_evaluate_expr(ctx, str_node);
-
-        // fd must be an integer type
-        TypeDescriptor const * fd_type = fd_node->resolved_type;
-        if (fd_type == NULL || fd_type->kind != TD_KIND_BASIC
-            || (fd_type->as.basic.name[0] != 'i' && fd_type->as.basic.name[0] != 'u'
-                && strcmp(fd_type->as.basic.name, "byte") != 0
-                && strcmp(fd_type->as.basic.name, "rune") != 0))
-        {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_string: first argument (fd) must be an integer");
-            return NULL;
-        }
-        // Second argument must be a string
-        TypeDescriptor const * str_type = str_node->resolved_type;
-        if (str_type == NULL || str_type->kind != TD_KIND_BASIC
-            || strcmp(str_type->as.basic.name, "string") != 0)
-        {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_string: second argument must be a string");
-            return NULL;
-        }
-
-        TypeDescriptor const * void_type = get_basic_type_by_name(ctx->type_registry, "void");
-        if (void_type == NULL)
-            return NULL;
-        node->resolved_type = (TypeDescriptor *)void_type;
-        return void_type;
-    }
-
-    case AST_NODE_PRINT_BYTE_EXPR:
-    {
-        if (node->list.count < 2)
-            return NULL;
-        odin_grammar_node_t * fd_node = node->list.children[0];
-        odin_grammar_node_t * byte_node = node->list.children[1];
-        sem_evaluate_expr(ctx, fd_node);
-        sem_evaluate_expr(ctx, byte_node);
-
-        // fd must be an integer type
-        TypeDescriptor const * fd_type = fd_node->resolved_type;
-        if (fd_type == NULL || fd_type->kind != TD_KIND_BASIC
-            || (fd_type->as.basic.name[0] != 'i' && fd_type->as.basic.name[0] != 'u'
-                && strcmp(fd_type->as.basic.name, "byte") != 0
-                && strcmp(fd_type->as.basic.name, "rune") != 0))
-        {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_byte: first argument (fd) must be an integer");
-            return NULL;
-        }
-        // Second argument must be an integer type
-        TypeDescriptor const * byte_type = byte_node->resolved_type;
-        if (byte_type == NULL || byte_type->kind != TD_KIND_BASIC
-            || (byte_type->as.basic.name[0] != 'i' && byte_type->as.basic.name[0] != 'u'
-                && strcmp(byte_type->as.basic.name, "rune") != 0
-                && strcmp(byte_type->as.basic.name, "byte") != 0))
-        {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_byte: second argument must be an integer");
-            return NULL;
-        }
-
-        TypeDescriptor const * void_type = get_basic_type_by_name(ctx->type_registry, "void");
-        if (void_type == NULL)
-            return NULL;
-        node->resolved_type = (TypeDescriptor *)void_type;
-        return void_type;
-    }
-
-    case AST_NODE_INT_TO_STRING_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * operand = node->list.children[0];
-        sem_evaluate_expr(ctx, operand);
-        TypeDescriptor const * operand_type = operand->resolved_type;
-        if (operand_type == NULL)
-            return NULL;
-
-        if (operand_type->kind != TD_KIND_BASIC
-            || (operand_type->as.basic.name[0] != 'i' && operand_type->as.basic.name[0] != 'u'))
-        {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "int_to_string requires an integer argument");
-            return NULL;
-        }
-
-        TypeDescriptor const * str_type = get_basic_type_by_name(ctx->type_registry, "string");
-        if (str_type == NULL)
-            return NULL;
-        node->resolved_type = (TypeDescriptor *)str_type;
-        return str_type;
-    }
-
     case AST_NODE_MAKE_EXPR:
     {
         if (node->list.count < 2)
@@ -3185,6 +3089,91 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
 {
     if (program_ast == NULL)
         return;
+
+    // Auto-import core:runtime as an implicit using import (prelude)
+    // Check if runtime is already imported by checking all existing imports
+    bool runtime_already_imported = false;
+    for (int ri = 0; ri < ctx->import_count; ri++)
+    {
+        if (ctx->imports[ri] && ctx->imports[ri]->is_runtime)
+        {
+            runtime_already_imported = true;
+            break;
+        }
+    }
+    if (!runtime_already_imported)
+    {
+        char * runtime_path = resolve_import_path("core:runtime", ctx->source_dir, ctx->odin_root);
+        if (runtime_path)
+        {
+            ImportedPackage * rp = parse_imported_file(runtime_path, ctx->parser, ctx->hook_registry);
+            if (rp)
+            {
+                rp->is_runtime = true; // mark so we don't re-import
+                rp->is_using = true;
+                rp->package_name = strdup("runtime");
+                rp->analysed = true;
+
+                scope_t * rp_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
+                rp->package_scope = rp_scope;
+
+                int saved_count = ctx->gen_ctx->count;
+                ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = rp_scope;
+
+                char * saved_pkg_name = ctx->package_name;
+                ctx->package_name = NULL;
+                char const * saved_file_path = ctx->source_file_path;
+                ctx->source_file_path = rp->source_path;
+
+                // Add to imports array BEFORE recursive analysis to prevent re-entry
+                if (ctx->import_count >= ctx->import_capacity)
+                {
+                    int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
+                    ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
+                    if (new_arr == NULL)
+                    {
+                        perror("realloc");
+                        exit(1);
+                    }
+                    ctx->imports = new_arr;
+                    ctx->import_capacity = new_cap;
+                }
+                ctx->imports[ctx->import_count++] = rp;
+
+                sem_pass1_register_top_level_ex(ctx, rp->ast);
+                sem_pass2_analyse_bodies_ast(ctx, rp->ast);
+
+                if (rp->package_name == NULL && ctx->package_name != NULL)
+                {
+                    free(rp->package_name);
+                    rp->package_name = strdup(ctx->package_name);
+                }
+
+                ctx->package_name = saved_pkg_name;
+                ctx->source_file_path = saved_file_path;
+                ctx->gen_ctx->count = saved_count;
+            }
+            free(runtime_path);
+        }
+    }
+
+    // Copy runtime symbols into the current scope (skip if we are core:runtime itself)
+    for (int ri = 0; ri < ctx->import_count; ri++)
+    {
+        if (ctx->imports[ri] && ctx->imports[ri]->is_runtime && ctx->imports[ri]->package_scope)
+        {
+            scope_t * cur = generator_current_scope(ctx->gen_ctx);
+            if (cur != ctx->imports[ri]->package_scope)
+            {
+                generic_hash_table_iterate(
+                    ctx->imports[ri]->package_scope->symbols.by_name,
+                    import_using_copy_symbol,
+                    cur
+                );
+            }
+            break;
+        }
+    }
 
     for (size_t i = 0; i < program_ast->list.count; i++)
     {

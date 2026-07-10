@@ -21,6 +21,7 @@ typedef struct
     bool analysed;             // has semantic analysis been run on this?
     bool codegen_done;         // has IR codegen been done for this package?
     bool is_using;             // was this imported with 'import using'?
+    bool is_runtime;           // true for auto-imported core:runtime prelude
 } ImportedPackage;
 
 // Resolve an import path to a file path.

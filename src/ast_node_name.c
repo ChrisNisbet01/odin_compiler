@@ -299,12 +299,6 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "QuaternionExpr";
     case AST_NODE_MAYBE_TYPE:
         return "MaybeType";
-    case AST_NODE_PRINT_STRING_EXPR:
-        return "PrintStringExpr";
-    case AST_NODE_PRINT_BYTE_EXPR:
-        return "PrintByteExpr";
-    case AST_NODE_INT_TO_STRING_EXPR:
-        return "IntToStringExpr";
     case AST_NODE_ELLIPSIS:
         return "Ellipsis";
     case AST_NODE_ATTRIBUTE:

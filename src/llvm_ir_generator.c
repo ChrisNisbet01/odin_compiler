@@ -3430,6 +3430,201 @@ ir_gen_collect_foreign_import(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 }
 
+// --- Runtime intrinsic support for bodyless procedures ---
+
+static bool
+ir_gen_is_runtime_intrinsic(IrGenContext * ctx, char const * func_name)
+{
+    (void)ctx;
+    return (strcmp(func_name, "print_string") == 0)
+        || (strcmp(func_name, "print_byte") == 0)
+        || (strcmp(func_name, "int_to_string") == 0);
+}
+
+static void
+ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
+                              TypeDescriptor const * proc_type)
+{
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
+
+    // Build syscall inline asm type: i64 (i64, i64, i64, i64)
+    LLVMTypeRef asm_param_types[4] = {i64_type, i64_type, i64_type, i64_type};
+    LLVMTypeRef asm_ftype = LLVMFunctionType(i64_type, asm_param_types, 4, false);
+    LLVMValueRef asm_val = LLVMGetInlineAsm(
+        asm_ftype,
+        "syscall", 7,
+        "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", 57,
+        true, false, LLVMInlineAsmDialectATT, false
+    );
+    LLVMValueRef syscall_no = LLVMConstInt(i64_type, 1, false); // SYS_write
+    LLVMValueRef current_func = func_current_function(ctx);
+
+    if (strcmp(func_name, "print_string") == 0)
+    {
+        // Parameters: (context_ptr, fd: int, str: string)
+        // string = {ptr data, i64 len}
+        LLVMValueRef fd_param = LLVMGetParam(current_func, 1);
+        LLVMValueRef str_param = LLVMGetParam(current_func, 2);
+
+        // Cast fd to i64
+        LLVMTypeRef fd_type_llvm = LLVMTypeOf(fd_param);
+        if (LLVMGetTypeKind(fd_type_llvm) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(fd_type_llvm) != 64)
+            fd_param = LLVMBuildIntCast2(ctx->builder, fd_param, i64_type, false, "ps.fd.ext");
+
+        // Extract data pointer and length from string struct
+        LLVMValueRef data_ptr = LLVMBuildExtractValue(ctx->builder, str_param, 0, "ps.data");
+        LLVMValueRef len_val = LLVMBuildExtractValue(ctx->builder, str_param, 1, "ps.len");
+        LLVMValueRef buf_i64 = LLVMBuildPtrToInt(ctx->builder, data_ptr, i64_type, "ps.buf");
+
+        LLVMValueRef asm_args[4] = {syscall_no, fd_param, buf_i64, len_val};
+        LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, asm_args, 4, "");
+        LLVMBuildRetVoid(ctx->builder);
+    }
+    else if (strcmp(func_name, "print_byte") == 0)
+    {
+        // Parameters: (context_ptr, fd: int, b: u8)
+        LLVMValueRef fd_param = LLVMGetParam(current_func, 1);
+        LLVMValueRef byte_val = LLVMGetParam(current_func, 2);
+
+        // Cast fd to i64
+        LLVMTypeRef fd_type_llvm = LLVMTypeOf(fd_param);
+        if (LLVMGetTypeKind(fd_type_llvm) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(fd_type_llvm) != 64)
+            fd_param = LLVMBuildIntCast2(ctx->builder, fd_param, i64_type, false, "pb.fd.ext");
+
+        // Truncate byte to i8 if wider
+        if (LLVMGetIntTypeWidth(LLVMTypeOf(byte_val)) != 8)
+            byte_val = LLVMBuildTrunc(ctx->builder, byte_val, i8_type, "pb.trunc");
+
+        LLVMValueRef byte_alloca = LLVMBuildAlloca(ctx->builder, i8_type, "pb.byte");
+        LLVMBuildStore(ctx->builder, byte_val, byte_alloca);
+        LLVMValueRef buf_i64 = LLVMBuildPtrToInt(ctx->builder, byte_alloca, i64_type, "pb.buf");
+
+        LLVMValueRef asm_args[4] = {syscall_no, fd_param, buf_i64, LLVMConstInt(i64_type, 1, false)};
+        LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, asm_args, 4, "");
+        LLVMBuildRetVoid(ctx->builder);
+    }
+    else if (strcmp(func_name, "int_to_string") == 0)
+    {
+        // Parameters: (context_ptr, i: int)
+        LLVMValueRef i64_val = LLVMGetParam(current_func, 1);
+
+        LLVMTypeRef val_type = LLVMTypeOf(i64_val);
+        if (LLVMGetTypeKind(val_type) != LLVMIntegerTypeKind)
+        {
+            LLVMBuildUnreachable(ctx->builder);
+            return;
+        }
+
+        // Extend to i64 if smaller
+        if (LLVMGetIntTypeWidth(val_type) < 64)
+            i64_val = LLVMBuildSExt(ctx->builder, i64_val, i64_type, "its.ext");
+        else if (LLVMGetIntTypeWidth(val_type) > 64)
+            i64_val = LLVMBuildTrunc(ctx->builder, i64_val, i64_type, "its.trunc");
+
+        LLVMValueRef zero = LLVMConstInt(i64_type, 0, false);
+
+        // Sign check and absolute value
+        LLVMValueRef is_neg = LLVMBuildICmp(ctx->builder, LLVMIntSLT, i64_val, zero, "its.isneg");
+        LLVMValueRef neg_val = LLVMBuildSub(ctx->builder, zero, i64_val, "its.neg");
+        LLVMValueRef abs_val = LLVMBuildSelect(ctx->builder, is_neg, neg_val, i64_val, "its.abs");
+
+        LLVMValueRef abs_saved = LLVMBuildAlloca(ctx->builder, i64_type, "its.abs.saved");
+        LLVMBuildStore(ctx->builder, abs_val, abs_saved);
+        LLVMValueRef n_digits_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.ndigits");
+        LLVMBuildStore(ctx->builder, zero, n_digits_a);
+        LLVMValueRef temp_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.temp");
+        LLVMBuildStore(ctx->builder, abs_val, temp_a);
+
+        LLVMBasicBlockRef ck_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.ck");
+        LLVMBasicBlockRef cb_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.cb");
+        LLVMBasicBlockRef cd_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.cd");
+        LLVMBuildBr(ctx->builder, ck_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, ck_bb);
+        LLVMValueRef nd = LLVMBuildLoad2(ctx->builder, i64_type, n_digits_a, "its.nd");
+        LLVMValueRef tp = LLVMBuildLoad2(ctx->builder, i64_type, temp_a, "its.tp");
+        LLVMValueRef first = LLVMBuildICmp(ctx->builder, LLVMIntEQ, nd, zero, "its.first");
+        LLVMValueRef still = LLVMBuildICmp(ctx->builder, LLVMIntUGT, tp, zero, "its.still");
+        LLVMValueRef run = LLVMBuildOr(ctx->builder, first, still, "its.run");
+        LLVMBuildCondBr(ctx->builder, run, cb_bb, cd_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, cb_bb);
+        LLVMBuildStore(ctx->builder, LLVMBuildAdd(ctx->builder, nd, LLVMConstInt(i64_type, 1, false), "its.nd+"), n_digits_a);
+        LLVMBuildStore(ctx->builder, LLVMBuildUDiv(ctx->builder, tp, LLVMConstInt(i64_type, 10, false), "its.tp/"), temp_a);
+        LLVMBuildBr(ctx->builder, ck_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, cd_bb);
+        LLVMValueRef n_digits = LLVMBuildLoad2(ctx->builder, i64_type, n_digits_a, "its.n");
+        LLVMValueRef sx = LLVMBuildZExt(ctx->builder, is_neg, i64_type, "its.sx");
+        LLVMValueRef total_len = LLVMBuildAdd(ctx->builder, n_digits, sx, "its.len");
+
+        LLVMValueRef buf_a = LLVMBuildAlloca(ctx->builder, LLVMArrayType(i8_type, 21), "its.buf");
+        LLVMValueRef buf_p = LLVMBuildBitCast(ctx->builder, buf_a, LLVMPointerType(i8_type, 0), "its.bp");
+
+        LLVMValueRef rem_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.rem");
+        LLVMBuildStore(ctx->builder, LLVMBuildLoad2(ctx->builder, i64_type, abs_saved, "its.abs"), rem_a);
+        LLVMValueRef pos_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.pos");
+        LLVMBuildStore(ctx->builder, LLVMConstInt(i64_type, 20, false), pos_a);
+
+        LLVMBasicBlockRef fck = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.fck");
+        LLVMBasicBlockRef fbd = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.fbd");
+        LLVMBasicBlockRef fdn = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.fdn");
+        LLVMMoveBasicBlockAfter(fck, cd_bb);
+        LLVMMoveBasicBlockAfter(fbd, fck);
+        LLVMMoveBasicBlockAfter(fdn, fbd);
+        LLVMBuildBr(ctx->builder, fck);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, fck);
+        LLVMValueRef pv = LLVMBuildLoad2(ctx->builder, i64_type, pos_a, "its.pv");
+        LLVMValueRef rv = LLVMBuildLoad2(ctx->builder, i64_type, rem_a, "its.rv");
+        LLVMValueRef atend = LLVMBuildICmp(ctx->builder, LLVMIntEQ, pv, LLVMConstInt(i64_type, 20, false), "its.atend");
+        LLVMValueRef more = LLVMBuildICmp(ctx->builder, LLVMIntUGT, rv, zero, "its.more");
+        LLVMBuildCondBr(ctx->builder, LLVMBuildOr(ctx->builder, atend, more, "its.runfill"), fbd, fdn);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, fbd);
+        LLVMValueRef np_ = LLVMBuildSub(ctx->builder, pv, LLVMConstInt(i64_type, 1, false), "its.p-");
+        LLVMBuildStore(ctx->builder, np_, pos_a);
+        LLVMValueRef ch = LLVMBuildTrunc(ctx->builder,
+            LLVMBuildAdd(ctx->builder, LLVMBuildURem(ctx->builder, rv, LLVMConstInt(i64_type, 10, false), "its.digit"),
+                LLVMConstInt(i64_type, '0', false), "its.ch"), i8_type, "its.ch8");
+        LLVMValueRef cp = LLVMBuildInBoundsGEP2(ctx->builder, i8_type, buf_p, &np_, 1, "its.cp");
+        LLVMBuildStore(ctx->builder, ch, cp);
+        LLVMBuildStore(ctx->builder, LLVMBuildUDiv(ctx->builder, rv, LLVMConstInt(i64_type, 10, false), "its.r/"), rem_a);
+        LLVMBuildBr(ctx->builder, fck);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, fdn);
+        LLVMValueRef fp = LLVMBuildLoad2(ctx->builder, i64_type, pos_a, "its.fp");
+        LLVMValueRef neg_pos = LLVMBuildSub(ctx->builder, fp, LLVMConstInt(i64_type, 1, false), "its.np");
+        LLVMValueRef data_start = LLVMBuildSelect(ctx->builder, is_neg, neg_pos, fp, "its.ds");
+
+        LLVMBasicBlockRef sy = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.sy");
+        LLVMBasicBlockRef sa = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.sa");
+        LLVMMoveBasicBlockAfter(sy, fdn);
+        LLVMMoveBasicBlockAfter(sa, sy);
+        LLVMBuildCondBr(ctx->builder, is_neg, sy, sa);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, sy);
+        LLVMValueRef np2 = LLVMBuildInBoundsGEP2(ctx->builder, i8_type, buf_p, &neg_pos, 1, "its.np");
+        LLVMBuildStore(ctx->builder, LLVMConstInt(i8_type, '-', false), np2);
+        LLVMBuildBr(ctx->builder, sa);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, sa);
+        LLVMValueRef dp = LLVMBuildInBoundsGEP2(ctx->builder, i8_type, buf_p, &data_start, 1, "its.dp");
+        TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
+        LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : NULL;
+        if (str_type == NULL)
+        {
+            LLVMBuildUnreachable(ctx->builder);
+            return;
+        }
+        LLVMValueRef sv = LLVMGetUndef(str_type);
+        sv = LLVMBuildInsertValue(ctx->builder, sv, dp, 0, "its.sd");
+        sv = LLVMBuildInsertValue(ctx->builder, sv, total_len, 1, "its.sl");
+        LLVMBuildRet(ctx->builder, sv);
+    }
+}
+
 // --- Top-level declaration codegen ---
 
 static LLVMValueRef
@@ -3471,7 +3666,7 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         TypedValue tv = create_typed_value(func, proc_type, false);
         generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
 
-        if (body_node)
+        if (body_node || ir_gen_is_runtime_intrinsic(ctx, func_name))
         {
             LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
             LLVMPositionBuilderAtEnd(ctx->builder, entry);
@@ -3509,7 +3704,10 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
             }
 
-            ir_gen_node(ctx, body_node);
+            if (body_node)
+                ir_gen_node(ctx, body_node);
+            else
+                ir_gen_runtime_intrinsic_body(ctx, func_name, proc_type);
 
             LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
             LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);
@@ -4943,257 +5141,6 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             return NULL;
         }
         return len_val;
-    }
-
-    case AST_NODE_PRINT_STRING_EXPR:
-    {
-        if (node->list.count < 2)
-            return NULL;
-        odin_grammar_node_t * fd_node = node->list.children[0];
-        odin_grammar_node_t * str_node = node->list.children[1];
-        LLVMValueRef fd_val = ir_gen_node(ctx, fd_node);
-        LLVMValueRef str_val = ir_gen_node(ctx, str_node);
-        if (fd_val == NULL || str_val == NULL)
-            return NULL;
-
-        // Cast fd to i64
-        LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
-        LLVMTypeRef fd_type = LLVMTypeOf(fd_val);
-        if (LLVMGetTypeKind(fd_type) == LLVMPointerTypeKind)
-            fd_val = LLVMBuildLoad2(ctx->builder, i64_type, fd_val, "ps.fd");
-        else if (LLVMGetTypeKind(fd_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(fd_type) != 64)
-            fd_val = LLVMBuildIntCast2(ctx->builder, fd_val, i64_type, false, "ps.fd.ext");
-
-        TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
-        if (str_desc == NULL || str_desc->llvm_type == NULL)
-        {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "print_string: string type not found");
-            return NULL;
-        }
-        LLVMTypeRef str_struct_type = str_desc->llvm_type;
-
-        // Extract data pointer (field 0) and length (field 1)
-        LLVMValueRef str_struct = NULL;
-        LLVMTypeRef val_type = LLVMTypeOf(str_val);
-        if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
-            str_struct = LLVMBuildLoad2(ctx->builder, str_struct_type, str_val, "ps.str");
-        else
-            str_struct = str_val;
-
-        LLVMValueRef data_ptr = LLVMBuildExtractValue(ctx->builder, str_struct, 0, "ps.data");
-        LLVMValueRef len_val = LLVMBuildExtractValue(ctx->builder, str_struct, 1, "ps.len");
-
-        // Bitcast data_ptr to i64 for syscall
-        LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
-        LLVMTypeRef val_llvm_type = LLVMTypeOf(data_ptr);
-        if (LLVMGetTypeKind(val_llvm_type) != LLVMPointerTypeKind)
-            data_ptr = LLVMBuildIntToPtr(ctx->builder, data_ptr, i8ptr, "ps.cast");
-        LLVMValueRef buf_i64 = LLVMBuildPtrToInt(ctx->builder, data_ptr, i64_type, "ps.buf");
-
-        // Emit syscall: sys_write(fd, buf, len)
-        LLVMTypeRef asm_param_types[4] = {i64_type, i64_type, i64_type, i64_type};
-        LLVMTypeRef asm_ftype = LLVMFunctionType(i64_type, asm_param_types, 4, false);
-        LLVMValueRef asm_val = LLVMGetInlineAsm(
-            asm_ftype,
-            "syscall", 7,
-            "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", 57,
-            true, false, LLVMInlineAsmDialectATT, false
-        );
-        LLVMValueRef syscall_no = LLVMConstInt(i64_type, 1, false);
-        LLVMValueRef asm_args[4] = {syscall_no, fd_val, buf_i64, len_val};
-        LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, asm_args, 4, "");
-        return NULL;
-    }
-
-    case AST_NODE_PRINT_BYTE_EXPR:
-    {
-        if (node->list.count < 2)
-            return NULL;
-        odin_grammar_node_t * fd_node = node->list.children[0];
-        odin_grammar_node_t * byte_node = node->list.children[1];
-        LLVMValueRef fd_val = ir_gen_node(ctx, fd_node);
-        LLVMValueRef byte_val = ir_gen_node(ctx, byte_node);
-        if (fd_val == NULL || byte_val == NULL)
-            return NULL;
-
-        LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
-        LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
-
-        // Cast fd to i64
-        LLVMTypeRef fd_type = LLVMTypeOf(fd_val);
-        if (LLVMGetTypeKind(fd_type) == LLVMPointerTypeKind)
-            fd_val = LLVMBuildLoad2(ctx->builder, i64_type, fd_val, "pb.fd");
-        else if (LLVMGetTypeKind(fd_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(fd_type) != 64)
-            fd_val = LLVMBuildIntCast2(ctx->builder, fd_val, i64_type, false, "pb.fd.ext");
-
-        // Load byte value (truncate to i8 if wider)
-        LLVMTypeRef byte_type_llvm = LLVMTypeOf(byte_val);
-        if (LLVMGetTypeKind(byte_type_llvm) == LLVMPointerTypeKind)
-            byte_val = LLVMBuildLoad2(ctx->builder, i8_type, byte_val, "pb.val");
-        else if (LLVMGetTypeKind(byte_type_llvm) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(byte_type_llvm) != 8)
-            byte_val = LLVMBuildTrunc(ctx->builder, byte_val, i8_type, "pb.trunc");
-
-        // Allocate 1 byte on stack, store byte value
-        LLVMValueRef byte_alloca = LLVMBuildAlloca(ctx->builder, i8_type, "pb.byte");
-        LLVMBuildStore(ctx->builder, byte_val, byte_alloca);
-        LLVMValueRef buf_i64 = LLVMBuildPtrToInt(ctx->builder, byte_alloca, i64_type, "pb.buf");
-
-        // Emit syscall: sys_write(fd, &byte, 1)
-        LLVMTypeRef asm_param_types[4] = {i64_type, i64_type, i64_type, i64_type};
-        LLVMTypeRef asm_ftype = LLVMFunctionType(i64_type, asm_param_types, 4, false);
-        LLVMValueRef asm_val = LLVMGetInlineAsm(
-            asm_ftype,
-            "syscall", 7,
-            "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", 57,
-            true, false, LLVMInlineAsmDialectATT, false
-        );
-        LLVMValueRef syscall_no = LLVMConstInt(i64_type, 1, false);
-        LLVMValueRef len_one = LLVMConstInt(i64_type, 1, false);
-        LLVMValueRef asm_args[4] = {syscall_no, fd_val, buf_i64, len_one};
-        LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, asm_args, 4, "");
-        return NULL;
-    }
-
-    case AST_NODE_INT_TO_STRING_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * operand = node->list.children[0];
-        LLVMValueRef val = ir_gen_node(ctx, operand);
-        if (val == NULL)
-            return NULL;
-
-        TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
-        if (str_desc == NULL || str_desc->llvm_type == NULL)
-        {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "int_to_string: string type not found");
-            return NULL;
-        }
-        LLVMTypeRef str_struct_type = str_desc->llvm_type;
-
-        // Load through pointer if needed
-        LLVMTypeRef val_type = LLVMTypeOf(val);
-        if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
-            val = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), val, "its.val");
-
-        if (LLVMGetTypeKind(val_type) != LLVMIntegerTypeKind)
-        {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "int_to_string requires an integer value");
-            return NULL;
-        }
-        unsigned src_width = LLVMGetIntTypeWidth(val_type);
-        LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
-        LLVMValueRef i64_val = val;
-        if (src_width < 64)
-            i64_val = LLVMBuildSExt(ctx->builder, val, i64_type, "its.ext");
-        else if (src_width > 64)
-            i64_val = LLVMBuildTrunc(ctx->builder, val, i64_type, "its.trunc");
-
-        LLVMValueRef current_func = func_current_function(ctx);
-        LLVMValueRef zero = LLVMConstInt(i64_type, 0, false);
-
-        // Sign check and absolute value (as unsigned, safe for INT64_MIN)
-        LLVMValueRef is_neg = LLVMBuildICmp(ctx->builder, LLVMIntSLT, i64_val, zero, "its.isneg");
-        LLVMValueRef neg_val = LLVMBuildSub(ctx->builder, zero, i64_val, "its.neg");
-        LLVMValueRef abs_val = LLVMBuildSelect(ctx->builder, is_neg, neg_val, i64_val, "its.abs");
-
-        // Allocas for loop state
-        LLVMValueRef abs_saved = LLVMBuildAlloca(ctx->builder, i64_type, "its.abs.saved");
-        LLVMBuildStore(ctx->builder, abs_val, abs_saved);
-        LLVMValueRef n_digits_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.ndigits");
-        LLVMBuildStore(ctx->builder, zero, n_digits_a);
-        LLVMValueRef temp_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.temp");
-        LLVMBuildStore(ctx->builder, abs_val, temp_a);
-
-        // --- Count digits (do-while: n_digits++, temp/=10; while temp > 0) ---
-        LLVMBasicBlockRef ck_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.ck");
-        LLVMBasicBlockRef cb_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.cb");
-        LLVMBasicBlockRef cd_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.cd");
-
-        LLVMBuildBr(ctx->builder, ck_bb);
-        // Check: run if n_digits == 0 (first iteration) or temp > 0 (subsequent)
-        LLVMPositionBuilderAtEnd(ctx->builder, ck_bb);
-        LLVMValueRef nd = LLVMBuildLoad2(ctx->builder, i64_type, n_digits_a, "its.nd");
-        LLVMValueRef tp = LLVMBuildLoad2(ctx->builder, i64_type, temp_a, "its.tp");
-        LLVMValueRef first_iter = LLVMBuildICmp(ctx->builder, LLVMIntEQ, nd, zero, "its.first");
-        LLVMValueRef still_has = LLVMBuildICmp(ctx->builder, LLVMIntUGT, tp, zero, "its.still");
-        LLVMValueRef run_count = LLVMBuildOr(ctx->builder, first_iter, still_has, "its.run");
-        LLVMBuildCondBr(ctx->builder, run_count, cb_bb, cd_bb);
-
-        LLVMPositionBuilderAtEnd(ctx->builder, cb_bb);
-        LLVMValueRef nd_new = LLVMBuildAdd(ctx->builder, nd, LLVMConstInt(i64_type, 1, false), "its.nd+");
-        LLVMBuildStore(ctx->builder, nd_new, n_digits_a);
-        LLVMValueRef tp_new = LLVMBuildUDiv(ctx->builder, tp, LLVMConstInt(i64_type, 10, false), "its.tp/");
-        LLVMBuildStore(ctx->builder, tp_new, temp_a);
-        LLVMBuildBr(ctx->builder, ck_bb);
-
-        LLVMPositionBuilderAtEnd(ctx->builder, cd_bb);
-        LLVMValueRef n_digits = LLVMBuildLoad2(ctx->builder, i64_type, n_digits_a, "its.n");
-        LLVMValueRef sign_ext = LLVMBuildZExt(ctx->builder, is_neg, i64_type, "its.sx");
-        LLVMValueRef total_len = LLVMBuildAdd(ctx->builder, n_digits, sign_ext, "its.len");
-
-        // Allocate 21-byte buffer, bitcast to i8*
-        LLVMValueRef buf_a = LLVMBuildAlloca(ctx->builder, LLVMArrayType(LLVMInt8TypeInContext(ctx->context), 21), "its.buf");
-        LLVMValueRef buf_p = LLVMBuildBitCast(ctx->builder, buf_a, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), "its.bp");
-
-        // --- Fill digits right-to-left (do-while: pos--, *pos=digit; while remaining>0) ---
-        LLVMValueRef rem_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.rem");
-        LLVMBuildStore(ctx->builder, LLVMBuildLoad2(ctx->builder, i64_type, abs_saved, "its.abs"), rem_a);
-        LLVMValueRef pos_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.pos");
-        LLVMBuildStore(ctx->builder, LLVMConstInt(i64_type, 20, false), pos_a);
-
-        LLVMBasicBlockRef fck_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.fck");
-        LLVMBasicBlockRef fbd_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.fbd");
-        LLVMBasicBlockRef fdn_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.fdn");
-        LLVMMoveBasicBlockAfter(fck_bb, cd_bb);
-        LLVMMoveBasicBlockAfter(fbd_bb, fck_bb);
-        LLVMMoveBasicBlockAfter(fdn_bb, fbd_bb);
-
-        LLVMBuildBr(ctx->builder, fck_bb);
-        // Check: run if pos == 20 (first) or remaining > 0 (subsequent)
-        LLVMPositionBuilderAtEnd(ctx->builder, fck_bb);
-        LLVMValueRef pos_v = LLVMBuildLoad2(ctx->builder, i64_type, pos_a, "its.pv");
-        LLVMValueRef rem_v = LLVMBuildLoad2(ctx->builder, i64_type, rem_a, "its.rv");
-        LLVMValueRef at_end = LLVMBuildICmp(ctx->builder, LLVMIntEQ, pos_v, LLVMConstInt(i64_type, 20, false), "its.atend");
-        LLVMValueRef more_dig = LLVMBuildICmp(ctx->builder, LLVMIntUGT, rem_v, zero, "its.more");
-        LLVMValueRef run_fill = LLVMBuildOr(ctx->builder, at_end, more_dig, "its.runfill");
-        LLVMBuildCondBr(ctx->builder, run_fill, fbd_bb, fdn_bb);
-
-        LLVMPositionBuilderAtEnd(ctx->builder, fbd_bb);
-        LLVMValueRef new_pos = LLVMBuildSub(ctx->builder, pos_v, LLVMConstInt(i64_type, 1, false), "its.p-");
-        LLVMBuildStore(ctx->builder, new_pos, pos_a);
-        LLVMValueRef digit = LLVMBuildURem(ctx->builder, rem_v, LLVMConstInt(i64_type, 10, false), "its.digit");
-        LLVMValueRef ch = LLVMBuildAdd(ctx->builder, digit, LLVMConstInt(i64_type, '0', false), "its.ch");
-        LLVMValueRef ch8 = LLVMBuildTrunc(ctx->builder, ch, LLVMInt8TypeInContext(ctx->context), "its.ch8");
-        LLVMValueRef cp = LLVMBuildInBoundsGEP2(ctx->builder, LLVMInt8TypeInContext(ctx->context), buf_p, &new_pos, 1, "its.cp");
-        LLVMBuildStore(ctx->builder, ch8, cp);
-        LLVMValueRef new_rem = LLVMBuildUDiv(ctx->builder, rem_v, LLVMConstInt(i64_type, 10, false), "its.r/");
-        LLVMBuildStore(ctx->builder, new_rem, rem_a);
-        LLVMBuildBr(ctx->builder, fck_bb);
-
-        // --- Handle sign and build string struct ---
-        LLVMPositionBuilderAtEnd(ctx->builder, fdn_bb);
-        LLVMValueRef final_pos = LLVMBuildLoad2(ctx->builder, i64_type, pos_a, "its.fp");
-        LLVMValueRef neg_pos = LLVMBuildSub(ctx->builder, final_pos, LLVMConstInt(i64_type, 1, false), "its.np");
-        LLVMValueRef data_start = LLVMBuildSelect(ctx->builder, is_neg, neg_pos, final_pos, "its.ds");
-
-        LLVMBasicBlockRef sy_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.sy");
-        LLVMBasicBlockRef sa_bb = LLVMAppendBasicBlockInContext(ctx->context, current_func, "its.sa");
-        LLVMMoveBasicBlockAfter(sy_bb, fdn_bb);
-        LLVMMoveBasicBlockAfter(sa_bb, sy_bb);
-        LLVMBuildCondBr(ctx->builder, is_neg, sy_bb, sa_bb);
-
-        LLVMPositionBuilderAtEnd(ctx->builder, sy_bb);
-        LLVMValueRef np = LLVMBuildInBoundsGEP2(ctx->builder, LLVMInt8TypeInContext(ctx->context), buf_p, &neg_pos, 1, "its.np");
-        LLVMBuildStore(ctx->builder, LLVMConstInt(LLVMInt8TypeInContext(ctx->context), '-', false), np);
-        LLVMBuildBr(ctx->builder, sa_bb);
-
-        LLVMPositionBuilderAtEnd(ctx->builder, sa_bb);
-        LLVMValueRef dp = LLVMBuildInBoundsGEP2(ctx->builder, LLVMInt8TypeInContext(ctx->context), buf_p, &data_start, 1, "its.dp");
-        LLVMValueRef sv = LLVMGetUndef(str_struct_type);
-        sv = LLVMBuildInsertValue(ctx->builder, sv, dp, 0, "its.sd");
-        sv = LLVMBuildInsertValue(ctx->builder, sv, total_len, 1, "its.sl");
-        return sv;
     }
 
     case AST_NODE_TYPE_OF_EXPR:

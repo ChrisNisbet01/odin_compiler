@@ -1,13 +1,12 @@
-## Accomplishments (session 2026-07-10, continued)
+## Accomplishments (session 2026-07-11)
 
-### Replaced libc `putchar` with direct `syscall` inline asm
-- **Syscall IR generation**: `ir_gen_syscall_write(output_fd, buf, count)` emits raw x86-64 `syscall` via `LLVMGetInlineAsm` with constraints `={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}`. No libc dependency.
-- **Grammar**: `PrintStringExpr` and `PrintByteExpr` changed from single-arg `print_string(str)`/`print_byte(c)` to two-arg `print_string(fd, str)`/`print_byte(fd, c)` where `fd: int`.
-- **Semantic analyser**: Updated type checks to expect `(int, string)` / `(int, u8)` signatures.
-- **IR generator**: `ir_gen_print_string_expression` and `ir_gen_print_byte_expression` now extract fd from `children[0]` and pass to `ir_gen_syscall_write`.
-- **Stubs (`stubs/core/fmt/fmt.odin`)**: `println`/`printfln` call `print_string(1, ...)`, `eprintln`/`eprintf`/`eprintfln` call `print_string(2, ...)`. `print_value` and helpers pass fd through.
-- **Test fixes**: Updated 4 old tests (`test_print_string`, `test_int_to_string`, `test_variadic_print`, `test_any_assert`) to use two-arg `print_string(1, str)`.
-- **10→4 failures reduction**: Before: 10 failed (including 6 fmt tests). After: 0 failed. **All 106 tests pass**.
+### Refactored print_string/print_byte/int_to_string into intrinsic-based runtime package
+- **Removed special grammar rules, AST nodes, and lexer tokens** for `print_string`, `print_byte`, `int_to_string`. No more `KwPrintString`, `PrintStringExpr`, etc. The grammar, semantic analyser, and IR generator no longer contain any builtin-specific code for these functions.
+- **Created `stubs/core/runtime/runtime.odin`**: New prelude package with `---` bodyless declarations for `print_string(fd: int, str: string)`, `print_byte(fd: int, b: u8)`, `int_to_string(i: int) -> string`.
+- **Auto-import mechanism**: `sem_pass1_register_top_level_ex` now auto-imports `core:runtime` as an implicit `using` import for every file. The runtime package is resolved, parsed, analysed, and codegen'd like a normal import.
+- **Intrinsic body generation**: `ir_gen_top_level_decl` detects known runtime function names and calls `ir_gen_runtime_intrinsic_body()` to emit LLVM IR bodies (inline syscall for print_string/print_byte; digit loop for int_to_string). This replaces the old special-case AST node handling.
+- **Benefits**: The compiler no longer has special-case logic for these 3 functions — they're regular Odin procedures with `---` declarations. Adding new intrinsics is a matter of adding a declaration in `core:runtime` and a case in `ir_gen_runtime_intrinsic_body()`.
+- **All 106 tests pass**.
 
 ## Accomplishments (session 2026-07-09)
 
