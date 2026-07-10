@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 #define VERSION "0.1.0"
 
@@ -82,6 +83,7 @@ print_usage(char const * prog)
     printf("Usage:\n");
     printf("  %s build [-o <output>] [--keep-temps] <file>\n", prog);
     printf("                           Parse, type-check, compile, and link\n");
+    printf("  %s run [options] <file> Compile, link, and run\n", prog);
     printf("  %s check <file>         Parse and type-check only\n", prog);
     printf("  %s version              Print version\n", prog);
     printf("  %s help                 Print this help\n", prog);
@@ -110,14 +112,14 @@ main(int argc, char * argv[])
         return EXIT_SUCCESS;
     }
 
-    if (strcmp(command, "build") != 0 && strcmp(command, "check") != 0)
+    if (strcmp(command, "build") != 0 && strcmp(command, "check") != 0 && strcmp(command, "run") != 0)
     {
         fprintf(stderr, "Error: Unknown command '%s'\n", command);
         print_usage(argv[0]);
         return EXIT_FAILURE;
     }
 
-    bool do_codegen = (strcmp(command, "build") == 0);
+    bool do_codegen = (strcmp(command, "build") == 0 || strcmp(command, "run") == 0);
 
     // Parse options and extract filename
     char const * filename = NULL;
@@ -286,7 +288,26 @@ main(int argc, char * argv[])
     char * ll_file = NULL;
     char * exe_file = NULL;
 
-    if (output_name != NULL)
+    if (strcmp(command, "run") == 0)
+    {
+        // Use temp file for run command
+        char const * base = strrchr(filename, '/');
+        base = (base != NULL) ? base + 1 : filename;
+        size_t base_len = strlen(base);
+        // Strip .odin extension if present
+        if (base_len > 5 && strcmp(base + base_len - 5, ".odin") == 0)
+            base_len -= 5;
+        ll_file = malloc(base_len + 20);
+        snprintf(ll_file, base_len + 20, "/tmp/odinc_%.*s", (int)base_len, base);
+        exe_file = strdup(ll_file);
+        // Add .ll extension
+        size_t ll_len = strlen(ll_file);
+        char * ll_ext = realloc(ll_file, ll_len + 4);
+        if (ll_ext == NULL) { free(ll_file); free(exe_file); return EXIT_FAILURE; }
+        ll_file = ll_ext;
+        memcpy(ll_file + ll_len, ".ll", 4);
+    }
+    else if (output_name != NULL)
     {
         size_t out_len = strlen(output_name);
         ll_file = malloc(out_len + 4);
@@ -348,6 +369,17 @@ main(int argc, char * argv[])
             if (run_linker(ll_file, exe_file, ir_ctx) == 0)
             {
                 printf("Generated executable: %s\n", exe_file);
+
+                // odinc run: execute the binary
+                if (strcmp(command, "run") == 0)
+                {
+                    printf("  [RUN] %s\n", exe_file);
+                    int run_ret = system(exe_file);
+                    int exit_code = WIFEXITED(run_ret) ? WEXITSTATUS(run_ret) : EXIT_FAILURE;
+                    printf("  [EXIT] %d\n", exit_code);
+                    remove(exe_file);
+                    sem_ok = (exit_code == 0);
+                }
             }
             else
             {
