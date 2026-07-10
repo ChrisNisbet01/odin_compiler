@@ -293,7 +293,7 @@ ArrayType = LBracket (IntegerLiteral | PolyIdent | Identifier)? RBracket TypePre
 DynamicArrayType = LBracket KwDynamic RBracket TypePrefix @AST_ACTION_DYNAMIC_ARRAY_TYPE;
 SliceType = LBracket RBracket TypePrefix @AST_ACTION_SLICE_TYPE;
 MapType = KwMap LBracket TypePrefix RBracket TypePrefix @AST_ACTION_MAP_TYPE;
-SoaType = DirectiveWithArgs TypePrefix @AST_ACTION_SOA_TYPE;
+SoaType = (DirectiveWithArgs | Directive) TypePrefix @AST_ACTION_SOA_TYPE;
 
 Enumerator = Identifier (Assign Expression)? @AST_ACTION_ENUMERATOR;
 EnumeratorList = delimited(Enumerator, Comma) Comma? @AST_ACTION_ENUMERATOR_LIST;

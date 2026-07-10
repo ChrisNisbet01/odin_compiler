@@ -1149,8 +1149,10 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_SOA_TYPE:
     {
         // #soa[N] TypePrefix — creates a SOA array type backed by fixed-size arrays
-        // Children: [DirectiveWithArgs, InnerType]
+        // #soa TypePrefix — creates a SOA array type backed by slices
+        // Children: [DirectiveWithArgs | Directive, InnerType]
         odin_grammar_node_t * dw_node = NULL;
+        odin_grammar_node_t * directive_node = NULL;
         odin_grammar_node_t * inner_type_node = NULL;
         for (size_t i = 0; i < node->list.count; i++)
         {
@@ -1159,17 +1161,62 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                 continue;
             if (child->type == AST_NODE_DIRECTIVE_WITH_ARGS)
                 dw_node = child;
+            else if (child->type == AST_NODE_DIRECTIVE)
+                directive_node = child;
             else if (is_type_node(child))
                 inner_type_node = child;
         }
 
-        if (dw_node == NULL || inner_type_node == NULL)
+        if (inner_type_node == NULL)
+            return NULL;
+
+        // Case 1: #soa — slice-backed SOA
+        if (directive_node != NULL && directive_node->text
+            && strstr(directive_node->text, "#soa") != NULL && dw_node == NULL)
+        {
+            TypeDescriptor const * inner_td = sem_resolve_type_expr(ctx, inner_type_node);
+            if (inner_td == NULL || inner_td->kind != TD_KIND_STRUCT)
+            {
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, inner_type_node, "#soa requires a struct type");
+                return NULL;
+            }
+
+            struct_or_union_members_st const * inner_members = &inner_td->struct_metadata.members;
+            int field_count = inner_members->count;
+
+            struct_or_union_members_st backing_members;
+            backing_members.count = field_count;
+            backing_members.fields = malloc((size_t)field_count * sizeof(struct_field_t));
+            if (backing_members.fields == NULL)
+                return NULL;
+
+            for (int j = 0; j < field_count; j++)
+            {
+                struct_field_t const * src = &inner_members->fields[j];
+                TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, src->type_desc);
+
+                backing_members.fields[j].name = src->name;
+                backing_members.fields[j].type_desc = slice_type;
+                backing_members.fields[j].is_using = src->is_using;
+                backing_members.fields[j].offset = 0;
+                backing_members.fields[j].bit_offset = 0;
+                backing_members.fields[j].bit_width = 0;
+                backing_members.fields[j].storage_index = 0;
+            }
+
+            TypeDescriptor const * soa_td = get_or_create_soa_type(ctx->type_registry, &backing_members);
+            free(backing_members.fields);
+
+            if (soa_td)
+                node->resolved_type = (TypeDescriptor *)soa_td;
+            return soa_td;
+        }
+
+        // Case 2: #soa[N] — array-backed SOA (existing code)
+        if (dw_node == NULL)
             return NULL;
 
         // Extract the count expression from DirectiveWithArgs
-        // Children of DirectiveWithArgs for #soa[N]: [Expression]
-        // (KwSoa has no @AST_ACTION so no Identifier child)
-        // But for #assert[N] it would be: [Identifier("assert"), Expression]
         odin_grammar_node_t * count_expr = NULL;
         for (size_t i = 0; i < dw_node->list.count; i++)
         {
@@ -1186,10 +1233,8 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (count_expr == NULL)
             return NULL;
 
-        // Evaluate the count expression
         sem_evaluate_expr(ctx, count_expr);
 
-        // Unwrap through expression chain to find integer value
         odin_grammar_node_t * eval_node = count_expr;
         while (eval_node->list.count >= 1 && eval_node->list.children[0] != NULL)
         {
@@ -1224,7 +1269,6 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             return NULL;
         }
 
-        // Resolve the inner type (must be a struct type)
         TypeDescriptor const * inner_td = sem_resolve_type_expr(ctx, inner_type_node);
         if (inner_td == NULL || inner_td->kind != TD_KIND_STRUCT)
         {
@@ -1232,7 +1276,6 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             return NULL;
         }
 
-        // Build backing members: each struct field T becomes [N]T
         struct_or_union_members_st const * inner_members = &inner_td->struct_metadata.members;
         int field_count = inner_members->count;
 

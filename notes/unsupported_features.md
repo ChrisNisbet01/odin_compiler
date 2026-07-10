@@ -20,11 +20,11 @@ Basic support exists (evaluates condition, errors on false). May be incomplete f
 ### `when` with complex enum comparisons
 `when ODIN_OS == .Windows` requires compile-time enum resolution in `when` conditions. Currently only `when true`/`when false` works reliably.
 
-### `#no_bounds_check` — Disable bounds checking
-Attribute to skip bounds checks on array/slice subscript. Grammar change for `#` directives; IR gen skips the cmp+trap.
+### `#no_bounds_check` — Disable bounds checking ✅ GRAMMAR DONE
+Attribute to skip bounds checks on array/slice subscript. Grammar accepts `#no_bounds_check` as a directive. No-op at IR level (bounds checking not yet implemented).
 
-### `#partial switch` — Partial exhaustiveness
-Switch without the default exhaustiveness check. Simple grammar modifier.
+### `#partial switch` — Partial exhaustiveness ✅ GRAMMAR DONE
+Switch without the default exhaustiveness check. Grammar accepts `switch #partial`. No-op at semantic level (exhaustiveness checking not yet implemented).
 
 ## Medium Complexity
 
