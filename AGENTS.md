@@ -185,5 +185,10 @@
 - **`tests/test_param.odin` deleted**: Incompatible with void-only main; coverage provided by `test_proc_params.odin` and `test_call.odin`.
 - **All 105 tests pass**.
 
+### Extended `core:fmt` variants
+- **Added `printfln`, `eprintln`, `eprintf`, `eprintfln`**: Each is a standalone inline copy of the format/print logic (no `..args` forwarding or `[]any` param delegation — both unsupported by the compiler). Text: `test_fmt_more.odin` covers all four.
+- **Test runner**: `bash tests/run_tests.sh` confirms all 106 tests pass.
+- **Root cause of delegation failure**: `ir_gen_identifier` returns alloca pointers for composite types (slices, structs, etc.) at line 291. When passed as function call arguments, the IR receives `ptr %args` instead of loading `{ptr, i64}`. Fix requires either loading composite type values at call sites or a separate argument evaluation path.
+
 ### Key insight
 The `any` type system had two fundamental flaws: (a) integer arguments were stored as `inttoptr` values (data pointer = integer cast to pointer) instead of storing the integer in memory and pointing to it; (b) the `type_of` builtin only worked at compile time, making runtime type dispatch impossible. Fixing both enabled proper runtime type identification and safe type assertion through the `any` struct's `{ptr data, i64 type_id}` layout.
