@@ -16,6 +16,18 @@
 - **Remaining `foreign libc` callers**: `stubs/src/mem/mem.odin` (malloc/free) and `stubs/src/os/os.odin` (exit/getenv/system) — both are dead code (never imported by any test or real program).
 - **All 106 tests pass**.
 
+### Deleted dead `stubs/src/` directory
+- **Identified dead code**: `stubs/src/os/os.odin`, `stubs/src/mem/mem.odin`, `stubs/src/builtin/builtin.odin`, `stubs/src/intrinsics/intrinsics.odin`, `stubs/src/runtime/runtime.odin` — no resolution path reaches them.
+- **Updated `test_stub_import.odin`**: Removed dead `import "mem"` that only worked through the deleted path.
+
+### Implemented low-hanging fruit features
+- **`#no_bounds_check` directive grammar**: Added `KwNoBoundsCheck` lexeme, added to `DirectiveName` alternatives. No-op at IR level (bounds checking not yet implemented). Test: `test_no_bounds_check.odin`.
+- **`#partial switch` test**: Grammar already supported `Directive?` on `SwitchStatement`; added test verifying switch without default compiles and runs. Test: `test_switch_partial.odin`.
+- **`#soa` standalone directive**: Grammar changed to accept `Directive | DirectiveWithArgs` in `SoaType`. Semantic analyser handles `#soa` without `[N]` by creating slice-backed SOA type (each field `T` → `[]T`). Test: `test_soa_simple.odin`.
+- **`odinc run` command**: New subcommand that compiles, links, and executes in one step using temp files (cleaned up after execution). Reports exit code.
+- **Housekeeping**: Updated `unsupported_features.md` — moved `typeid_of(T)`, `bit_set[u32]`, `contextless` from "To Do" to "Recently Added"; marked `#partial`, `#no_bounds_check` as `✅ GRAMMAR DONE`.
+- **All 109 tests pass**.
+
 ## Accomplishments (session 2026-07-09)
 
 ### Phase 6: Extended formatting, escape sequences, `%u`
