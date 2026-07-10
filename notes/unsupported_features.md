@@ -28,9 +28,6 @@ Switch without the default exhaustiveness check. Grammar accepts `switch #partia
 
 ## Medium Complexity
 
-### `odinc run` command line support
-compile and run an odin file directly from the odin compiler command line.
-
 ### `type_info_of(T)` — Get runtime type info
 Returns a pointer to the type descriptor at runtime. Requires generating type info data sections in LLVM IR.
 
@@ -116,3 +113,4 @@ The following features were previously listed as unsupported but are now impleme
 - Runtime intrinsics via `core:runtime` auto-import (print_string, print_byte, int_to_string, os_exit)
 - Inline syscall IR generation for runtime intrinsics (SYS_write, SYS_exit)
 - `"contextless"` calling convention (IR gen correctly skips context parameter prepend/inject)
+- `odinc run` command (compile, link, and execute in one step)
