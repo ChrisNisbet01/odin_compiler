@@ -1,3 +1,14 @@
+## Accomplishments (session 2026-07-10, continued)
+
+### Replaced libc `putchar` with direct `syscall` inline asm
+- **Syscall IR generation**: `ir_gen_syscall_write(output_fd, buf, count)` emits raw x86-64 `syscall` via `LLVMGetInlineAsm` with constraints `={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}`. No libc dependency.
+- **Grammar**: `PrintStringExpr` and `PrintByteExpr` changed from single-arg `print_string(str)`/`print_byte(c)` to two-arg `print_string(fd, str)`/`print_byte(fd, c)` where `fd: int`.
+- **Semantic analyser**: Updated type checks to expect `(int, string)` / `(int, u8)` signatures.
+- **IR generator**: `ir_gen_print_string_expression` and `ir_gen_print_byte_expression` now extract fd from `children[0]` and pass to `ir_gen_syscall_write`.
+- **Stubs (`stubs/core/fmt/fmt.odin`)**: `println`/`printfln` call `print_string(1, ...)`, `eprintln`/`eprintf`/`eprintfln` call `print_string(2, ...)`. `print_value` and helpers pass fd through.
+- **Test fixes**: Updated 4 old tests (`test_print_string`, `test_int_to_string`, `test_variadic_print`, `test_any_assert`) to use two-arg `print_string(1, str)`.
+- **10→4 failures reduction**: Before: 10 failed (including 6 fmt tests). After: 0 failed. **All 106 tests pass**.
+
 ## Accomplishments (session 2026-07-09)
 
 ### Phase 6: Extended formatting, escape sequences, `%u`

@@ -1424,19 +1424,29 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_PRINT_STRING_EXPR:
     {
-        if (node->list.count < 1)
+        if (node->list.count < 2)
             return NULL;
-        odin_grammar_node_t * operand = node->list.children[0];
-        sem_evaluate_expr(ctx, operand);
-        TypeDescriptor const * operand_type = operand->resolved_type;
-        if (operand_type == NULL)
-            return NULL;
+        odin_grammar_node_t * fd_node = node->list.children[0];
+        odin_grammar_node_t * str_node = node->list.children[1];
+        sem_evaluate_expr(ctx, fd_node);
+        sem_evaluate_expr(ctx, str_node);
 
-        bool is_string = (operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name != NULL
-                          && strcmp(operand_type->as.basic.name, "string") == 0);
-        if (!is_string)
+        // fd must be an integer type
+        TypeDescriptor const * fd_type = fd_node->resolved_type;
+        if (fd_type == NULL || fd_type->kind != TD_KIND_BASIC
+            || (fd_type->as.basic.name[0] != 'i' && fd_type->as.basic.name[0] != 'u'
+                && strcmp(fd_type->as.basic.name, "byte") != 0
+                && strcmp(fd_type->as.basic.name, "rune") != 0))
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_string requires a string argument");
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_string: first argument (fd) must be an integer");
+            return NULL;
+        }
+        // Second argument must be a string
+        TypeDescriptor const * str_type = str_node->resolved_type;
+        if (str_type == NULL || str_type->kind != TD_KIND_BASIC
+            || strcmp(str_type->as.basic.name, "string") != 0)
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_string: second argument must be a string");
             return NULL;
         }
 
@@ -1449,20 +1459,31 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_PRINT_BYTE_EXPR:
     {
-        if (node->list.count < 1)
+        if (node->list.count < 2)
             return NULL;
-        odin_grammar_node_t * operand = node->list.children[0];
-        sem_evaluate_expr(ctx, operand);
-        TypeDescriptor const * operand_type = operand->resolved_type;
-        if (operand_type == NULL)
-            return NULL;
+        odin_grammar_node_t * fd_node = node->list.children[0];
+        odin_grammar_node_t * byte_node = node->list.children[1];
+        sem_evaluate_expr(ctx, fd_node);
+        sem_evaluate_expr(ctx, byte_node);
 
-        if (operand_type->kind != TD_KIND_BASIC
-            || (operand_type->as.basic.name[0] != 'i' && operand_type->as.basic.name[0] != 'u'
-                && strcmp(operand_type->as.basic.name, "rune") != 0
-                && strcmp(operand_type->as.basic.name, "byte") != 0))
+        // fd must be an integer type
+        TypeDescriptor const * fd_type = fd_node->resolved_type;
+        if (fd_type == NULL || fd_type->kind != TD_KIND_BASIC
+            || (fd_type->as.basic.name[0] != 'i' && fd_type->as.basic.name[0] != 'u'
+                && strcmp(fd_type->as.basic.name, "byte") != 0
+                && strcmp(fd_type->as.basic.name, "rune") != 0))
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_byte requires an integer argument");
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_byte: first argument (fd) must be an integer");
+            return NULL;
+        }
+        // Second argument must be an integer type
+        TypeDescriptor const * byte_type = byte_node->resolved_type;
+        if (byte_type == NULL || byte_type->kind != TD_KIND_BASIC
+            || (byte_type->as.basic.name[0] != 'i' && byte_type->as.basic.name[0] != 'u'
+                && strcmp(byte_type->as.basic.name, "rune") != 0
+                && strcmp(byte_type->as.basic.name, "byte") != 0))
+        {
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "print_byte: second argument must be an integer");
             return NULL;
         }
 
