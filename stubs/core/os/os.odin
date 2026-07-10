@@ -1,5 +1,5 @@
 package os
 
-foreign libc {
-    exit :: proc "c" (code: int) ---
+exit :: proc(code: int) {
+    os_exit(code)
 }

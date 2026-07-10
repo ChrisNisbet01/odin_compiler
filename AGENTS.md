@@ -8,6 +8,14 @@
 - **Benefits**: The compiler no longer has special-case logic for these 3 functions — they're regular Odin procedures with `---` declarations. Adding new intrinsics is a matter of adding a declaration in `core:runtime` and a case in `ir_gen_runtime_intrinsic_body()`.
 - **All 106 tests pass**.
 
+### Converted `os.exit()` from libc call to runtime intrinsic inline syscall
+- **Added `os_exit` to `stubs/core/runtime/runtime.odin`**: Bodyless declaration `os_exit :: proc(code: int) ---` alongside print_string/print_byte/int_to_string.
+- **Added `os_exit` to intrinsic detection**: `ir_gen_is_runtime_intrinsic()` and `ir_gen_runtime_intrinsic_body()` handle `os_exit` — emits inline syscall via LLVM inline asm (`mov rax, 60; syscall`), same pattern as print_string/print_byte.
+- **Rewrote `stubs/core/os/os.odin`**: Changed from `foreign libc { exit :: proc "c" (code: int) --- }` to a plain Odin procedure that calls `os_exit(code)` — no more `foreign libc` dependency.
+- **Fixed inline asm constraint length**: Length parameter (33) must match the constraint string exactly; off-by-3 caused truncated constraint `~{r1` and linker crash.
+- **Remaining `foreign libc` callers**: `stubs/src/mem/mem.odin` (malloc/free) and `stubs/src/os/os.odin` (exit/getenv/system) — both are dead code (never imported by any test or real program).
+- **All 106 tests pass**.
+
 ## Accomplishments (session 2026-07-09)
 
 ### Phase 6: Extended formatting, escape sequences, `%u`

@@ -3438,7 +3438,8 @@ ir_gen_is_runtime_intrinsic(IrGenContext * ctx, char const * func_name)
     (void)ctx;
     return (strcmp(func_name, "print_string") == 0)
         || (strcmp(func_name, "print_byte") == 0)
-        || (strcmp(func_name, "int_to_string") == 0);
+        || (strcmp(func_name, "int_to_string") == 0)
+        || (strcmp(func_name, "os_exit") == 0);
 }
 
 static void
@@ -3622,6 +3623,30 @@ ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
         sv = LLVMBuildInsertValue(ctx->builder, sv, dp, 0, "its.sd");
         sv = LLVMBuildInsertValue(ctx->builder, sv, total_len, 1, "its.sl");
         LLVMBuildRet(ctx->builder, sv);
+    }
+    else if (strcmp(func_name, "os_exit") == 0)
+    {
+        // Parameters: (context_ptr, code: int)
+        // SYS_exit = 60 on x86-64
+        LLVMValueRef code_val = LLVMGetParam(current_func, 1);
+
+        LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+        LLVMTypeRef code_type = LLVMTypeOf(code_val);
+        if (LLVMGetTypeKind(code_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(code_type) != 64)
+            code_val = LLVMBuildIntCast2(ctx->builder, code_val, i64_type, false, "exit.ext");
+
+        LLVMTypeRef asm_param_types[2] = {i64_type, i64_type};
+        LLVMTypeRef asm_ftype = LLVMFunctionType(i64_type, asm_param_types, 2, false);
+        LLVMValueRef asm_val = LLVMGetInlineAsm(
+            asm_ftype,
+            "syscall", 7,
+            "={rax},{rax},{rdi},~{rcx},~{r11}", 33,
+            true, false, LLVMInlineAsmDialectATT, false
+        );
+        LLVMValueRef syscall_no = LLVMConstInt(i64_type, 60, false); // SYS_exit
+        LLVMValueRef asm_args[2] = {syscall_no, code_val};
+        LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, asm_args, 2, "");
+        LLVMBuildUnreachable(ctx->builder);
     }
 }
 
