@@ -165,8 +165,9 @@ KwForceInline = lexeme("force_inline" IdBoundary);
 KwNoInline = lexeme("no_inline" IdBoundary);
 KwLoad = lexeme("load" IdBoundary);
 KwAssert = lexeme("assert" IdBoundary);
+KwNoBoundsCheck = lexeme("no_bounds_check" IdBoundary);
 
-DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert;
+DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert | KwNoBoundsCheck;
 Directive = lexeme("#" DirectiveName) @AST_ACTION_DIRECTIVE;
 DirectiveWithArgs = (lexeme("#" DirectiveName) LBracket Expression RBracket) @AST_ACTION_DIRECTIVE_WITH_ARGS;
 

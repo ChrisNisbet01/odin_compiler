@@ -3,16 +3,13 @@
 Features present in the official Odin language that our compiler does not yet support, ordered by estimated implementation complexity (easiest first).
 
 ## Recently fixed
-- **`core:os` support**: `os.exit()` via foreign libc (`stubs/core/os/os.odin`). Entry point wrapper always returns 0 from C `main()`. Void-only main enforced via semantic error. 95 test files batch-converted to `main :: proc() { os.exit(X) }`.
+- **`core:os` + runtime intrinsics**: `os.exit()` now uses runtime intrinsic `os_exit` (inline syscall, no `foreign libc`). `print_string`/`print_byte`/`int_to_string` refactored from special AST nodes to `core:runtime` prelude auto-import + IR generator intrinsic body generation. `stubs/src/` deleted (dead code).
 - **Recursive function calls**: Fixed link error (`fib.4` undefined) by moving `generator_add_symbol` before body generation in IR generator. Fixed recursive call semantic analysis (returned NULL type for recursive calls) by pre-registering procedure type in symbol table before body analysis. `fibonacci.odin` now compiles without any casts.
 - **Implicit conversion of untyped literals**: Added `sem_can_implicitly_convert()` — recognizes `AST_NODE_INTEGER_VALUE`/`AST_NODE_FLOAT_VALUE` as untyped literals that can convert to any matching numeric type. Applied to return statement type checks. IR generator coerces return values to match function return type.
 - **`printf %d/%x` with unsigned types**: Delegated `%d` and `%x` to `print_value` in stubs `fmt.odin` (handles all integer types uniformly).
 - **Extended `core:fmt` variants**: Added `printfln`, `eprintln`, `eprintf`, `eprintfln` to `stubs/core/fmt/fmt.odin`. Each is a standalone copy (no `..args` forwarding, no `[]any` param delegation — both unsupported). Tested via `test_fmt_more.odin`.
 
 ## Low Complexity
-
-### `typeid_of(T)` — Get typeid from a type ✅ DONE
-Returns the hash-based typeid of a compile-time-known type. Very similar to `type_of(T)` — uses the hash-based type ID system.
 
 ### `#caller_location` — Built-in caller location parameter
 Injects source location (`file:line:col`) as an implicit proc parameter. Similar mechanism to context threading.
@@ -34,17 +31,11 @@ Switch without the default exhaustiveness check. Simple grammar modifier.
 ### `odinc run` command line support
 compile and run an odin file directly from the odin compiler command line.
 
-### `"contextless"` calling convention
-Parsed and used in stubs, but IR gen doesn't correctly suppress the context parameter. Fix: skip context alloca prepend for `contextless` calls.
-
 ### `type_info_of(T)` — Get runtime type info
 Returns a pointer to the type descriptor at runtime. Requires generating type info data sections in LLVM IR.
 
 ### `distinct` type creation
 Parsed but semantically transparent (doesn't create a new type). Need `get_or_create_distinct_type` that allocates a separate descriptor, and enforce type distinctness in assignment/equality.
-
-### `bit_set` with explicit underlying type
-Grammar accepts `bit_set[u32]` but semantic analyser only implements the range-based path. Add backing-type resolution to `get_or_create_bit_set_type`.
 
 ### `#soa[]` SOA slice syntax (no brackets / no size)
 `struct #soa { ... }` works (slice-backed SOA), but the bare `#[soa]` directive without `[N]` doesn't parse. Grammar needs `#soa` as a standalone directive.
@@ -120,5 +111,8 @@ The following features were previously listed as unsupported but are now impleme
 - `fallthrough` statement
 - `defer` statement (LIFO order on scope exit)
 - Logical `&&`/`||` short-circuit evaluation
-- `core:os` package with `os.exit()` (foreign libc)
+- `core:os` package with `os.exit()` (runtime intrinsic via inline syscall)
 - Void-only `main :: proc()` (exit code via `os.exit()`; semantic error for non-void main)
+- Runtime intrinsics via `core:runtime` auto-import (print_string, print_byte, int_to_string, os_exit)
+- Inline syscall IR generation for runtime intrinsics (SYS_write, SYS_exit)
+- `"contextless"` calling convention (IR gen correctly skips context parameter prepend/inject)
