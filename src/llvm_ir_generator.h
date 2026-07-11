@@ -70,6 +70,9 @@ typedef struct
 
     ImportedPackage ** imports;
     int import_count;
+
+    LLVMValueRef odin_argc_global;
+    LLVMValueRef odin_argv_global;
 } IrGenContext;
 
 IrGenContext *

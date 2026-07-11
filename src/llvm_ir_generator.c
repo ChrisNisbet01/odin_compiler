@@ -29,6 +29,11 @@ static LLVMValueRef ir_gen_in_expression(
     IrGenContext * ctx, odin_grammar_node_t * node, LLVMValueRef lhs, LLVMValueRef rhs, TypeDescriptor const * rhs_type, bool is_not_in
 );
 
+static LLVMValueRef ir_gen_call_malloc(IrGenContext * ctx, LLVMValueRef size);
+static LLVMValueRef ir_gen_call_calloc(IrGenContext * ctx, LLVMValueRef size);
+static void ir_gen_call_free(IrGenContext * ctx, LLVMValueRef ptr);
+static LLVMValueRef ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr);
+
 // --- Context lifecycle ---
 
 IrGenContext *
@@ -3652,6 +3657,102 @@ ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
 
 // --- Top-level declaration codegen ---
 
+static void
+ir_gen_os_args_init(IrGenContext * ctx)
+{
+    // Find the os package in imports
+    ImportedPackage * os_pkg = NULL;
+    for (int i = 0; i < ctx->import_count; i++)
+    {
+        if (ctx->imports[i] && strcmp(ctx->imports[i]->package_name, "os") == 0)
+        {
+            os_pkg = ctx->imports[i];
+            break;
+        }
+    }
+    if (os_pkg == NULL || os_pkg->package_scope == NULL)
+        return;
+
+    symbol_t * args_sym = scope_find_symbol_entry(os_pkg->package_scope, "args");
+    if (args_sym == NULL || args_sym->value.value == NULL)
+        return;
+
+    LLVMValueRef os_args_global = args_sym->value.value;
+    if (!LLVMIsAGlobalVariable(os_args_global))
+        return;
+
+    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+
+    // 1. Load argc/argv from globals
+    LLVMValueRef argc_val = LLVMBuildLoad2(ctx->builder, i64t, ctx->odin_argc_global, "os.args.argc");
+    LLVMValueRef argv_val = LLVMBuildLoad2(ctx->builder, LLVMPointerType(i8ptr, 0), ctx->odin_argv_global, "os.args.argv");
+
+    // 2. Get string type = {i8*, i64}
+    TypeDescriptor const * str_td = get_basic_type_by_name(ctx->type_registry, "string");
+    if (str_td == NULL)
+        return;
+    LLVMTypeRef str_type = str_td->llvm_type;
+
+    // 3. Get slice type for []string
+    TypeDescriptor const * slice_td = get_or_create_slice_type(ctx->type_registry, str_td);
+    if (slice_td == NULL)
+        return;
+    LLVMTypeRef slice_type = slice_td->llvm_type;
+
+    // 4. Allocate backing array: malloc(argc * sizeof(string))
+    LLVMValueRef elem_size = LLVMConstInt(
+        i64t,
+        (long long)LLVMABISizeOfType(ctx->data_layout, str_type),
+        false
+    );
+    LLVMValueRef total_size = LLVMBuildMul(ctx->builder, argc_val, elem_size, "os.args.totalsize");
+    LLVMValueRef backing_raw = ir_gen_call_malloc(ctx, total_size);
+    LLVMValueRef backing = LLVMBuildPointerCast(ctx->builder, backing_raw, LLVMPointerType(str_type, 0), "os.args.backing");
+
+    // 5. Set up loop: for (i64 i = 0; i < argc; i++) { ... }
+    LLVMValueRef func = func_current_function(ctx);
+    LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "os.args.cond");
+    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "os.args.body");
+    LLVMBasicBlockRef inc_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "os.args.inc");
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "os.args.end");
+
+    // Init: i = 0
+    LLVMValueRef i_alloca = LLVMBuildAlloca(ctx->builder, i64t, "os.args.i");
+    LLVMBuildStore(ctx->builder, LLVMConstNull(i64t), i_alloca);
+    LLVMBuildBr(ctx->builder, cond_bb);
+
+    // Cond: i < argc
+    LLVMPositionBuilderAtEnd(ctx->builder, cond_bb);
+    LLVMValueRef i_val = LLVMBuildLoad2(ctx->builder, i64t, i_alloca, "os.args.i.val");
+    LLVMValueRef cond = LLVMBuildICmp(ctx->builder, LLVMIntSLT, i_val, argc_val, "os.args.cond");
+    LLVMBuildCondBr(ctx->builder, cond, body_bb, end_bb);
+
+    // Body: argv[i] → string{data, len}
+    LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
+    LLVMValueRef argv_i_ptr = LLVMBuildGEP2(ctx->builder, i8ptr, argv_val, &i_val, 1, "os.args.argv.i");
+    LLVMValueRef char_ptr = LLVMBuildLoad2(ctx->builder, i8ptr, argv_i_ptr, "os.args.char.ptr");
+    LLVMValueRef str_len = ir_gen_call_strlen(ctx, char_ptr);
+    LLVMValueRef str_val = LLVMBuildInsertValue(ctx->builder, LLVMGetUndef(str_type), char_ptr, 0, "os.args.str.0");
+    str_val = LLVMBuildInsertValue(ctx->builder, str_val, str_len, 1, "os.args.str.1");
+    LLVMValueRef backing_i_ptr = LLVMBuildGEP2(ctx->builder, str_type, backing, &i_val, 1, "os.args.backing.i");
+    LLVMBuildStore(ctx->builder, str_val, backing_i_ptr);
+    LLVMBuildBr(ctx->builder, inc_bb);
+
+    // Inc: i++
+    LLVMPositionBuilderAtEnd(ctx->builder, inc_bb);
+    LLVMValueRef one = LLVMConstInt(i64t, 1, false);
+    LLVMValueRef i_next = LLVMBuildAdd(ctx->builder, i_val, one, "os.args.i.next");
+    LLVMBuildStore(ctx->builder, i_next, i_alloca);
+    LLVMBuildBr(ctx->builder, cond_bb);
+
+    // End: build []string slice and store in os.args global
+    LLVMPositionBuilderAtEnd(ctx->builder, end_bb);
+    LLVMValueRef slice_val = LLVMBuildInsertValue(ctx->builder, LLVMGetUndef(slice_type), backing, 0, "os.args.slice.0");
+    slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, argc_val, 1, "os.args.slice.1");
+    LLVMBuildStore(ctx->builder, slice_val, os_args_global);
+}
+
 static LLVMValueRef
 ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -3729,6 +3830,11 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
             }
 
+            if (strcmp(func_name, "main") == 0)
+            {
+                ir_gen_os_args_init(ctx);
+            }
+
             if (body_node)
                 ir_gen_node(ctx, body_node);
             else
@@ -3799,6 +3905,7 @@ ir_gen_top_level_variable(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMTypeRef llvm_type = var_type->llvm_type;
         LLVMValueRef global = LLVMAddGlobal(ctx->module, llvm_type, name_node->text);
 
+        bool has_init = false;
         if (vi == 0)
         {
             if (node->list.count >= 3)
@@ -3808,7 +3915,10 @@ ir_gen_top_level_variable(IrGenContext * ctx, odin_grammar_node_t * node)
                 {
                     LLVMValueRef init_val = ir_gen_node(ctx, init_node);
                     if (init_val)
+                    {
                         LLVMSetInitializer(global, init_val);
+                        has_init = true;
+                    }
                 }
             }
             else if (node->list.count == 2)
@@ -3818,9 +3928,16 @@ ir_gen_top_level_variable(IrGenContext * ctx, odin_grammar_node_t * node)
                 {
                     LLVMValueRef init_val = ir_gen_node(ctx, second);
                     if (init_val)
+                    {
                         LLVMSetInitializer(global, init_val);
+                        has_init = true;
+                    }
                 }
             }
+        }
+        if (!has_init)
+        {
+            LLVMSetInitializer(global, LLVMConstNull(llvm_type));
         }
 
         TypedValue tv = create_typed_value(global, var_type, true);
@@ -4940,6 +5057,19 @@ ir_gen_call_calloc(IrGenContext * ctx, LLVMValueRef size)
     return LLVMBuildCall2(ctx->builder, calloc_type, calloc_fn, args, 2, "calloc");
 }
 
+static LLVMValueRef
+ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr)
+{
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef strlen_args[] = {i8ptr};
+    LLVMTypeRef strlen_type = LLVMFunctionType(LLVMInt64TypeInContext(ctx->context), strlen_args, 1, false);
+    LLVMValueRef strlen_fn = LLVMGetNamedFunction(ctx->module, "strlen");
+    if (strlen_fn == NULL)
+        strlen_fn = LLVMAddFunction(ctx->module, "strlen", strlen_type);
+    LLVMValueRef args[] = {str_ptr};
+    return LLVMBuildCall2(ctx->builder, strlen_type, strlen_fn, args, 1, "strlen");
+}
+
 // --- Main node dispatcher ---
 
 static LLVMValueRef
@@ -5993,6 +6123,17 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         generic_hash_table_iterate(pkg->package_scope->symbols.by_name, import_using_copy_symbol, current);
     }
 
+    // Create argc/argv globals for os.args init (needed before main AST is processed)
+    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef argv_llvm_type = LLVMPointerType(i8ptr, 0);
+
+    ctx->odin_argc_global = LLVMAddGlobal(ctx->module, i64t, "__odin_argc");
+    LLVMSetInitializer(ctx->odin_argc_global, LLVMConstInt(i64t, 0, false));
+
+    ctx->odin_argv_global = LLVMAddGlobal(ctx->module, argv_llvm_type, "__odin_argv");
+    LLVMSetInitializer(ctx->odin_argv_global, LLVMConstNull(argv_llvm_type));
+
     // Generate code for the main AST
     ir_gen_process_ast(ctx, ast);
 
@@ -6013,12 +6154,25 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         LLVMSetValueName(odin_main, "__odin_main");
         LLVMSetLinkage(odin_main, LLVMPrivateLinkage);
 
+        LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
         LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->context);
-        LLVMTypeRef main_type = LLVMFunctionType(i32t, NULL, 0, false);
+        LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+        LLVMTypeRef argv_llvm_type = LLVMPointerType(i8ptr, 0);
+
+        // C main(int argc, char** argv) — matches what the C runtime expects
+        LLVMTypeRef main_param_types[] = {i32t, argv_llvm_type};
+        LLVMTypeRef main_type = LLVMFunctionType(i32t, main_param_types, 2, false);
         LLVMValueRef c_main = LLVMAddFunction(ctx->module, "main", main_type);
 
         LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, c_main, "entry");
         LLVMPositionBuilderAtEnd(ctx->builder, entry);
+
+        // Store argc/argv to globals for Odin init code
+        LLVMValueRef argc_param = LLVMGetParam(c_main, 0);
+        LLVMValueRef argv_param = LLVMGetParam(c_main, 1);
+        LLVMValueRef argc_i64 = LLVMBuildZExt(ctx->builder, argc_param, i64t, "argc.ext");
+        LLVMBuildStore(ctx->builder, argc_i64, ctx->odin_argc_global);
+        LLVMBuildStore(ctx->builder, argv_param, ctx->odin_argv_global);
 
         TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
         LLVMValueRef context_ptr;
