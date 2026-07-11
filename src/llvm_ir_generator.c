@@ -2601,14 +2601,51 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     if (op_kind != OP_ASSIGN && compound_assign_to_binary_op(op_kind) == OP_INVALID)
         return NULL;
 
-    LLVMValueRef rhs_val = ir_gen_node(ctx, node->list.children[2]);
+    // Find operator index among children
+    int op_idx = -1;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        if (node->list.children[i] == op_node)
+        {
+            op_idx = (int)i;
+            break;
+        }
+    }
+    if (op_idx < 0 || (size_t)(op_idx + 1) >= node->list.count)
+        return NULL;
+
+    size_t lhs_count = (size_t)op_idx;
+    odin_grammar_node_t * rhs_node = node->list.children[op_idx + 1];
+
+    LLVMValueRef rhs_val = ir_gen_node(ctx, rhs_node);
     if (rhs_val == NULL)
         return NULL;
 
+    // Multi-return destructuring: fd, err = foo()
+    if (lhs_count > 1)
+    {
+        if (op_kind != OP_ASSIGN)
+            return NULL;
+
+        for (size_t i = 0; i < lhs_count; i++)
+        {
+            odin_grammar_node_t * lhs_child = node->list.children[i];
+            if (lhs_child == NULL)
+                continue;
+            LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, lhs_child);
+            if (lhs_ptr == NULL)
+                continue;
+            LLVMValueRef field_val = LLVMBuildExtractValue(ctx->builder, rhs_val, (unsigned)i, "assign.field");
+            LLVMBuildStore(ctx->builder, field_val, lhs_ptr);
+        }
+        return rhs_val;
+    }
+
+    // Single LHS assignment
     if (ir_gen_bit_field_write(ctx, node->list.children[0], rhs_val, op_kind))
         return rhs_val;
 
-    if (ir_gen_bit_set_assign_expr(ctx, node->list.children[0], node->list.children[2], rhs_val, op_kind))
+    if (ir_gen_bit_set_assign_expr(ctx, node->list.children[0], rhs_node, rhs_val, op_kind))
         return rhs_val;
 
     LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
@@ -2626,8 +2663,7 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
         && strcmp(lhs_type_desc->as.basic.name, "any") == 0)
     {
-        TypeDescriptor const * rhs_type
-            = (node->list.count > 2 && node->list.children[2]) ? node->list.children[2]->resolved_type : NULL;
+        TypeDescriptor const * rhs_type = rhs_node ? rhs_node->resolved_type : NULL;
         ir_gen_pack_any(ctx, lhs_ptr, rhs_val, lhs_type_desc->llvm_type, rhs_type);
         return rhs_val;
     }
@@ -3444,7 +3480,11 @@ ir_gen_is_runtime_intrinsic(IrGenContext * ctx, char const * func_name)
     return (strcmp(func_name, "print_string") == 0)
         || (strcmp(func_name, "print_byte") == 0)
         || (strcmp(func_name, "int_to_string") == 0)
-        || (strcmp(func_name, "os_exit") == 0);
+        || (strcmp(func_name, "os_exit") == 0)
+        || (strcmp(func_name, "sys_open") == 0)
+        || (strcmp(func_name, "sys_read") == 0)
+        || (strcmp(func_name, "sys_write") == 0)
+        || (strcmp(func_name, "sys_close") == 0);
 }
 
 static void
@@ -3652,6 +3692,122 @@ ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
         LLVMValueRef asm_args[2] = {syscall_no, code_val};
         LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, asm_args, 2, "");
         LLVMBuildUnreachable(ctx->builder);
+    }
+    else if (strcmp(func_name, "sys_write") == 0)
+    {
+        // Parameters: (context_ptr, fd: int, data: ^u8, count: int)
+        LLVMValueRef fd_param = LLVMGetParam(current_func, 1);
+        LLVMValueRef data_ptr = LLVMGetParam(current_func, 2);
+        LLVMValueRef count_val = LLVMGetParam(current_func, 3);
+
+        // Cast fd to i64 if needed
+        LLVMTypeRef fd_type_llvm = LLVMTypeOf(fd_param);
+        if (LLVMGetTypeKind(fd_type_llvm) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(fd_type_llvm) != 64)
+            fd_param = LLVMBuildIntCast2(ctx->builder, fd_param, i64_type, false, "sw.fd.ext");
+
+        // Cast count to i64 if needed
+        LLVMTypeRef count_type = LLVMTypeOf(count_val);
+        if (LLVMGetTypeKind(count_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(count_type) != 64)
+            count_val = LLVMBuildIntCast2(ctx->builder, count_val, i64_type, false, "sw.cnt.ext");
+
+        // Convert data pointer to i64 for syscall
+        LLVMValueRef buf_i64 = LLVMBuildPtrToInt(ctx->builder, data_ptr, i64_type, "sw.buf");
+
+        syscall_no = LLVMConstInt(i64_type, 1, false); // SYS_write
+        LLVMValueRef sw_asm_args[4] = {syscall_no, fd_param, buf_i64, count_val};
+        LLVMValueRef sw_result = LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, sw_asm_args, 4, "sw.result");
+        LLVMBuildRet(ctx->builder, sw_result);
+    }
+    else if (strcmp(func_name, "sys_close") == 0)
+    {
+        // Parameters: (context_ptr, fd: int)
+        // SYS_close = 3, only needs 2 asm args (rax, rdi)
+        LLVMValueRef fd_param = LLVMGetParam(current_func, 1);
+
+        LLVMTypeRef fd_type_llvm = LLVMTypeOf(fd_param);
+        if (LLVMGetTypeKind(fd_type_llvm) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(fd_type_llvm) != 64)
+            fd_param = LLVMBuildIntCast2(ctx->builder, fd_param, i64_type, false, "sc.fd.ext");
+
+        LLVMTypeRef asm_param_types_2[2] = {i64_type, i64_type};
+        LLVMTypeRef asm_ftype_2 = LLVMFunctionType(i64_type, asm_param_types_2, 2, false);
+        LLVMValueRef asm_val_2 = LLVMGetInlineAsm(
+            asm_ftype_2,
+            "syscall", 7,
+            "={rax},{rax},{rdi},~{rcx},~{r11}", 33,
+            true, false, LLVMInlineAsmDialectATT, false
+        );
+        syscall_no = LLVMConstInt(i64_type, 3, false); // SYS_close
+        LLVMValueRef sc_asm_args[2] = {syscall_no, fd_param};
+        LLVMValueRef sc_result = LLVMBuildCall2(ctx->builder, asm_ftype_2, asm_val_2, sc_asm_args, 2, "sc.result");
+        LLVMBuildRet(ctx->builder, sc_result);
+    }
+    else if (strcmp(func_name, "sys_open") == 0)
+    {
+        // Parameters: (context_ptr, path: string, flags: int, mode: int)
+        LLVMValueRef path_param = LLVMGetParam(current_func, 1);
+        LLVMValueRef flags_param = LLVMGetParam(current_func, 2);
+        LLVMValueRef mode_param = LLVMGetParam(current_func, 3);
+
+        // Cast flags and mode to i64 if needed
+        LLVMTypeRef flags_type = LLVMTypeOf(flags_param);
+        if (LLVMGetTypeKind(flags_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(flags_type) != 64)
+            flags_param = LLVMBuildIntCast2(ctx->builder, flags_param, i64_type, false, "so.flags.ext");
+        LLVMTypeRef mode_type = LLVMTypeOf(mode_param);
+        if (LLVMGetTypeKind(mode_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(mode_type) != 64)
+            mode_param = LLVMBuildIntCast2(ctx->builder, mode_param, i64_type, false, "so.mode.ext");
+
+        // Extract data pointer and length from string struct
+        LLVMValueRef path_data = LLVMBuildExtractValue(ctx->builder, path_param, 0, "so.data");
+        LLVMValueRef path_len = LLVMBuildExtractValue(ctx->builder, path_param, 1, "so.len");
+
+        // Allocate [4096 x i8] stack buffer for null-terminated cstring copy
+        LLVMValueRef buf_a = LLVMBuildAlloca(ctx->builder, LLVMArrayType(i8_type, 4096), "so.buf");
+        LLVMValueRef buf_p = LLVMBuildBitCast(ctx->builder, buf_a, LLVMPointerType(i8_type, 0), "so.bp");
+
+        // copy_len = min(path_len, 4095) to leave room for null terminator
+        LLVMValueRef max_len = LLVMConstInt(i64_type, 4095, false);
+        LLVMValueRef copy_len_gt = LLVMBuildICmp(ctx->builder, LLVMIntUGT, path_len, max_len, "so.cmp");
+        LLVMValueRef copy_len = LLVMBuildSelect(ctx->builder, copy_len_gt, max_len, path_len, "so.clen");
+
+        // Memcpy path data to stack buffer (alignment 1 = byte-aligned)
+        LLVMBuildMemCpy(ctx->builder, buf_p, 1, path_data, 1, copy_len);
+
+        // buf_p[copy_len] = 0 (null terminator)
+        LLVMValueRef null_pos = LLVMBuildInBoundsGEP2(ctx->builder, i8_type, buf_p, &copy_len, 1, "so.nullp");
+        LLVMBuildStore(ctx->builder, LLVMConstInt(i8_type, 0, false), null_pos);
+
+        // Convert buffer pointer to i64 for syscall
+        LLVMValueRef buf_i64 = LLVMBuildPtrToInt(ctx->builder, buf_p, i64_type, "so.bufi");
+
+        syscall_no = LLVMConstInt(i64_type, 2, false); // SYS_open
+        LLVMValueRef so_asm_args[4] = {syscall_no, buf_i64, flags_param, mode_param};
+        LLVMValueRef so_result = LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, so_asm_args, 4, "so.result");
+        LLVMBuildRet(ctx->builder, so_result);
+    }
+    else if (strcmp(func_name, "sys_read") == 0)
+    {
+        // Parameters: (context_ptr, fd: int, data: ^u8, count: int)
+        LLVMValueRef fd_param = LLVMGetParam(current_func, 1);
+        LLVMValueRef data_ptr = LLVMGetParam(current_func, 2);
+        LLVMValueRef count_val = LLVMGetParam(current_func, 3);
+
+        // Cast fd to i64 if needed
+        LLVMTypeRef fd_type_llvm = LLVMTypeOf(fd_param);
+        if (LLVMGetTypeKind(fd_type_llvm) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(fd_type_llvm) != 64)
+            fd_param = LLVMBuildIntCast2(ctx->builder, fd_param, i64_type, false, "sr.fd.ext");
+
+        // Cast count to i64 if needed
+        LLVMTypeRef count_type = LLVMTypeOf(count_val);
+        if (LLVMGetTypeKind(count_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(count_type) != 64)
+            count_val = LLVMBuildIntCast2(ctx->builder, count_val, i64_type, false, "sr.cnt.ext");
+
+        // Convert data pointer to i64 for syscall
+        LLVMValueRef buf_i64 = LLVMBuildPtrToInt(ctx->builder, data_ptr, i64_type, "sr.buf");
+
+        syscall_no = LLVMConstInt(i64_type, 0, false); // SYS_read
+        LLVMValueRef sr_asm_args[4] = {syscall_no, fd_param, buf_i64, count_val};
+        LLVMValueRef sr_result = LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, sr_asm_args, 4, "sr.result");
+        LLVMBuildRet(ctx->builder, sr_result);
     }
 }
 
@@ -4104,7 +4260,8 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     if (node->list.count < 2)
         return val;
     odin_grammar_node_t * postfix_ops = node->list.children[1];
-    if (postfix_ops == NULL || postfix_ops->type != AST_NODE_POSTFIX_OPS)
+    // No actual postfix operations — return the base value as-is
+    if (postfix_ops == NULL || postfix_ops->type != AST_NODE_POSTFIX_OPS || postfix_ops->list.count == 0)
         return val;
 
     odin_grammar_node_t * pe_child = node->list.children[0];

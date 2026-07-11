@@ -476,7 +476,7 @@ BreakStatement = KwBreak @AST_ACTION_BREAK_STATEMENT;
 ContinueStatement = KwContinue @AST_ACTION_CONTINUE_STATEMENT;
 FallthroughStatement = KwFallthrough @AST_ACTION_FALLTHROUGH_STATEMENT;
 
-AssignStatement = Expression (AssignOp | ColonAssign) Expression @AST_ACTION_ASSIGN_STATEMENT;
+AssignStatement = SuffixExpression (Comma SuffixExpression)* (AssignOp | ColonAssign) Expression @AST_ACTION_ASSIGN_STATEMENT;
 ExpressionStatement = Expression @AST_ACTION_EXPRESSION_STATEMENT;
 
 ProcBody = CompoundStatement | TripleDash;
