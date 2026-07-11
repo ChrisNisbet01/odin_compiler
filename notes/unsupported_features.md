@@ -9,6 +9,23 @@ Features present in the official Odin language that our compiler does not yet su
 - **`printf %d/%x` with unsigned types**: Delegated `%d` and `%x` to `print_value` in stubs `fmt.odin` (handles all integer types uniformly).
 - **Extended `core:fmt` variants**: Added `printfln`, `eprintln`, `eprintf`, `eprintfln` to `stubs/core/fmt/fmt.odin`. Each is a standalone copy (no `..args` forwarding, no `[]any` param delegation — both unsupported). Tested via `test_fmt_more.odin`.
 
+## Noted during file I/O implementation
+
+### Slice expression syntax — `arr[low:high]`, `arr[:]`
+The grammar lacks proper slice subscript syntax. `sys_read`/`sys_write` use `(data: ^u8, count: int)` instead of `(data: []byte)` because `arr[low:high]` and `arr[:]` aren't parsed. PostfixSlice rules exist in the grammar but may need debugging.
+
+### Type alias `::` declaration — `Handle :: int`
+`ConstantDecl = Identifier :: (ProcedureLiteral | Expression)` doesn't accept type names as the RHS (e.g., `Handle :: int` fails). Type aliases require a separate grammar construct or extending `Expression` to include type names.
+
+### Bitwise OR constant folding — `flags | flags`
+Compile-time bitwise OR between integer constants is not folded. Workaround: manually compute the combined value (e.g., `577` instead of `os.O_WRONLY | os.O_CREAT | os.O_TRUNC`).
+
+### Octal literal syntax — `0o644`
+The `0o644` octal prefix syntax is not implemented. Workaround: use decimal (`420` for `0o644`).
+
+### `[]` array slices not parseable
+Full-slice syntax (`arr[:]`) and sub-slice syntax (`arr[low:high]`) are not implemented in the grammar/parser. This affects any API that takes `[]byte` or similar slice parameters where you need to pass a sub-range of an array.
+
 ## Low Complexity
 
 ### `#caller_location` — Built-in caller location parameter

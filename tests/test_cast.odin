@@ -36,12 +36,12 @@ main :: proc() {
         result = result + 8
     }
 
-    // pointer -> int
+    // pointer -> uintptr roundtrip (verify pointer survives int conversion)
     m: int = 123
     n: ^int = &m
-    o: int = cast(int) n
-
-    if o != 123 {
+    addr: uintptr = cast(uintptr) n
+    p: ^int = cast(^int) addr
+    if p != n {
         result = result + 16
     }
 
