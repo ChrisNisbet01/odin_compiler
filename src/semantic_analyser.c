@@ -154,7 +154,19 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
         case AST_NODE_SHIFT_EXPRESSION:
         case AST_NODE_LOG_AND_EXPRESSION:
         case AST_NODE_LOG_OR_EXPRESSION:
+        case AST_NODE_IDENTIFIER:
             can_eval = 1;
+            break;
+        case AST_NODE_POSTFIX_EXPRESSION:
+            // Don't unwrap if it has postfix member (e.g. os.O_WRONLY) — evaluate it
+            if (node->list.count >= 2 && node->list.children[1] != NULL)
+            {
+                odin_grammar_node_t * postfix_ops = node->list.children[1];
+                if (postfix_ops->list.count > 0
+                    && postfix_ops->list.children[0] != NULL
+                    && postfix_ops->list.children[0]->type == AST_NODE_POSTFIX_MEMBER)
+                    can_eval = 1;
+            }
             break;
         default:
             break;
@@ -173,6 +185,57 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
         *ok = 1; return 1;
     case AST_NODE_BOOL_FALSE:
         *ok = 1; return 0;
+
+    case AST_NODE_IDENTIFIER:
+    {
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
+        if (sym != NULL && sym->has_const_int_val)
+        {
+            *ok = 1;
+            return sym->const_int_val;
+        }
+        *ok = 0;
+        return 0;
+    }
+
+    case AST_NODE_POSTFIX_EXPRESSION:
+    {
+        // Package-qualified constant: e.g. os.O_WRONLY
+        if (node->list.count < 2 || node->list.children[0] == NULL || node->list.children[1] == NULL)
+        { *ok = 0; return 0; }
+
+        odin_grammar_node_t * inner = node->list.children[0];
+        // Unwrap to identifier
+        while (inner != NULL && inner->type != AST_NODE_IDENTIFIER && inner->list.count >= 1)
+            inner = inner->list.children[0];
+        if (inner == NULL || inner->type != AST_NODE_IDENTIFIER)
+        { *ok = 0; return 0; }
+
+        ImportedPackage * pkg = find_imported_package_by_name(ctx, inner->text);
+        if (pkg == NULL || pkg->package_scope == NULL)
+        { *ok = 0; return 0; }
+
+        odin_grammar_node_t * postfix_ops = node->list.children[1];
+        if (postfix_ops == NULL || postfix_ops->list.count == 0)
+        { *ok = 0; return 0; }
+
+        odin_grammar_node_t * member_op = postfix_ops->list.children[0];
+        if (member_op == NULL || member_op->type != AST_NODE_POSTFIX_MEMBER)
+        { *ok = 0; return 0; }
+
+        if (member_op->list.count < 1 || member_op->list.children[0] == NULL)
+        { *ok = 0; return 0; }
+
+        char const * member_name = member_op->list.children[0]->text;
+        symbol_t * sym = scope_find_symbol_entry(pkg->package_scope, member_name);
+        if (sym != NULL && sym->has_const_int_val)
+        {
+            *ok = 1;
+            return sym->const_int_val;
+        }
+        *ok = 0;
+        return 0;
+    }
 
     case AST_NODE_INTEGER_VALUE:
     {
@@ -2983,6 +3046,22 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         TypedValue tv = create_typed_value(NULL, resolved_type, false);
         scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
         sem_set_symbol_private(generator_current_scope(ctx->gen_ctx), name_node->text, is_private);
+
+        // Try to evaluate as a compile-time integer constant
+        if (value_node != NULL && value_node->type != AST_NODE_PROCEDURE_LITERAL)
+        {
+            int const_ok = 0;
+            long long const_val = sem_evaluate_constant_int(ctx, value_node, &const_ok);
+            if (const_ok)
+            {
+                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+                if (sym)
+                {
+                    sym->const_int_val = const_val;
+                    sym->has_const_int_val = true;
+                }
+            }
+        }
     }
     else if (name_node->type == AST_NODE_IDENTIFIER_LIST)
     {
@@ -3026,6 +3105,15 @@ import_using_copy_symbol(void * value, void * user_data)
     if (sym == NULL || sym->name == NULL || target_scope == NULL || sym->is_private)
         return;
     scope_add_symbol(target_scope, sym->name, sym->value);
+    if (sym->has_const_int_val)
+    {
+        symbol_t * copy = scope_find_symbol_entry(target_scope, sym->name);
+        if (copy)
+        {
+            copy->const_int_val = sym->const_int_val;
+            copy->has_const_int_val = true;
+        }
+    }
 }
 
 static bool

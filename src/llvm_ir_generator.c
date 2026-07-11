@@ -6085,14 +6085,14 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
 // --- When declaration helpers ---
 
-static int
-ir_gen_evaluate_constant_bool(odin_grammar_node_t * node)
+static int ir_gen_evaluate_constant_bool(IrGenContext * ctx, odin_grammar_node_t * node);
+
+static long long
+ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int * ok)
 {
-    if (node == NULL)
-        return -1;
+    if (node == NULL) { *ok = 0; return 0; }
+
     // Unwrap through expression chain to reach a node type we can evaluate
-    // Most expression wrappers store the inner expression in child[0];
-    // POSTFIX_EXPRESSION has [operand, postfix_ops] so use child[0] too.
     while (1)
     {
         int can_eval = 0;
@@ -6103,7 +6103,26 @@ ir_gen_evaluate_constant_bool(odin_grammar_node_t * node)
         case AST_NODE_INTEGER_VALUE:
         case AST_NODE_UNARY_EXPRESSION:
         case AST_NODE_COMP_EXPRESSION:
+        case AST_NODE_ADD_EXPRESSION:
+        case AST_NODE_MUL_EXPRESSION:
+        case AST_NODE_BIT_AND_EXPRESSION:
+        case AST_NODE_BIT_XOR_EXPRESSION:
+        case AST_NODE_BIT_OR_EXPRESSION:
+        case AST_NODE_SHIFT_EXPRESSION:
+        case AST_NODE_LOG_AND_EXPRESSION:
+        case AST_NODE_LOG_OR_EXPRESSION:
+        case AST_NODE_IDENTIFIER:
             can_eval = 1;
+            break;
+        case AST_NODE_POSTFIX_EXPRESSION:
+            if (node->list.count >= 2 && node->list.children[1] != NULL)
+            {
+                odin_grammar_node_t * postfix_ops = node->list.children[1];
+                if (postfix_ops->list.count > 0
+                    && postfix_ops->list.children[0] != NULL
+                    && postfix_ops->list.children[0]->type == AST_NODE_POSTFIX_MEMBER)
+                    can_eval = 1;
+            }
             break;
         default:
             break;
@@ -6113,27 +6132,172 @@ ir_gen_evaluate_constant_bool(odin_grammar_node_t * node)
         if ((node->type == AST_NODE_POSTFIX_EXPRESSION || node->list.count == 1) && node->list.children[0])
             node = node->list.children[0];
         else
-            break;
+            { *ok = 0; return 0; }
     }
+
     switch (node->type)
     {
     case AST_NODE_BOOL_TRUE:
-        return 1;
+        *ok = 1; return 1;
     case AST_NODE_BOOL_FALSE:
+        *ok = 1; return 0;
+
+    case AST_NODE_IDENTIFIER:
+    {
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
+        if (sym != NULL && sym->has_const_int_val)
+        {
+            *ok = 1;
+            return sym->const_int_val;
+        }
+        *ok = 0;
         return 0;
+    }
+
+    case AST_NODE_POSTFIX_EXPRESSION:
+    {
+        if (node->list.count < 2 || node->list.children[0] == NULL || node->list.children[1] == NULL)
+        { *ok = 0; return 0; }
+
+        odin_grammar_node_t * inner = node->list.children[0];
+        while (inner != NULL && inner->type != AST_NODE_IDENTIFIER && inner->list.count >= 1)
+            inner = inner->list.children[0];
+        if (inner == NULL || inner->type != AST_NODE_IDENTIFIER)
+        { *ok = 0; return 0; }
+
+        ImportedPackage * pkg = NULL;
+        for (int i = 0; i < ctx->import_count; i++)
+        {
+            if (ctx->imports[i] && ctx->imports[i]->package_name
+                && strcmp(ctx->imports[i]->package_name, inner->text) == 0)
+            {
+                pkg = ctx->imports[i];
+                break;
+            }
+        }
+        if (pkg == NULL || pkg->package_scope == NULL)
+        { *ok = 0; return 0; }
+
+        odin_grammar_node_t * postfix_ops = node->list.children[1];
+        if (postfix_ops == NULL || postfix_ops->list.count == 0)
+        { *ok = 0; return 0; }
+
+        odin_grammar_node_t * member_op = postfix_ops->list.children[0];
+        if (member_op == NULL || member_op->type != AST_NODE_POSTFIX_MEMBER)
+        { *ok = 0; return 0; }
+
+        if (member_op->list.count < 1 || member_op->list.children[0] == NULL)
+        { *ok = 0; return 0; }
+
+        char const * member_name = member_op->list.children[0]->text;
+        symbol_t * sym = scope_find_symbol_entry(pkg->package_scope, member_name);
+        if (sym != NULL && sym->has_const_int_val)
+        {
+            *ok = 1;
+            return sym->const_int_val;
+        }
+        *ok = 0;
+        return 0;
+    }
+
     case AST_NODE_INTEGER_VALUE:
     {
-        if (node->text == NULL)
-            return -1;
+        if (node->text == NULL) { *ok = 0; return 0; }
         char * end = NULL;
         long long val = parse_odin_signed(node->text, &end, 0);
-        if (end == node->text)
-            return -1;
-        return (val != 0) ? 1 : 0;
+        if (end == node->text) { *ok = 0; return 0; }
+        *ok = 1;
+        return val;
     }
+
+    case AST_NODE_UNARY_EXPRESSION:
+    {
+        odin_grammar_node_t * op_node = node_find_op(node);
+        if (op_node == NULL) { *ok = 0; return 0; }
+        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
+        if (md == NULL) { *ok = 0; return 0; }
+
+        odin_grammar_node_t * operand = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child != NULL && child != op_node) { operand = child; break; }
+        }
+        if (operand == NULL) { *ok = 0; return 0; }
+
+        int inner_ok = 0;
+        long long inner_val = ir_gen_evaluate_constant_int(ctx, operand, &inner_ok);
+        if (!inner_ok) { *ok = 0; return 0; }
+
+        switch (md->kind)
+        {
+        case OP_UNARY_NEG: *ok = 1; return -inner_val;
+        case OP_UNARY_POS: *ok = 1; return inner_val;
+        case OP_UNARY_XOR: *ok = 1; return ~inner_val;
+        case OP_UNARY_NOT: *ok = 1; return inner_val ? 0 : 1;
+        default: *ok = 0; return 0;
+        }
+    }
+
+    case AST_NODE_ADD_EXPRESSION:
+    case AST_NODE_MUL_EXPRESSION:
+    case AST_NODE_BIT_AND_EXPRESSION:
+    case AST_NODE_BIT_XOR_EXPRESSION:
+    case AST_NODE_BIT_OR_EXPRESSION:
+    case AST_NODE_SHIFT_EXPRESSION:
+    case AST_NODE_COMP_EXPRESSION:
+    case AST_NODE_LOG_AND_EXPRESSION:
+    case AST_NODE_LOG_OR_EXPRESSION:
+    {
+        odin_grammar_node_t * op_node = node_find_op(node);
+        if (op_node == NULL) { *ok = 0; return 0; }
+        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
+        if (md == NULL) { *ok = 0; return 0; }
+        if (node->list.count < 3) { *ok = 0; return 0; }
+
+        int lhs_ok = 0, rhs_ok = 0;
+        long long lhs_val = ir_gen_evaluate_constant_int(ctx, node->list.children[0], &lhs_ok);
+        long long rhs_val = ir_gen_evaluate_constant_int(ctx, node->list.children[node->list.count - 1], &rhs_ok);
+        if (!lhs_ok || !rhs_ok) { *ok = 0; return 0; }
+
+        switch (md->kind)
+        {
+        case OP_ADD: *ok = 1; return lhs_val + rhs_val;
+        case OP_SUB: *ok = 1; return lhs_val - rhs_val;
+        case OP_MUL: *ok = 1; return lhs_val * rhs_val;
+        case OP_DIV: if (rhs_val == 0) { *ok = 0; return 0; } *ok = 1; return lhs_val / rhs_val;
+        case OP_MOD: if (rhs_val == 0) { *ok = 0; return 0; } *ok = 1; return lhs_val % rhs_val;
+        case OP_SHL: *ok = 1; return lhs_val << rhs_val;
+        case OP_SHR: *ok = 1; return lhs_val >> rhs_val;
+        case OP_BIT_AND: *ok = 1; return lhs_val & rhs_val;
+        case OP_BIT_OR:  *ok = 1; return lhs_val | rhs_val;
+        case OP_BIT_XOR: *ok = 1; return lhs_val ^ rhs_val;
+        case OP_EQ: *ok = 1; return (lhs_val == rhs_val) ? 1 : 0;
+        case OP_NE: *ok = 1; return (lhs_val != rhs_val) ? 1 : 0;
+        case OP_LT: *ok = 1; return (lhs_val < rhs_val) ? 1 : 0;
+        case OP_GT: *ok = 1; return (lhs_val > rhs_val) ? 1 : 0;
+        case OP_LE: *ok = 1; return (lhs_val <= rhs_val) ? 1 : 0;
+        case OP_GE: *ok = 1; return (lhs_val >= rhs_val) ? 1 : 0;
+        default: *ok = 0; return 0;
+        }
+    }
+
     default:
-        return -1;
+        *ok = 0;
+        return 0;
     }
+}
+
+static int
+ir_gen_evaluate_constant_bool(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node == NULL)
+        return -1;
+    int ok = 0;
+    long long val = ir_gen_evaluate_constant_int(ctx, node, &ok);
+    if (!ok)
+        return -1;
+    return (val != 0) ? 1 : 0;
 }
 
 static void
@@ -6205,7 +6369,7 @@ ir_gen_process_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * top_decl
                     ir_gen_when_body(ctx, wc);
                 break;
             }
-            int cond = ir_gen_evaluate_constant_bool(wc);
+            int cond = ir_gen_evaluate_constant_bool(ctx, wc);
             k++;
             if (cond == 1 && !matched)
             {
@@ -6245,6 +6409,15 @@ import_using_copy_symbol(void * value, void * user_data)
     if (sym == NULL || sym->name == NULL || target_scope == NULL || sym->is_private)
         return;
     scope_add_symbol(target_scope, sym->name, sym->value);
+    if (sym->has_const_int_val)
+    {
+        symbol_t * copy = scope_find_symbol_entry(target_scope, sym->name);
+        if (copy)
+        {
+            copy->const_int_val = sym->const_int_val;
+            copy->has_const_int_val = true;
+        }
+    }
 }
 
 bool

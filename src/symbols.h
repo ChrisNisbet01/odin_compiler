@@ -16,4 +16,6 @@ typedef struct symbol
     SymbolKind kind;
     TypedValue value;
     bool is_private;
+    long long const_int_val;
+    bool has_const_int_val;
 } symbol_t;

@@ -25,8 +25,6 @@ Attribute to skip bounds checks on array/slice subscript. Grammar accepts `#no_b
 
 ### `#partial switch` — Partial exhaustiveness ✅ GRAMMAR DONE
 Switch without the default exhaustiveness check. Grammar accepts `switch #partial`. No-op at semantic level (exhaustiveness checking not yet implemented).
-
-### Bitwise OR constant folding — `flags | flags`
 Compile-time bitwise OR between integer constants is not evaluated. Workaround: manually compute the combined value (e.g., `577` instead of `os.O_WRONLY | os.O_CREAT | os.O_TRUNC`). Contained addition to the compile-time evaluation path.
 
 ## Medium Complexity
@@ -121,3 +119,4 @@ The following features were previously listed as unsupported but are now impleme
 - `"contextless"` calling convention (IR gen correctly skips context parameter prepend/inject)
 - `odinc run` command (compile, link, and execute in one step)
 - Octal literal syntax (`0o644`, `0o777`, etc.)
+- Bitwise OR constant folding (`os.O_WRONLY | os.O_CREAT | os.O_TRUNC`) — compile-time evaluation of named constants in `when` conditions and constant declarations
