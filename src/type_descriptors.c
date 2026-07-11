@@ -30,6 +30,7 @@ struct TypeDescriptors
 
     TypeDescriptor * context_type;
     TypeDescriptor * allocator_type;
+    TypeDescriptor * source_location_type;
 };
 
 static TypeDescriptor *
@@ -643,6 +644,34 @@ register_builtin_context_types(TypeDescriptors * registry)
 
     registry->context_type = (TypeDescriptor *)register_struct_type(registry, context_llvm, true, &context_members);
     free(context_members.fields);
+
+    // Source_Location struct: { file: string, line: int, column: int }
+    TypeDescriptor const * str_type = get_basic_type_by_name(registry, "string");
+    TypeDescriptor const * int_type = get_basic_type_by_name(registry, "int");
+    if (str_type == NULL) str_type = registry->ptr_type;
+    if (int_type == NULL) int_type = registry->i64_type;
+
+    LLVMTypeRef sl_fields[3];
+    sl_fields[0] = str_type->llvm_type;
+    sl_fields[1] = int_type->llvm_type;
+    sl_fields[2] = int_type->llvm_type;
+    LLVMTypeRef sl_llvm = LLVMStructTypeInContext(registry->context, sl_fields, 3, false);
+
+    struct_or_union_members_st sl_members;
+    sl_members.count = 3;
+    sl_members.fields = malloc(3 * sizeof(struct_field_t));
+    sl_members.fields[0].name = "file";
+    sl_members.fields[0].type_desc = str_type;
+    sl_members.fields[0].is_using = false;
+    sl_members.fields[1].name = "line";
+    sl_members.fields[1].type_desc = int_type;
+    sl_members.fields[1].is_using = false;
+    sl_members.fields[2].name = "column";
+    sl_members.fields[2].type_desc = int_type;
+    sl_members.fields[2].is_using = false;
+
+    registry->source_location_type = (TypeDescriptor *)register_struct_type(registry, sl_llvm, true, &sl_members);
+    free(sl_members.fields);
 }
 
 TypeDescriptor const *
@@ -1263,6 +1292,12 @@ TypeDescriptor const *
 type_descriptor_get_context_type(TypeDescriptors * registry)
 {
     return registry->context_type;
+}
+
+TypeDescriptor const *
+type_descriptor_get_source_location_type(TypeDescriptors * registry)
+{
+    return registry->source_location_type;
 }
 
 TypeDescriptor const *

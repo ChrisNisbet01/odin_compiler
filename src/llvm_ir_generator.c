@@ -6037,6 +6037,54 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_DIRECTIVE_WITH_ARGS:
     case AST_NODE_DIRECTIVE:
+        // #caller_location — emit Source_Location struct constant
+        if (node->text != NULL && strstr(node->text, "#caller_location") != NULL)
+        {
+            TypeDescriptor const * sl_type = node->resolved_type;
+            if (sl_type == NULL || sl_type->kind != TD_KIND_STRUCT)
+            {
+                ir_gen_error_collection_add(&ctx->errors, NULL, node, "#caller_location: unresolved type");
+                return NULL;
+            }
+
+            char const * file = node->file_path ? node->file_path : "<unknown>";
+            size_t line = node->source_data.view.line_number;
+            size_t col = node->source_data.view.column_number;
+
+            // Build string constant for file path
+            LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
+            size_t file_len = strlen(file);
+            size_t arr_len = file_len + 1;
+            LLVMValueRef * elements = malloc(arr_len * sizeof(LLVMValueRef));
+            for (size_t i = 0; i < file_len; i++)
+                elements[i] = LLVMConstInt(i8_type, (unsigned char)file[i], false);
+            elements[file_len] = LLVMConstInt(i8_type, 0, false);
+            LLVMTypeRef arr_type = LLVMArrayType(i8_type, arr_len);
+            LLVMValueRef arr_const = LLVMConstArray(i8_type, elements, arr_len);
+            free(elements);
+
+            LLVMValueRef global = LLVMAddGlobal(ctx->module, arr_type, ".loc_file");
+            LLVMSetInitializer(global, arr_const);
+            LLVMSetLinkage(global, LLVMPrivateLinkage);
+            LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
+            LLVMSetGlobalConstant(global, true);
+
+            LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+            LLVMValueRef indices[] = {zero, zero};
+            LLVMValueRef ptr = LLVMConstInBoundsGEP2(arr_type, global, indices, 2);
+
+            TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
+            LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : LLVMStructType(NULL, 0, false);
+            LLVMValueRef len_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)file_len, false);
+            LLVMValueRef file_with_len[] = {ptr, len_val};
+            LLVMValueRef file_val = LLVMConstNamedStruct(str_type, file_with_len, 2);
+
+            LLVMValueRef line_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)line, false);
+            LLVMValueRef col_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)col, false);
+
+            LLVMValueRef struct_vals[] = {file_val, line_val, col_val};
+            return LLVMConstNamedStruct(sl_type->llvm_type, struct_vals, 3);
+        }
         return NULL;
 
     case AST_NODE_WHERE_CLAUSE:

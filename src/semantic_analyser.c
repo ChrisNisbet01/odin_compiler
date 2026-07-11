@@ -1846,6 +1846,23 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
+    case AST_NODE_DIRECTIVE:
+    {
+        // #caller_location — returns Source_Location struct
+        if (node->text != NULL && strstr(node->text, "#caller_location") != NULL)
+        {
+            TypeDescriptor const * sl_type = type_descriptor_get_source_location_type(ctx->type_registry);
+            if (sl_type != NULL)
+            {
+                node->resolved_type = (TypeDescriptor *)sl_type;
+                return sl_type;
+            }
+            sem_error_list_add(&ctx->errors, NULL, node, "#caller_location: Source_Location type not available");
+            return NULL;
+        }
+        return NULL;
+    }
+
     case AST_NODE_CONTEXT_EXPR:
     {
         symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");

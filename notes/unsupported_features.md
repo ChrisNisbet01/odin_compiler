@@ -11,9 +11,6 @@ Features present in the official Odin language that our compiler does not yet su
 
 ## Low Complexity
 
-### `#caller_location` — Built-in caller location parameter
-Injects source location (`file:line:col`) as an implicit proc parameter. Similar mechanism to context threading.
-
 ### `#assert[expr]` compile-time assertions
 Basic support exists (evaluates condition, errors on false). May be incomplete for complex expressions.
 
@@ -120,3 +117,4 @@ The following features were previously listed as unsupported but are now impleme
 - `odinc run` command (compile, link, and execute in one step)
 - Octal literal syntax (`0o644`, `0o777`, etc.)
 - Bitwise OR constant folding (`os.O_WRONLY | os.O_CREAT | os.O_TRUNC`) — compile-time evaluation of named constants in `when` conditions and constant declarations
+- `#caller_location` — returns `Source_Location` struct (`file`, `line`, `column`) with the source location of the expression
