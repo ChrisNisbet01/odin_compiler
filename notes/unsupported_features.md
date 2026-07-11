@@ -26,9 +26,6 @@ Attribute to skip bounds checks on array/slice subscript. Grammar accepts `#no_b
 ### `#partial switch` — Partial exhaustiveness ✅ GRAMMAR DONE
 Switch without the default exhaustiveness check. Grammar accepts `switch #partial`. No-op at semantic level (exhaustiveness checking not yet implemented).
 
-### Octal literal syntax — `0o644`
-The `0o644` octal prefix syntax is not recognized by the lexer. Workaround: use decimal (`420` for `0o644`). Pure lexer change — add `0o` prefix handling in integer literal scanning.
-
 ### Bitwise OR constant folding — `flags | flags`
 Compile-time bitwise OR between integer constants is not evaluated. Workaround: manually compute the combined value (e.g., `577` instead of `os.O_WRONLY | os.O_CREAT | os.O_TRUNC`). Contained addition to the compile-time evaluation path.
 
@@ -39,9 +36,6 @@ Returns a pointer to the type descriptor at runtime. Requires generating type in
 
 ### `distinct` type creation
 Parsed but semantically transparent (doesn't create a new type). Need `get_or_create_distinct_type` that allocates a separate descriptor, and enforce type distinctness in assignment/equality.
-
-### `#soa[]` SOA slice syntax (no brackets / no size)
-`struct #soa { ... }` works (slice-backed SOA), but the bare `#[soa]` directive without `[N]` doesn't parse. Grammar needs `#soa` as a standalone directive.
 
 ### `#align` struct alignment
 Used to override struct/field alignment. Need to parse the alignment value and pass it to LLVM's struct layout.
@@ -126,3 +120,4 @@ The following features were previously listed as unsupported but are now impleme
 - Inline syscall IR generation for runtime intrinsics (SYS_write, SYS_exit)
 - `"contextless"` calling convention (IR gen correctly skips context parameter prepend/inject)
 - `odinc run` command (compile, link, and execute in one step)
+- Octal literal syntax (`0o644`, `0o777`, etc.)

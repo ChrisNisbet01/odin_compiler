@@ -178,7 +178,7 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
     {
         if (node->text == NULL) { *ok = 0; return 0; }
         char * end = NULL;
-        long long val = strtoll(node->text, &end, 0);
+        long long val = parse_odin_signed(node->text, &end, 0);
         if (end == node->text) { *ok = 0; return 0; }
         *ok = 1;
         return val;
@@ -347,7 +347,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         size_t count = 0;
         if (size_node && size_node->text)
         {
-            count = (size_t)strtoull(size_node->text, NULL, 0);
+            count = (size_t)parse_odin_unsigned(size_node->text, NULL, 0);
         }
 
         TypeDescriptor const * arr_type = get_or_create_array_type(ctx->type_registry, elem_type, count);
@@ -595,8 +595,8 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                 return NULL;
 
             char * endptr = NULL;
-            unsigned long long low_val = strtoull(int_vals[0]->text, &endptr, 0);
-            unsigned long long high_val = strtoull(int_vals[1]->text, &endptr, 0);
+            unsigned long long low_val = parse_odin_unsigned(int_vals[0]->text, &endptr, 0);
+            unsigned long long high_val = parse_odin_unsigned(int_vals[1]->text, &endptr, 0);
 
             // Determine inclusive/exclusive from captured text
             bool is_inclusive = true;
@@ -1262,7 +1262,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
 
         char * end = NULL;
-        unsigned long long count_val = strtoull(eval_node->text, &end, 0);
+        unsigned long long count_val = parse_odin_unsigned(eval_node->text, &end, 0);
         if (end == eval_node->text || count_val == 0)
         {
             sem_error_list_add(&ctx->errors, NULL, count_expr, "#soa[N] requires a positive integer");

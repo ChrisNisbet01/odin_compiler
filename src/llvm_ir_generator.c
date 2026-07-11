@@ -253,7 +253,7 @@ ir_gen_integer_value(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMTypeRef llvm_type = type_desc ? type_desc->llvm_type : LLVMInt64TypeInContext(ctx->context);
 
     char * endptr = NULL;
-    unsigned long long val = strtoull(node->text, &endptr, 0);
+    unsigned long long val = parse_odin_unsigned(node->text, &endptr, 0);
     return LLVMConstInt(llvm_type, val, false);
 }
 
@@ -6126,7 +6126,7 @@ ir_gen_evaluate_constant_bool(odin_grammar_node_t * node)
         if (node->text == NULL)
             return -1;
         char * end = NULL;
-        long long val = strtoll(node->text, &end, 0);
+        long long val = parse_odin_signed(node->text, &end, 0);
         if (end == node->text)
             return -1;
         return (val != 0) ? 1 : 0;

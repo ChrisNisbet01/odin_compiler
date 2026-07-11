@@ -190,3 +190,8 @@ typedef struct odin_grammar_node_t
 } odin_grammar_node_t;
 
 void odin_grammar_node_free(void * node, void * user_data);
+
+// Parse an Odin integer literal. Handles 0o/0O octal prefix (which standard
+// strtoll/strtoull with base 0 does not). Base 0 means auto-detect.
+unsigned long long parse_odin_unsigned(char const * text, char ** endptr, int base);
+long long parse_odin_signed(char const * text, char ** endptr, int base);

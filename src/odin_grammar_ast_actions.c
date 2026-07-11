@@ -622,3 +622,31 @@ odin_grammar_node_free(void * node, void * user_data)
     free(n->metadata);
     free(n);
 }
+
+unsigned long long
+parse_odin_unsigned(char const * text, char ** endptr, int base)
+{
+    if (text == NULL)
+    {
+        if (endptr) *endptr = NULL;
+        return 0;
+    }
+    // Handle 0o/0O octal prefix — strtoull base 0 doesn't understand it
+    if ((base == 0 || base == 8) && text[0] == '0' && (text[1] == 'o' || text[1] == 'O'))
+        return strtoull(text + 2, endptr, 8);
+    return strtoull(text, endptr, base);
+}
+
+long long
+parse_odin_signed(char const * text, char ** endptr, int base)
+{
+    if (text == NULL)
+    {
+        if (endptr) *endptr = NULL;
+        return 0;
+    }
+    // Handle 0o/0O octal prefix
+    if ((base == 0 || base == 8) && text[0] == '0' && (text[1] == 'o' || text[1] == 'O'))
+        return strtoll(text + 2, endptr, 8);
+    return strtoll(text, endptr, base);
+}
