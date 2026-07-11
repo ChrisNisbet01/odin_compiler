@@ -26,6 +26,9 @@ Compile-time bitwise OR between integer constants is not evaluated. Workaround: 
 
 ## Medium Complexity
 
+### Chained member access
+Chained member access as described in tests/test_caller_location.odin isn't supported.
+
 ### `type_info_of(T)` — Get runtime type info
 Returns a pointer to the type descriptor at runtime. Requires generating type info data sections in LLVM IR.
 

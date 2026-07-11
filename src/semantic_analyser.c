@@ -961,6 +961,14 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                 TypedValue tv = create_typed_value(llvm_val, enum_td, false);
                 scope_add_symbol(generator_current_scope(ctx->gen_ctx), en_name_node->text, tv);
 
+                // Cache enum value for compile-time evaluation
+                symbol_t * en_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), en_name_node->text);
+                if (en_sym)
+                {
+                    en_sym->const_int_val = next_value;
+                    en_sym->has_const_int_val = true;
+                }
+
                 next_value++;
             }
         }
