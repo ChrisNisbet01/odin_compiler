@@ -618,6 +618,7 @@ odin_grammar_node_free(void * node, void * user_data)
     }
     free(n->list.children);
     free((char *)n->text);
+    free(n->file_path);
     free(n->metadata);
     free(n);
 }

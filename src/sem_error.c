@@ -20,7 +20,10 @@ sem_error_list_add(SemErrorList * list, char const * file_path, odin_grammar_nod
 {
     if (list->count >= MAX_SEM_ERRORS) return;
     list->errors[list->count].node = node;
-    list->errors[list->count].file_path = file_path ? strdup(file_path) : NULL;
+    char const * path = file_path;
+    if (path == NULL && node != NULL && node->file_path != NULL)
+        path = node->file_path;
+    list->errors[list->count].file_path = path ? strdup(path) : NULL;
     list->errors[list->count].message = strdup(message);
     list->count++;
 }

@@ -10,6 +10,30 @@
 typedef struct epc_ast_hook_registry_t epc_ast_hook_registry_t;
 typedef struct scope scope_t;
 
+// Result of parsing a single source file
+typedef struct
+{
+    char * source_path;          // full path (owned)
+    char * source_text;          // file text (owned)
+    odin_grammar_node_t * ast;   // full program AST (owned)
+    char * package_name;         // from package clause (owned)
+} ParsedFile;
+
+ParsedFile * parsed_file_create(char const * source_path);
+void parsed_file_free(ParsedFile * pf);
+
+// Parse a single source file, setting file_path on every AST node.
+// Returns NULL on failure (prints errors to stderr).
+ParsedFile * parse_source_file(char const * path, epc_parser_t * parser,
+                                epc_ast_hook_registry_t * hooks);
+
+// Merge multiple parsed file ASTs into a single Program AST.
+// Children are moved (stolen) from each ParsedFile's AST.
+// On success, the returned AST owns all children; the ParsedFiles can be freed.
+// On failure, returns NULL and sets *out_error.
+odin_grammar_node_t * merge_program_asts(ParsedFile ** files, int file_count,
+                                          char ** out_error);
+
 typedef struct
 {
     char * source_path;        // full path to the imported file

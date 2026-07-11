@@ -95,6 +95,80 @@ run_test() {
     fi
 }
 
+run_dir_test() {
+    local odin_dir="$1"
+    local base_name=$(basename "$odin_dir")
+    local exe_file="$OUTPUT_DIR/${base_name}"
+    local err_file="$OUTPUT_DIR/${base_name}.err"
+    local current_test_failed=false
+
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+
+    echo ""
+    echo "--- Testing (multi-file): $odin_dir ---"
+
+    rm -f "$exe_file" "$err_file" "$OUTPUT_DIR/${base_name}.out"
+    rm -f "$odin_dir/${base_name}.ll" "$odin_dir/${base_name}.o"
+
+    # 1. Compile and link with odinc (pass directory path)
+    echo "  [ODINC] Building $odin_dir"
+    if ! "$COMPILER" build --keep-temps "$odin_dir/" > "$OUTPUT_DIR/${base_name}.out" 2> "$err_file"; then
+        echo "  ERROR: odinc build failed for $odin_dir. Check $err_file"
+        current_test_failed=true
+    fi
+    if [ -s "$err_file" ]; then
+        echo "  WARNING: odinc produced warnings for $odin_dir. Check $err_file"
+    fi
+
+    # Check executable was produced (odinc emits it alongside the .ll and .o)
+    local expected_exe="$odin_dir/${base_name}"
+    if [ ! -f "$expected_exe" ] && [ ! -f "$exe_file" ]; then
+        echo "  ERROR: No executable produced for $odin_dir"
+        current_test_failed=true
+    fi
+    # Move executable to output dir
+    if [ -f "$expected_exe" ] && [ ! -f "$exe_file" ]; then
+        mv "$expected_exe" "$exe_file"
+    fi
+
+    # Clean up .ll and .o files from the source directory
+    rm -f "$odin_dir/${base_name}.ll" "$odin_dir/${base_name}.o"
+
+    if [ "$current_test_failed" = "true" ]; then
+        TEST_FAILED=true
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        echo "$odin_dir" >> "$FAILED_TESTS_FILE"
+        return
+    fi
+
+    # 2. Run the executable
+    echo "  [RUN] Executing $exe_file"
+    local exec_output="$OUTPUT_DIR/${base_name}_exec.log"
+    set +e
+    timeout 2 "$exe_file" > "$exec_output" 2>&1
+    local exit_code=$?
+    set -e
+
+    if [ "$exit_code" -ne 0 ]; then
+        echo "  FAILURE: $odin_dir exit code $exit_code (expected 0)"
+        TEST_FAILED=true
+        current_test_failed=true
+    else
+        echo "  SUCCESS: $odin_dir returned $exit_code"
+        if [ -s "$exec_output" ]; then
+            echo "  Output:"
+            cat "$exec_output"
+        fi
+    fi
+
+    if [ "$current_test_failed" = "true" ]; then
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        echo "$odin_dir" >> "$FAILED_TESTS_FILE"
+    else
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+    fi
+}
+
 run_expected_fail_test() {
     local odin_file="$1"
     local base_name=$(basename "$odin_file" .odin)
@@ -153,6 +227,18 @@ else
     while IFS= read -r -d $'\0' odin_file; do
         run_test "$odin_file"
     done < <(find "$TEST_DIR" -maxdepth 1 -name "*.odin" -print0)
+
+    # Discover multi-file package tests (directories with .odin_pkg sentinel)
+    echo ""
+    echo "=== Running Multi-File Package Tests ==="
+    dir_count=0
+    while IFS= read -r -d $'\0' odin_dir; do
+        dir_count=$((dir_count + 1))
+        run_dir_test "$odin_dir"
+    done < <(find "$TEST_DIR" -maxdepth 2 -name ".odin_pkg" -printf '%h\0' | sort -z)
+    if [ "$dir_count" -eq 0 ]; then
+        echo "(none found)"
+    fi
 
     if [ -d "$TEST_DIR/expected_to_fail" ]; then
         echo ""

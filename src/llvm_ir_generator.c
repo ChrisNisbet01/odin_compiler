@@ -684,7 +684,7 @@ ir_gen_in_expression(
 {
     if (rhs_type == NULL)
     {
-        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "in/not_in: RHS has no type");
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "in/not_in: RHS has no type");
         return NULL;
     }
 
@@ -749,13 +749,13 @@ ir_gen_in_expression(
     }
     else
     {
-        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "in/not_in: unsupported container type");
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "in/not_in: unsupported container type");
         return NULL;
     }
 
     if (elem_type == NULL || data_ptr == NULL || count_val == NULL)
     {
-        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "in/not_in: failed to extract element type, data, or count from container");
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "in/not_in: failed to extract element type, data, or count from container");
         return NULL;
     }
 
@@ -840,14 +840,14 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
     if (node->list.count < 3)
     {
-        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "binary expression has too few children");
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "binary expression has too few children");
         return NULL;
     }
 
     AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
     if (op_md == NULL)
     {
-        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "binary expression missing operator metadata");
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "binary expression missing operator metadata");
         return NULL;
     }
 
@@ -1026,7 +1026,7 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
     if (op_md == NULL)
     {
-        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "unary expression missing operator metadata");
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "unary expression missing operator metadata");
         return NULL;
     }
 
@@ -1043,7 +1043,7 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     }
     if (operand_node == NULL)
     {
-        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "unary expression has no operand");
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "unary expression has no operand");
         return NULL;
     }
 
@@ -1566,9 +1566,9 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
         if (node->text && strcmp(node->text, "_") == 0)
             return NULL;
         if (sym == NULL)
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "undeclared identifier in lvalue context");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "undeclared identifier in lvalue context");
         else
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "identifier is not an lvalue");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "identifier is not an lvalue");
         return NULL;
     }
 
@@ -1579,7 +1579,7 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
             return sym->value.value;
         if (node->text && strcmp(node->text, "_") == 0)
             return NULL;
-        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "'context' is not available in this scope");
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "'context' is not available in this scope");
         return NULL;
     }
 
@@ -1629,20 +1629,20 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
                 if (index_expr == NULL)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "subscript index expression is NULL");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "subscript index expression is NULL");
                     return NULL;
                 }
 
                 LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
                 if (index_val == NULL)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "failed to evaluate subscript index");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "failed to evaluate subscript index");
                     return NULL;
                 }
 
                 if (cur_type == NULL)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "subscript target has unknown type");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "subscript target has unknown type");
                     return NULL;
                 }
 
@@ -1873,7 +1873,7 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
                 else
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "map subscript: failed to extract data pointer");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "map subscript: failed to extract data pointer");
                     return NULL;
                 }
                 break;
@@ -1893,13 +1893,13 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
                 if (field_name_node == NULL || field_name_node->text == NULL)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "member access: missing field name");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access: missing field name");
                     return NULL;
                 }
 
                 if (cur_type == NULL)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "member access: current type is unknown");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access: current type is unknown");
                     return NULL;
                 }
 
@@ -1908,13 +1908,13 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                     int field_idx = type_descriptor_find_union_field_index(cur_type, field_name_node->text);
                     if (field_idx < 0)
                     {
-                        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "union has no field named");
+                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "union has no field named");
                         return NULL;
                     }
                     struct_field_t const * field = type_descriptor_get_union_field(cur_type, field_idx);
                     if (field == NULL)
                     {
-                        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "union field lookup returned NULL");
+                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "union field lookup returned NULL");
                         return NULL;
                     }
 
@@ -1957,14 +1957,14 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
 
                 if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "member access: type is not a struct");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access: type is not a struct");
                     return NULL;
                 }
 
                 field_access_path_t path;
                 if (!type_descriptor_find_struct_field_path(cur_type, field_name_node->text, &path))
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "struct has no field named");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "struct has no field named");
                     return NULL;
                 }
 
@@ -2000,7 +2000,7 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 if (cur_type == NULL || cur_type->kind != TD_KIND_POINTER)
                 {
                     if (cur_type)
-                        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "cannot dereference non-pointer type in lvalue context");
+                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot dereference non-pointer type in lvalue context");
                     return NULL;
                 }
                 ptr = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, ptr, "deref");
@@ -4306,7 +4306,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             }
             if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "called value is not a procedure");
+                ir_gen_error_collection_add(&ctx->errors, NULL, node, "called value is not a procedure");
                 return val;
             }
 
@@ -4472,20 +4472,20 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             }
             if (index_expr == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "missing index expression in subscript");
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "missing index expression in subscript");
                 break;
             }
 
             LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
             if (index_val == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, index_expr, "invalid index expression in subscript");
+                ir_gen_error_collection_add(&ctx->errors, NULL, index_expr, "invalid index expression in subscript");
                 break;
             }
 
             if (cur_type == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "cannot subscript unknown type");
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot subscript unknown type");
                 break;
             }
 
@@ -4555,7 +4555,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
                 if (data_ptr == NULL)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "map subscript: data pointer extraction failed");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "map subscript: data pointer extraction failed");
                     break;
                 }
 
@@ -4662,7 +4662,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             }
             else
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "cannot subscript type: not an array, slice, dynamic array, or map");
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot subscript type: not an array, slice, dynamic array, or map");
                 break;
             }
 
@@ -4689,7 +4689,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             }
             if (field_name_node == NULL || field_name_node->text == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "missing field name in member access");
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "missing field name in member access");
                 break;
             }
 
@@ -4727,7 +4727,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                     bit_field_field_info const * bf = type_descriptor_find_bit_field_field(cur_type, field_name);
                     if (bf == NULL)
                     {
-                        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "bit_field has no field named");
+                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "bit_field has no field named");
                         break;
                     }
 
@@ -4746,7 +4746,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
                 else if (cur_type)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "type has no member");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "type has no member");
                 }
                 break;
             }
@@ -4756,13 +4756,13 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 int field_idx = type_descriptor_find_union_field_index(cur_type, field_name_node->text);
                 if (field_idx < 0)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "union has no field named");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "union has no field named");
                     break;
                 }
                 struct_field_t const * field = type_descriptor_get_union_field(cur_type, field_idx);
                 if (field == NULL)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "union field lookup failed");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "union field lookup failed");
                     break;
                 }
 
@@ -4782,7 +4782,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             field_access_path_t path;
             if (!type_descriptor_find_struct_field_path(cur_type, field_name_node->text, &path))
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "type has no field");
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "type has no field");
                 break;
             }
 
@@ -4819,13 +4819,13 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             if (cur_type == NULL || cur_type->kind != TD_KIND_POINTER)
             {
                 if (cur_type)
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "cannot dereference non-pointer type");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot dereference non-pointer type");
                 break;
             }
             TypeDescriptor const * pointee_type = cur_type->pointee;
             if (pointee_type == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "cannot dereference pointer to void");
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot dereference pointer to void");
                 break;
             }
             val = LLVMBuildLoad2(ctx->builder, pointee_type->llvm_type, val, "deref");
@@ -4838,7 +4838,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             TypeDescriptor const * target_type = op->resolved_type;
             if (target_type == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "type assertion has no resolved target type");
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "type assertion has no resolved target type");
                 break;
             }
 
@@ -4972,7 +4972,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 int field_idx = (int)(intptr_t)op->resolved_symbol;
                 if (field_idx < 0)
                 {
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "union type assertion field not found");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "union type assertion field not found");
                     break;
                 }
 
@@ -5038,7 +5038,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             if (cur_type == NULL || (cur_type->kind != TD_KIND_SLICE && cur_type->kind != TD_KIND_ARRAY))
             {
                 if (cur_type)
-                    ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "cannot slice: type is not a slice or array");
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot slice: type is not a slice or array");
                 break;
             }
 
@@ -5046,7 +5046,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             TypeDescriptor const * elem_type = slice_type->element_type;
             if (elem_type == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, op, "slice/array has no element type");
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "slice/array has no element type");
                 break;
             }
 
@@ -5285,7 +5285,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * dest_type = node->resolved_type;
         if (dest_type == NULL)
         {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "cast expression has no resolved target type");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "cast expression has no resolved target type");
             return NULL;
         }
 
@@ -5345,7 +5345,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * dest_type = node->resolved_type;
         if (dest_type == NULL)
         {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "transmute expression has no resolved target type");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "transmute expression has no resolved target type");
             return NULL;
         }
 
@@ -5366,7 +5366,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * operand_type = operand->resolved_type;
         if (operand_type == NULL)
         {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "len/cap operand has no type");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap operand has no type");
             return NULL;
         }
 
@@ -5402,7 +5402,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             }
             if (data_ptr_map == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "len/cap: failed to extract map data pointer");
+                ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap: failed to extract map data pointer");
                 return NULL;
             }
             LLVMValueRef off_map = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), is_cap_map ? 8 : 0, false);
@@ -5449,7 +5449,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
         if (len_val == NULL)
         {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "len/cap: failed to extract field from slice/dynamic array");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap: failed to extract field from slice/dynamic array");
             return NULL;
         }
         return len_val;
@@ -5638,7 +5638,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             || (result_type->kind != TD_KIND_SLICE && result_type->kind != TD_KIND_DYNAMIC_ARRAY
                 && result_type->kind != TD_KIND_MAP))
         {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "make: target type is not a slice, dynamic array, or map");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "make: target type is not a slice, dynamic array, or map");
             return NULL;
         }
 
@@ -5655,7 +5655,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             TypeDescriptor const * val_type = result_type->as.map.value_type;
             if (key_type == NULL || val_type == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "make(map): key or value type is NULL");
+                ir_gen_error_collection_add(&ctx->errors, NULL, node, "make(map): key or value type is NULL");
                 return NULL;
             }
 
@@ -5722,7 +5722,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             TypeDescriptor const * elem_type = result_type->element_type;
             if (elem_type == NULL)
             {
-                ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "make(slice): element type is NULL");
+                ir_gen_error_collection_add(&ctx->errors, NULL, node, "make(slice): element type is NULL");
                 return NULL;
             }
 
@@ -5782,13 +5782,13 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * ptr_type = node->resolved_type;
         if (ptr_type == NULL || ptr_type->kind != TD_KIND_POINTER)
         {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "new: target type is not a pointer");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "new: target type is not a pointer");
             return NULL;
         }
         TypeDescriptor const * pointee_type = ptr_type->pointee;
         if (pointee_type == NULL)
         {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "new: pointer has no pointee type");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "new: pointer has no pointee type");
             return NULL;
         }
 
@@ -5866,13 +5866,13 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * ptr_type = node->list.children[0]->resolved_type;
         if (ptr_type == NULL || ptr_type->kind != TD_KIND_POINTER)
         {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "incl/excl: operand is not a pointer");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "incl/excl: operand is not a pointer");
             return NULL;
         }
         TypeDescriptor const * bs_type = ptr_type->pointee;
         if (bs_type == NULL || bs_type->kind != TD_KIND_BIT_SET)
         {
-            ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "incl/excl: pointee is not a bit_set");
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "incl/excl: pointee is not a bit_set");
             return NULL;
         }
         LLVMTypeRef backing_type = bs_type->llvm_type;
@@ -5920,7 +5920,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             return ctx_sym->value.value;
         }
-        ir_gen_error_collection_add(&ctx->errors, ctx->file_path, node, "'context' not available here");
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "'context' not available here");
         return NULL;
     }
 

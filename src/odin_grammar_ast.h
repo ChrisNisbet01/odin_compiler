@@ -180,6 +180,7 @@ typedef struct odin_grammar_node_t
     ast_node_list_t list;
 
     char const * text;
+    char * file_path;
 
     // Semantic analysis annotations
     TypeDescriptor * resolved_type;

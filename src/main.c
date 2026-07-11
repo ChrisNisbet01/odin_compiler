@@ -15,38 +15,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <pthread.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 
 #define VERSION "0.1.0"
-
-static char *
-read_file(char const * path, long * out_len)
-{
-    FILE * f = fopen(path, "rb");
-    if (f == NULL)
-    {
-        fprintf(stderr, "Error: Cannot open file '%s'\n", path);
-        return NULL;
-    }
-
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    char * buf = malloc((size_t)len + 1);
-    if (buf == NULL)
-    {
-        fclose(f);
-        return NULL;
-    }
-
-    size_t read = fread(buf, 1, (size_t)len, f);
-    fclose(f);
-
-    buf[read] = '\0';
-    *out_len = (long)read;
-    return buf;
-}
 
 static int
 run_linker(char const * ll_file, char const * output_file, IrGenContext * ir_ctx)
@@ -81,13 +55,88 @@ static void
 print_usage(char const * prog)
 {
     printf("Usage:\n");
-    printf("  %s build [-o <output>] [--keep-temps] <file>\n", prog);
+    printf("  %s build [-o <output>] [--keep-temps] [--file <file>] <path>\n", prog);
     printf("                           Parse, type-check, compile, and link\n");
-    printf("  %s run [options] <file> Compile, link, and run\n", prog);
-    printf("  %s check <file>         Parse and type-check only\n", prog);
-    printf("  %s version              Print version\n", prog);
-    printf("  %s help                 Print this help\n", prog);
+    printf("                           If <path> is a directory, all .odin files in it\n");
+    printf("                           are compiled as a single package.\n");
+    printf("                           Use --file <file> to force single-file mode.\n");
+    printf("  %s run [options] <path>  Compile, link, and run\n", prog);
+    printf("  %s check [options] <path> Parse and type-check only\n", prog);
+    printf("  %s version               Print version\n", prog);
+    printf("  %s help                  Print this help\n", prog);
 }
+
+// --- Directory enumeration ---
+
+static char **
+enumerate_odin_files(char const * dir_path, int * out_count)
+{
+    DIR * d = opendir(dir_path);
+    if (d == NULL)
+    {
+        fprintf(stderr, "Error: Cannot open directory '%s'\n", dir_path);
+        *out_count = 0;
+        return NULL;
+    }
+
+    int capacity = 16;
+    int count = 0;
+    char ** files = malloc((size_t)capacity * sizeof(char *));
+
+    struct dirent * entry;
+    while ((entry = readdir(d)) != NULL)
+    {
+        char const * name = entry->d_name;
+        size_t namelen = strlen(name);
+        if (namelen < 6 || strcmp(name + namelen - 5, ".odin") != 0)
+            continue;
+
+        if (count >= capacity)
+        {
+            capacity *= 2;
+            files = realloc(files, (size_t)capacity * sizeof(char *));
+        }
+
+        size_t pathlen = strlen(dir_path) + 1 + namelen + 1;
+        files[count] = malloc(pathlen);
+        snprintf(files[count], pathlen, "%s/%s", dir_path, name);
+        count++;
+    }
+
+    closedir(d);
+
+    if (count == 0)
+    {
+        fprintf(stderr, "Error: No .odin files found in '%s'\n", dir_path);
+        free(files);
+        *out_count = 0;
+        return NULL;
+    }
+
+    *out_count = count;
+    return files;
+}
+
+// --- Parallel parsing ---
+
+typedef struct
+{
+    char const * file_path;
+    epc_parser_t * parser;
+    epc_ast_hook_registry_t * hooks;
+    ParsedFile * result;
+    char * error;
+} ParseJob;
+
+static void *
+parse_job_thread(void * arg)
+{
+    ParseJob * job = (ParseJob *)arg;
+    job->result = parse_source_file(job->file_path, job->parser, job->hooks);
+    return NULL;
+}
+
+// --- Main ---
 
 int
 main(int argc, char * argv[])
@@ -121,10 +170,11 @@ main(int argc, char * argv[])
 
     bool do_codegen = (strcmp(command, "build") == 0 || strcmp(command, "run") == 0);
 
-    // Parse options and extract filename
+    // Parse options and extract path
     char const * filename = NULL;
     char const * output_name = NULL;
     bool keep_temps = false;
+    bool force_single_file = false;
 
     for (int i = 2; i < argc; i++)
     {
@@ -135,6 +185,11 @@ main(int argc, char * argv[])
         else if (strcmp(argv[i], "--keep-temps") == 0)
         {
             keep_temps = true;
+        }
+        else if (strcmp(argv[i], "--file") == 0 && i + 1 < argc)
+        {
+            force_single_file = true;
+            filename = argv[++i];
         }
         else if (argv[i][0] == '-')
         {
@@ -150,95 +205,193 @@ main(int argc, char * argv[])
 
     if (filename == NULL)
     {
-        fprintf(stderr, "Error: Missing input file\n");
+        fprintf(stderr, "Error: Missing input path\n");
         print_usage(argv[0]);
         return EXIT_FAILURE;
     }
 
-    long src_len;
-    char * src = read_file(filename, &src_len);
-    if (src == NULL)
-        return EXIT_FAILURE;
-
+    // Create parser infrastructure (shared across all files)
     epc_parser_list * list = epc_parser_list_create();
     if (list == NULL)
     {
         fprintf(stderr, "Error: Failed to create parser list.\n");
-        free(src);
         return EXIT_FAILURE;
     }
 
-    epc_parser_t * parser = create_odin_grammar_parser(list);
-    if (parser == NULL)
+    epc_parser_t * base_parser = create_odin_grammar_parser(list);
+    if (base_parser == NULL)
     {
         fprintf(stderr, "Error: Failed to create Odin parser.\n");
         epc_parser_list_free(list);
-        free(src);
         return EXIT_FAILURE;
     }
 
-    epc_parse_session_t session = epc_parse_str(parser, src, NULL);
-
-    if (session.result.is_error)
-    {
-        epc_parser_error_t * err = session.result.data.error;
-        fprintf(stderr, "Parse Error: %s\n", err->message);
-        fprintf(stderr, "At line %zu, col %zu\n", err->view.line_number, err->view.column_number);
-        fprintf(stderr, "Expected: %s\n", err->expected);
-        fprintf(stderr, "Found: %s\n", err->found);
-        epc_parse_session_destroy(&session);
-        epc_parser_list_free(list);
-        free(src);
-        return EXIT_FAILURE;
-    }
-
-    printf("Parse successful!\n");
-
-    // Build AST
     epc_ast_hook_registry_t * hook_registry = epc_ast_hook_registry_create(ODIN_GRAMMAR_AST_ACTION_COUNT__);
     if (hook_registry == NULL)
     {
         fprintf(stderr, "Error: Failed to create hook registry.\n");
-        epc_parse_session_destroy(&session);
         epc_parser_list_free(list);
-        free(src);
         return EXIT_FAILURE;
     }
-
     odin_grammar_ast_hook_registry_init(hook_registry);
 
-    epc_ast_result_t ast_result = epc_ast_build(session.result.data.success, hook_registry, NULL);
-    if (ast_result.has_error)
+    // Determine if input is a directory or single file
+    bool is_dir = false;
+    if (!force_single_file)
     {
-        fprintf(stderr, "AST Build Error: %s\n", ast_result.error_message);
-        epc_ast_hook_registry_free(hook_registry);
-        epc_parse_session_destroy(&session);
-        epc_parser_list_free(list);
-        free(src);
-        return EXIT_FAILURE;
+        struct stat st;
+        if (stat(filename, &st) == 0 && S_ISDIR(st.st_mode))
+            is_dir = true;
     }
 
-    printf("AST build successful!\n");
+    odin_grammar_node_t * ast_root = NULL;
+    char * source_dir = NULL;
+    ParsedFile ** parsed_files = NULL;
 
-    odin_grammar_node_t * ast_root = (odin_grammar_node_t *)ast_result.ast_root;
+    if (is_dir)
+    {
+        // --- Directory mode ---
+        printf("Compiling directory: %s\n", filename);
+
+        int file_count = 0;
+        char ** odin_files = enumerate_odin_files(filename, &file_count);
+        if (odin_files == NULL)
+        {
+            epc_ast_hook_registry_free(hook_registry);
+            epc_parser_list_free(list);
+            return EXIT_FAILURE;
+        }
+
+        // Create parse jobs
+        ParseJob * jobs = calloc((size_t)file_count, sizeof(ParseJob));
+        pthread_t * threads = calloc((size_t)file_count, sizeof(pthread_t));
+
+        for (int i = 0; i < file_count; i++)
+        {
+            jobs[i].file_path = odin_files[i];
+            jobs[i].hooks = hook_registry;
+            // Each thread needs its own parser (concurrent parse_str)
+            epc_parser_list * thr_list = epc_parser_list_create();
+            if (thr_list)
+                jobs[i].parser = create_odin_grammar_parser(thr_list);
+            if (jobs[i].parser == NULL)
+            {
+                fprintf(stderr, "Error: Failed to create thread parser.\n");
+                jobs[i].result = NULL;
+            }
+            else
+            {
+                pthread_create(&threads[i], NULL, parse_job_thread, &jobs[i]);
+            }
+        }
+
+        // Wait for all parse jobs
+        bool parse_ok = true;
+        for (int i = 0; i < file_count; i++)
+        {
+            pthread_join(threads[i], NULL);
+            if (jobs[i].result == NULL)
+            {
+                fprintf(stderr, "Error: Failed to parse '%s'\n", jobs[i].file_path);
+                parse_ok = false;
+            }
+        }
+
+        if (!parse_ok)
+        {
+            // Clean up partial results
+            for (int i = 0; i < file_count; i++)
+            {
+                if (jobs[i].result)
+                    parsed_file_free(jobs[i].result);
+                free((char *)odin_files[i]);
+            }
+            free(odin_files);
+            free(jobs);
+            free(threads);
+            epc_ast_hook_registry_free(hook_registry);
+            epc_parser_list_free(list);
+            return EXIT_FAILURE;
+        }
+
+        // Collect results
+        parsed_files = calloc((size_t)file_count, sizeof(ParsedFile *));
+        for (int i = 0; i < file_count; i++)
+        {
+            parsed_files[i] = jobs[i].result;
+        }
+
+        // Merge ASTs
+        char * merge_error = NULL;
+        ast_root = merge_program_asts(parsed_files, file_count, &merge_error);
+        if (ast_root == NULL)
+        {
+            fprintf(stderr, "Error: %s\n", merge_error ? merge_error : "Failed to merge ASTs");
+            free(merge_error);
+            for (int i = 0; i < file_count; i++)
+            {
+                parsed_file_free(parsed_files[i]);
+                free((char *)odin_files[i]);
+            }
+            free(parsed_files);
+            free(odin_files);
+            free(jobs);
+            free(threads);
+            epc_ast_hook_registry_free(hook_registry);
+            epc_parser_list_free(list);
+            return EXIT_FAILURE;
+        }
+
+        // Set source directory
+        source_dir = strdup(filename);
+
+        // Clean up per-file parsers and file listing
+        for (int i = 0; i < file_count; i++)
+        {
+            parsed_file_free(parsed_files[i]); // AST children moved to merged tree
+            free((char *)odin_files[i]);
+        }
+        free(parsed_files);
+        parsed_files = NULL;
+        free(odin_files);
+        free(jobs);
+        free(threads);
+
+        printf("Parsed %d files, merged into single AST\n", file_count);
+    }
+    else
+    {
+        // --- Single file mode ---
+        ParsedFile * pf = parse_source_file(filename, base_parser, hook_registry);
+        if (pf == NULL)
+        {
+            epc_ast_hook_registry_free(hook_registry);
+            epc_parser_list_free(list);
+            return EXIT_FAILURE;
+        }
+        ast_root = pf->ast;
+        pf->ast = NULL; // transfer ownership
+        source_dir = strdup(filename);
+        // Extract directory from filename for source_dir
+        char * fn_copy = strdup(filename);
+        char * dir = dirname(fn_copy);
+        free(source_dir);
+        source_dir = strdup(dir);
+        free(fn_copy);
+        parsed_file_free(pf);
+
+        printf("Parse successful!\n");
+    }
 
     // Resolve ODIN_ROOT
     char * odin_root = resolve_odin_root(argv[0]);
     if (odin_root != NULL)
-    {
         printf("ODIN_ROOT: %s\n", odin_root);
-    }
-
-    // Compute source directory from filename
-    char * filename_copy = strdup(filename);
-    char * dir = dirname(filename_copy);
-    char * source_dir = strdup(dir);
-    free(filename_copy);
 
     // Semantic analysis
     LLVMContextRef llvm_ctx = LLVMContextCreate();
     LLVMBuilderRef builder = LLVMCreateBuilderInContext(llvm_ctx);
-    LLVMTargetDataRef data_layout = NULL; // Will be set by IR gen context
+    LLVMTargetDataRef data_layout = NULL;
 
     TypeDescriptors * type_reg = type_descriptors_create_registry(llvm_ctx, data_layout, builder);
     if (type_reg == NULL)
@@ -248,11 +401,9 @@ main(int argc, char * argv[])
         free(odin_root);
         odin_grammar_node_free(ast_root, NULL);
         epc_ast_hook_registry_free(hook_registry);
-        epc_parse_session_destroy(&session);
         epc_parser_list_free(list);
         LLVMDisposeBuilder(builder);
         LLVMContextDispose(llvm_ctx);
-        free(src);
         return EXIT_FAILURE;
     }
 
@@ -265,16 +416,14 @@ main(int argc, char * argv[])
         type_descriptors_destroy_registry(type_reg);
         odin_grammar_node_free(ast_root, NULL);
         epc_ast_hook_registry_free(hook_registry);
-        epc_parse_session_destroy(&session);
         epc_parser_list_free(list);
         LLVMDisposeBuilder(builder);
         LLVMContextDispose(llvm_ctx);
-        free(src);
         return EXIT_FAILURE;
     }
 
     SemContext sem_ctx;
-    sem_context_init(&sem_ctx, ast_root, type_reg, gen_ctx, filename, source_dir, odin_root, parser, hook_registry);
+    sem_context_init(&sem_ctx, ast_root, type_reg, gen_ctx, filename, source_dir, odin_root, base_parser, hook_registry);
 
     bool sem_ok = sem_analyse(&sem_ctx);
 
@@ -288,22 +437,42 @@ main(int argc, char * argv[])
     char * ll_file = NULL;
     char * exe_file = NULL;
 
+    // Determine base name for output: dir basename (if directory) or file basename (if single file)
+    char const * output_base = NULL;
+    char * output_base_buf = NULL;
+    if (is_dir)
+    {
+        // Use <dir_path>/<dir_basename> as output base so outputs go alongside source files
+        size_t dir_len = strlen(filename);
+        while (dir_len > 1 && filename[dir_len - 1] == '/')
+            dir_len--;
+        char * dir_stripped = strndup(filename, dir_len);
+        char const * last_slash = strrchr(dir_stripped, '/');
+        char const * base_name = (last_slash != NULL) ? last_slash + 1 : dir_stripped;
+        size_t out_len = dir_len + 1 + strlen(base_name);
+        output_base_buf = malloc(out_len + 1);
+        snprintf(output_base_buf, out_len + 1, "%.*s/%s", (int)dir_len, filename, base_name);
+        output_base = output_base_buf;
+        free(dir_stripped);
+    }
+    else
+    {
+        output_base = filename;
+    }
+
     if (strcmp(command, "run") == 0)
     {
-        // Use temp file for run command
-        char const * base = strrchr(filename, '/');
-        base = (base != NULL) ? base + 1 : filename;
+        char const * base = strrchr(output_base, '/');
+        base = (base != NULL) ? base + 1 : output_base;
         size_t base_len = strlen(base);
-        // Strip .odin extension if present
         if (base_len > 5 && strcmp(base + base_len - 5, ".odin") == 0)
             base_len -= 5;
         ll_file = malloc(base_len + 20);
         snprintf(ll_file, base_len + 20, "/tmp/odinc_%.*s", (int)base_len, base);
         exe_file = strdup(ll_file);
-        // Add .ll extension
         size_t ll_len = strlen(ll_file);
         char * ll_ext = realloc(ll_file, ll_len + 4);
-        if (ll_ext == NULL) { free(ll_file); free(exe_file); return EXIT_FAILURE; }
+        if (ll_ext == NULL) { free(ll_file); free(exe_file); free(output_base_buf); return EXIT_FAILURE; }
         ll_file = ll_ext;
         memcpy(ll_file + ll_len, ".ll", 4);
     }
@@ -316,21 +485,25 @@ main(int argc, char * argv[])
     }
     else
     {
-        char const * dot = strrchr(filename, '.');
-        size_t base_len = (dot != NULL) ? (size_t)(dot - filename) : strlen(filename);
+        char const * dot = strrchr(output_base, '.');
+        size_t base_len = (dot != NULL) ? (size_t)(dot - output_base) : strlen(output_base);
         exe_file = malloc(base_len + 1);
-        memcpy(exe_file, filename, base_len);
+        memcpy(exe_file, output_base, base_len);
         exe_file[base_len] = '\0';
         ll_file = malloc(base_len + 4);
         snprintf(ll_file, base_len + 4, "%s.ll", exe_file);
     }
+
+    free(output_base_buf);
+    output_base_buf = NULL;
 
     if (do_codegen && sem_ok)
     {
         IrGenContext * ir_ctx = ir_gen_context_create("main", type_reg, gen_ctx);
         ir_ctx->imports = sem_ctx.imports;
         ir_ctx->import_count = sem_ctx.import_count;
-        ir_ctx->file_path = filename;
+        // IR gen uses node->file_path for errors now, so we can pass NULL
+        ir_ctx->file_path = NULL;
         if (ir_ctx == NULL)
         {
             fprintf(stderr, "Error: Failed to create IR generator context.\n");
@@ -339,13 +512,11 @@ main(int argc, char * argv[])
             generator_context_destroy(gen_ctx);
             odin_grammar_node_free(ast_root, NULL);
             epc_ast_hook_registry_free(hook_registry);
-            epc_parse_session_destroy(&session);
             epc_parser_list_free(list);
             LLVMDisposeBuilder(builder);
             LLVMContextDispose(llvm_ctx);
             free(source_dir);
             free(odin_root);
-            free(src);
             free(ll_file);
             free(exe_file);
             return EXIT_FAILURE;
@@ -355,7 +526,6 @@ main(int argc, char * argv[])
 
         if (ir_ok)
         {
-            // 1. Write .ll file
             if (write_llvm_ir_to_file(ir_ctx->module, ll_file) == 0)
             {
                 printf("Generated IR: %s\n", ll_file);
@@ -365,12 +535,10 @@ main(int argc, char * argv[])
                 fprintf(stderr, "Error: Failed to write IR to '%s'\n", ll_file);
             }
 
-            // 2. Compile .ll -> executable using system C compiler
             if (run_linker(ll_file, exe_file, ir_ctx) == 0)
             {
                 printf("Generated executable: %s\n", exe_file);
 
-                // odinc run: execute the binary
                 if (strcmp(command, "run") == 0)
                 {
                     printf("  [RUN] %s\n", exe_file);
@@ -386,11 +554,8 @@ main(int argc, char * argv[])
                 fprintf(stderr, "Error: Linking failed for '%s'\n", exe_file);
             }
 
-            // 3. Clean up intermediate files unless --keep-temps
             if (!keep_temps)
-            {
                 remove(ll_file);
-            }
         }
         else
         {
@@ -406,13 +571,11 @@ main(int argc, char * argv[])
     generator_context_destroy(gen_ctx);
     odin_grammar_node_free(ast_root, NULL);
     epc_ast_hook_registry_free(hook_registry);
-    epc_parse_session_destroy(&session);
     epc_parser_list_free(list);
     LLVMDisposeBuilder(builder);
     LLVMContextDispose(llvm_ctx);
     free(source_dir);
     free(odin_root);
-    free(src);
     free(ll_file);
     free(exe_file);
 

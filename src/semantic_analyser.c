@@ -509,7 +509,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             int width = (int)strtol(width_node->text, NULL, 10);
             if (width <= 0)
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, width_node, "bit_field field width must be positive");
+                sem_error_list_add(&ctx->errors, NULL, width_node, "bit_field field width must be positive");
                 return NULL;
             }
 
@@ -1177,7 +1177,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             TypeDescriptor const * inner_td = sem_resolve_type_expr(ctx, inner_type_node);
             if (inner_td == NULL || inner_td->kind != TD_KIND_STRUCT)
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, inner_type_node, "#soa requires a struct type");
+                sem_error_list_add(&ctx->errors, NULL, inner_type_node, "#soa requires a struct type");
                 return NULL;
             }
 
@@ -1257,7 +1257,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
 
         if (eval_node->type != AST_NODE_INTEGER_VALUE || eval_node->text == NULL)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, count_expr, "#soa[N] requires a constant integer expression");
+            sem_error_list_add(&ctx->errors, NULL, count_expr, "#soa[N] requires a constant integer expression");
             return NULL;
         }
 
@@ -1265,14 +1265,14 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         unsigned long long count_val = strtoull(eval_node->text, &end, 0);
         if (end == eval_node->text || count_val == 0)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, count_expr, "#soa[N] requires a positive integer");
+            sem_error_list_add(&ctx->errors, NULL, count_expr, "#soa[N] requires a positive integer");
             return NULL;
         }
 
         TypeDescriptor const * inner_td = sem_resolve_type_expr(ctx, inner_type_node);
         if (inner_td == NULL || inner_td->kind != TD_KIND_STRUCT)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, inner_type_node, "#soa[N] requires a struct type");
+            sem_error_list_add(&ctx->errors, NULL, inner_type_node, "#soa[N] requires a struct type");
             return NULL;
         }
 
@@ -1453,7 +1453,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (!valid)
         {
             sem_error_list_add(
-                &ctx->errors, ctx->source_file_path,
+                &ctx->errors, NULL,
                 node,
                 node->type == AST_NODE_LEN_EXPR ? "invalid operand type for len" : "invalid operand type for cap"
             );
@@ -1474,12 +1474,12 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
         if (td == NULL)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "invalid type argument to make");
+            sem_error_list_add(&ctx->errors, NULL, node, "invalid type argument to make");
             return NULL;
         }
         if (td->kind != TD_KIND_SLICE && td->kind != TD_KIND_DYNAMIC_ARRAY && td->kind != TD_KIND_MAP)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "make only supports slice, dynamic array, and map types");
+            sem_error_list_add(&ctx->errors, NULL, node, "make only supports slice, dynamic array, and map types");
             return NULL;
         }
         sem_evaluate_expr(ctx, len_node);
@@ -1495,7 +1495,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
         if (td == NULL)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "invalid type argument to new");
+            sem_error_list_add(&ctx->errors, NULL, node, "invalid type argument to new");
             return NULL;
         }
         TypeDescriptor const * ptr_type = get_or_create_pointer_type(ctx->type_registry, td);
@@ -1521,7 +1521,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * elem_type = sem_evaluate_expr(ctx, node->list.children[1]);
         if (ptr_type == NULL)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "incl/excl: first arg resolved to NULL type");
+            sem_error_list_add(&ctx->errors, NULL, node, "incl/excl: first arg resolved to NULL type");
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1535,7 +1535,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 ptr_type->kind,
                 TD_KIND_POINTER
             );
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
+            sem_error_list_add(&ctx->errors, NULL, node, buf);
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1550,13 +1550,13 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 bs_type ? bs_type->kind : -1,
                 TD_KIND_BIT_SET
             );
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
+            sem_error_list_add(&ctx->errors, NULL, node, buf);
             node->resolved_type = NULL;
             return NULL;
         }
         if (elem_type == NULL || !is_integer_kind(elem_type))
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "second argument to incl/excl must be an integer");
+            sem_error_list_add(&ctx->errors, NULL, node, "second argument to incl/excl must be an integer");
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1571,7 +1571,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         int min_args = is_complex ? 2 : 4;
         if (node->list.count < min_args)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "complex/quaternion: insufficient arguments");
+            sem_error_list_add(&ctx->errors, NULL, node, "complex/quaternion: insufficient arguments");
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1583,7 +1583,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 continue;
             if (arg->llvm_type != arg0->llvm_type)
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+                sem_error_list_add(&ctx->errors, NULL, node,
                     "complex/quaternion: all arguments must have the same type");
                 node->resolved_type = NULL;
                 return NULL;
@@ -1604,7 +1604,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             target_name = is_complex ? "complex128" : "quaternion256";
         else
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+            sem_error_list_add(&ctx->errors, NULL, node,
                 "complex/quaternion: arguments must be f16, f32, or f64");
             node->resolved_type = NULL;
             return NULL;
@@ -1626,7 +1626,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
         if (td == NULL)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "invalid type argument to size_of/align_of");
+            sem_error_list_add(&ctx->errors, NULL, node, "invalid type argument to size_of/align_of");
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1648,14 +1648,14 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
         if (td == NULL)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "invalid type argument to offset_of");
+            sem_error_list_add(&ctx->errors, NULL, node, "invalid type argument to offset_of");
             node->resolved_type = NULL;
             return NULL;
         }
         type_node->resolved_type = (TypeDescriptor *)td;
         if (td->kind != TD_KIND_STRUCT && td->kind != TD_KIND_SOA && td->kind != TD_KIND_UNION)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "offset_of requires a struct, SOA, or union type");
+            sem_error_list_add(&ctx->errors, NULL, node, "offset_of requires a struct, SOA, or union type");
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1683,14 +1683,14 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (operand_type->kind != TD_KIND_SLICE && operand_type->kind != TD_KIND_ARRAY
             && operand_type->kind != TD_KIND_DYNAMIC_ARRAY)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "raw_data requires a slice, array, or dynamic array");
+            sem_error_list_add(&ctx->errors, NULL, node, "raw_data requires a slice, array, or dynamic array");
             node->resolved_type = NULL;
             return NULL;
         }
         TypeDescriptor const * elem_type = operand_type->element_type;
         if (elem_type == NULL)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "raw_data: operand has no element type");
+            sem_error_list_add(&ctx->errors, NULL, node, "raw_data: operand has no element type");
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1761,7 +1761,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         bool rhs_num = is_integer_kind(rhs_type) || is_floating_kind(rhs_type);
         if (!lhs_num || !rhs_num)
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "min/max requires numeric arguments");
+            sem_error_list_add(&ctx->errors, NULL, node, "min/max requires numeric arguments");
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1792,7 +1792,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             node->resolved_type = (TypeDescriptor *)sym->value.type_info;
             return sym->value.type_info;
         }
-        sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "'context' used outside of a procedure scope");
+        sem_error_list_add(&ctx->errors, NULL, node, "'context' used outside of a procedure scope");
         return NULL;
     }
 
@@ -1809,7 +1809,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             node->resolved_type = (TypeDescriptor *)sym->value.type_info;
             return sym->value.type_info;
         }
-        sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "undeclared identifier");
+        sem_error_list_add(&ctx->errors, NULL, node, "undeclared identifier");
         return NULL;
     }
 
@@ -1855,7 +1855,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             return NULL;
         if (!is_integer_kind(left_type) || !is_integer_kind(right_type))
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "Range expression requires integer operands");
+            sem_error_list_add(&ctx->errors, NULL, node, "Range expression requires integer operands");
             node->resolved_type = (TypeDescriptor *)left_type;
             return left_type;
         }
@@ -2086,7 +2086,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                                     {
                                         char buf[256];
                                         snprintf(buf, sizeof(buf), "symbol '%s' is private in package '%s'", member_name, access_pkg->package_name ? access_pkg->package_name : "unknown");
-                                        sem_error_list_add(&ctx->errors, ctx->source_file_path, op, buf);
+                                        sem_error_list_add(&ctx->errors, NULL, op, buf);
                                     }
                                     else
                                     {
@@ -2097,7 +2097,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 }
                                 else
                                 {
-                                    sem_error_list_add(&ctx->errors, ctx->source_file_path, op, "undeclared name in package");
+                                    sem_error_list_add(&ctx->errors, NULL, op, "undeclared name in package");
                                 }
                             }
                             break;
@@ -2398,7 +2398,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 
                 int result = sem_evaluate_constant_bool(ctx, child);
                 if (result == 0)
-                    sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "#assert failed");
+                    sem_error_list_add(&ctx->errors, NULL, node, "#assert failed");
                 break;
             }
         }
@@ -2461,7 +2461,7 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
             size_t expr_count = node->list.count;
             if ((int)expr_count != pm->return_count)
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "wrong number of return values");
+                sem_error_list_add(&ctx->errors, NULL, node, "wrong number of return values");
                 return;
             }
             for (size_t i = 0; i < expr_count; i++)
@@ -2491,7 +2491,7 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
                 }
                 if (expr_type != pm->returns[i] && !sem_can_implicitly_convert(ctx, expr, expr_type, pm->returns[i]))
                 {
-                    sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "return type mismatch");
+                    sem_error_list_add(&ctx->errors, NULL, node, "return type mismatch");
                 }
             }
             return;
@@ -2503,7 +2503,7 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
         else
         {
             if (node->list.count > 0)
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "unexpected return value in void procedure");
+                sem_error_list_add(&ctx->errors, NULL, node, "unexpected return value in void procedure");
             return;
         }
     }
@@ -2512,7 +2512,7 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
     {
         if (expected_return_type != NULL && expected_return_type != type_descriptor_get_void_type(ctx->type_registry))
         {
-            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "expected return value");
+            sem_error_list_add(&ctx->errors, NULL, node, "expected return value");
         }
         return;
     }
@@ -2522,7 +2522,7 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
 
     if (expected_return_type == NULL)
     {
-        sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "unexpected return value in void procedure");
+        sem_error_list_add(&ctx->errors, NULL, node, "unexpected return value in void procedure");
         return;
     }
 
@@ -2552,7 +2552,7 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
 
     if (expr_type != expected_return_type && !sem_can_implicitly_convert(ctx, expr, expr_type, expected_return_type))
     {
-        sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "return type mismatch");
+        sem_error_list_add(&ctx->errors, NULL, node, "return type mismatch");
     }
 }
 
@@ -3255,7 +3255,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                     free(import_path);
                     if (resolved == NULL)
                     {
-                        sem_error_list_add(&ctx->errors, ctx->source_file_path, path_node, "cannot resolve import path");
+                        sem_error_list_add(&ctx->errors, NULL, path_node, "cannot resolve import path");
                         continue;
                     }
 
@@ -3337,7 +3337,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                     free(import_path);
                     if (resolved == NULL)
                     {
-                        sem_error_list_add(&ctx->errors, ctx->source_file_path, path_node, "cannot resolve import path");
+                        sem_error_list_add(&ctx->errors, NULL, path_node, "cannot resolve import path");
                         continue;
                     }
 
@@ -3418,7 +3418,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                     free(import_path);
                     if (resolved == NULL)
                     {
-                        sem_error_list_add(&ctx->errors, ctx->source_file_path, path_node, "cannot resolve import path");
+                        sem_error_list_add(&ctx->errors, NULL, path_node, "cannot resolve import path");
                         continue;
                     }
 
@@ -3744,7 +3744,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 && val_type->proc_metadata.return_type != NULL
                 && val_type->proc_metadata.return_type != type_descriptor_get_void_type(ctx->type_registry))
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, name_node,
+                sem_error_list_add(&ctx->errors, NULL, name_node,
                                    "main procedure must not return a value; use os.exit() to set exit codes");
             }
         }

@@ -20,7 +20,10 @@ ir_gen_error_collection_add(IrGenErrorCollection * col, char const * file_path, 
 {
     if (col->count >= MAX_IR_GEN_ERRORS) return;
     col->errors[col->count].node = node;
-    col->errors[col->count].file_path = file_path ? strdup(file_path) : NULL;
+    char const * path = file_path;
+    if (path == NULL && node != NULL && node->file_path != NULL)
+        path = node->file_path;
+    col->errors[col->count].file_path = path ? strdup(path) : NULL;
     col->errors[col->count].message = strdup(message);
     col->count++;
 }

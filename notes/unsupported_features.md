@@ -9,23 +9,6 @@ Features present in the official Odin language that our compiler does not yet su
 - **`printf %d/%x` with unsigned types**: Delegated `%d` and `%x` to `print_value` in stubs `fmt.odin` (handles all integer types uniformly).
 - **Extended `core:fmt` variants**: Added `printfln`, `eprintln`, `eprintf`, `eprintfln` to `stubs/core/fmt/fmt.odin`. Each is a standalone copy (no `..args` forwarding, no `[]any` param delegation — both unsupported). Tested via `test_fmt_more.odin`.
 
-## Noted during file I/O implementation
-
-### Slice expression syntax — `arr[low:high]`, `arr[:]`
-The grammar lacks proper slice subscript syntax. `sys_read`/`sys_write` use `(data: ^u8, count: int)` instead of `(data: []byte)` because `arr[low:high]` and `arr[:]` aren't parsed. PostfixSlice rules exist in the grammar but may need debugging.
-
-### Type alias `::` declaration — `Handle :: int`
-`ConstantDecl = Identifier :: (ProcedureLiteral | Expression)` doesn't accept type names as the RHS (e.g., `Handle :: int` fails). Type aliases require a separate grammar construct or extending `Expression` to include type names.
-
-### Bitwise OR constant folding — `flags | flags`
-Compile-time bitwise OR between integer constants is not folded. Workaround: manually compute the combined value (e.g., `577` instead of `os.O_WRONLY | os.O_CREAT | os.O_TRUNC`).
-
-### Octal literal syntax — `0o644`
-The `0o644` octal prefix syntax is not implemented. Workaround: use decimal (`420` for `0o644`).
-
-### `[]` array slices not parseable
-Full-slice syntax (`arr[:]`) and sub-slice syntax (`arr[low:high]`) are not implemented in the grammar/parser. This affects any API that takes `[]byte` or similar slice parameters where you need to pass a sub-range of an array.
-
 ## Low Complexity
 
 ### `#caller_location` — Built-in caller location parameter
@@ -43,6 +26,12 @@ Attribute to skip bounds checks on array/slice subscript. Grammar accepts `#no_b
 ### `#partial switch` — Partial exhaustiveness ✅ GRAMMAR DONE
 Switch without the default exhaustiveness check. Grammar accepts `switch #partial`. No-op at semantic level (exhaustiveness checking not yet implemented).
 
+### Octal literal syntax — `0o644`
+The `0o644` octal prefix syntax is not recognized by the lexer. Workaround: use decimal (`420` for `0o644`). Pure lexer change — add `0o` prefix handling in integer literal scanning.
+
+### Bitwise OR constant folding — `flags | flags`
+Compile-time bitwise OR between integer constants is not evaluated. Workaround: manually compute the combined value (e.g., `577` instead of `os.O_WRONLY | os.O_CREAT | os.O_TRUNC`). Contained addition to the compile-time evaluation path.
+
 ## Medium Complexity
 
 ### `type_info_of(T)` — Get runtime type info
@@ -59,6 +48,12 @@ Used to override struct/field alignment. Need to parse the alignment value and p
 
 ### `@(builtin)` — Builtin annotation
 Marks a procedure as a compiler intrinsic. Would integrate with the built-in proc dispatch system.
+
+### Slice expression syntax — `arr[low:high]`, `arr[:]`
+Full-slice (`arr[:]`) and sub-slice (`arr[low:high]`) parsing is missing. PostfixSlice grammar rules exist but need debugging. Affects any API taking `[]byte` where you need to pass an array sub-range. Requires semantic analysis (bounds + result type) and IR generation (GEP + slice struct construction).
+
+### Type alias `::` declaration — `Handle :: int`
+`ConstantDecl = Identifier :: (ProcedureLiteral | Expression)` rejects type names (like `int`) as the RHS because type keywords aren't valid `Expression`s. Requires a separate grammar rule or extending `Expression` to include `TypeName`, plus semantic analysis to create transparent type aliases.
 
 ## High Complexity
 
