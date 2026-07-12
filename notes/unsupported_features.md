@@ -10,22 +10,7 @@ Features present in the official Odin language that our compiler does not yet su
 - **`printf %d/%x` with unsigned types**: Delegated `%d` and `%x` to `print_value` in stubs `fmt.odin` (handles all integer types uniformly).
 - **Extended `core:fmt` variants**: Added `printfln`, `eprintln`, `eprintf`, `eprintfln` to `stubs/core/fmt/fmt.odin`. Each is a standalone copy (no `..args` forwarding, no `[]any` param delegation — both unsupported). Tested via `test_fmt_more.odin`.
 
-## Low Complexity
-
-### `when` with complex enum comparisons
-`when ODIN_OS == .Windows` requires compile-time enum resolution in `when` conditions. Currently only `when true`/`when false` works reliably.
-
-### `#no_bounds_check` — Disable bounds checking ✅ GRAMMAR DONE
-Attribute to skip bounds checks on array/slice subscript. Grammar accepts `#no_bounds_check` as a directive. No-op at IR level (bounds checking not yet implemented).
-
-### `#partial switch` — Partial exhaustiveness ✅ GRAMMAR DONE
-Switch without the default exhaustiveness check. Grammar accepts `switch #partial`. No-op at semantic level (exhaustiveness checking not yet implemented).
-Compile-time bitwise OR between integer constants is not evaluated. Workaround: manually compute the combined value (e.g., `577` instead of `os.O_WRONLY | os.O_CREAT | os.O_TRUNC`). Contained addition to the compile-time evaluation path.
-
 ## Medium Complexity
-
-### Chained member access
-Chained member access as described in tests/test_caller_location.odin isn't supported.
 
 ### `type_info_of(T)` — Get runtime type info
 Returns a pointer to the type descriptor at runtime. Requires generating type info data sections in LLVM IR.
@@ -70,7 +55,7 @@ SOA struct field manipulation. Requires multi-field extract/insert at the IR lev
 ### `$T` / `$N` — Compile-time polymorphic parameters (generics)
 Generic procedures with polymorphic type/value parameters. Requires major type system overhaul, monomorphization, and full compile-time evaluation. The largest missing feature.
 
-## Recently Added (Supported)
+## Earlier Completions
 
 The following features were previously listed as unsupported but are now implemented:
 
@@ -119,3 +104,6 @@ The following features were previously listed as unsupported but are now impleme
 - Octal literal syntax (`0o644`, `0o777`, etc.)
 - Bitwise OR constant folding (`os.O_WRONLY | os.O_CREAT | os.O_TRUNC`) — compile-time evaluation of named constants in `when` conditions and constant declarations
 - `#caller_location` — returns `Source_Location` struct (`file`, `line`, `column`) with the source location of the expression
+- `#no_bounds_check` — Grammar accepts it; no-op at IR level (bounds checking not yet implemented, so the directive is correct as a no-op marker)
+- `#partial switch` — Grammar accepts it; no-op at semantic level (exhaustiveness checking not yet implemented, so it's correct as a no-op marker)
+- Chained member access with reserved keyword field names (`.len`, `.data`, `.cap` on string/slice/dynamic_array/array/maybe; pointer auto-dereference `p.field` in rvalue context)
