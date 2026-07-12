@@ -282,8 +282,13 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
             );
     }
 
-    if (sym->value.is_lvalue && sym->value.value != NULL)
+    if (sym->value.is_lvalue)
     {
+        if (sym->value.value == NULL)
+        {
+            // Symbol is an lvalue with no backing storage (e.g., type alias used in expression context)
+            return NULL;
+        }
         // Don't load composite types — the pointer is needed for
         // GEP/subscript/member access
         if (sym->value.type_info

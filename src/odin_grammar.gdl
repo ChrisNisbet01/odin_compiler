@@ -510,7 +510,7 @@ ImportDecl = ImportNamed | ImportUsing | ImportSimple;
 IdentifierList = delimited(Identifier, Comma) Comma? @AST_ACTION_IDENTIFIER_LIST;
 VariableDecl = IdentifierList (Colon TypePrefix (Assign Expression)? | ColonAssign Expression) @AST_ACTION_VARIABLE_DECL;
 
-ConstantDecl = Attribute? Identifier DoubleColon (ProcedureLiteral | Expression) @AST_ACTION_CONSTANT_DECL;
+ConstantDecl = Attribute? Identifier DoubleColon (ProcedureLiteral | Expression | TypePrefix) @AST_ACTION_CONSTANT_DECL;
 
 ForeignImportDecl = KwForeign KwImport Identifier StringLiteral @AST_ACTION_FOREIGN_IMPORT;
 ForeignDecl = ForeignImportDecl | ConstantDecl;

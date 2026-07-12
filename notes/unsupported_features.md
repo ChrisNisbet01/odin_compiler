@@ -30,9 +30,6 @@ Currently subscript operations (`x[i]`) generate no runtime bounds checks. Need 
 ### Exhaustiveness checking for switches
 Currently switch statements accept any set of cases without verifying completeness. Need to detect when a switch (without `#partial`) covers all variants of an enum or other finite type, and emit an error for missing cases. The `#partial switch` directive should suppress this check.
 
-### Type alias `::` declaration — `Handle :: int`
-`ConstantDecl = Identifier :: (ProcedureLiteral | Expression)` rejects type names (like `int`) as the RHS because type keywords aren't valid `Expression`s. Requires a separate grammar rule or extending `Expression` to include `TypeName`, plus semantic analysis to create transparent type aliases.
-
 ## High Complexity
 
 ### `[^]T` — Pointer-to-array with `fmt:` tags
@@ -111,3 +108,4 @@ The following features were previously listed as unsupported but are now impleme
 - `#partial switch` — Grammar accepts it; no-op at semantic level (exhaustiveness checking not yet implemented, so it's correct as a no-op marker)
 - Chained member access with reserved keyword field names (`.len`, `.data`, `.cap` on string/slice/dynamic_array/array/maybe; pointer auto-dereference `p.field` in rvalue context)
 - Slice expression syntax (`arr[low..high]`, `arr[..]`, `arr[low..]`, `arr[..high]`, `arr[..<high]`, `arr[low..<high]`) with semantic analysis and IR generation (GEP + slice struct construction); works for both arrays and slices, including chained slicing
+- Type alias `::` declaration (`Handle :: int`, `PtrToInt :: ^int`, `MyHandle :: Handle`): Added `TypePrefix` alternative to `ConstantDecl` grammar. Semantic analyser detects type values and stores them as `SYMBOL_TYPE` symbols; `sem_resolve_type_expr` handles `AST_NODE_IDENTIFIER` for type alias lookups. Variable declarations (`x: Handle`) resolve type via the identifier scope lookup path.

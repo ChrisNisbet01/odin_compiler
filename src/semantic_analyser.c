@@ -1406,6 +1406,18 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return maybe_type;
     }
 
+    case AST_NODE_IDENTIFIER:
+    {
+        // Look up the identifier in the current scope to see if it's a type alias
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
+        if (sym != NULL && sym->kind == SYMBOL_TYPE && sym->value.type_info != NULL)
+        {
+            node->resolved_type = (TypeDescriptor *)sym->value.type_info;
+            return sym->value.type_info;
+        }
+        return NULL;
+    }
+
     default:
         return NULL;
     }
@@ -4008,13 +4020,17 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             }
         }
 
-        if (var_type && id_count == 1)
+        if (var_type)
         {
-            odin_grammar_node_t * name_node = id_list->list.children[0];
-            if (name_node && name_node->type == AST_NODE_IDENTIFIER)
+            node->resolved_type = (TypeDescriptor *)var_type;
+            if (id_count == 1)
             {
-                TypedValue tv = create_typed_value(NULL, var_type, true);
-                scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+                odin_grammar_node_t * name_node = id_list->list.children[0];
+                if (name_node && name_node->type == AST_NODE_IDENTIFIER)
+                {
+                    TypedValue tv = create_typed_value(NULL, var_type, true);
+                    scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+                }
             }
         }
         break;
@@ -4045,6 +4061,22 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
         {
             sem_analyse_procedure_literal(ctx, value_node, name_node->text);
+        }
+        else if (is_type_node(value_node) || value_node->type == AST_NODE_IDENTIFIER)
+        {
+            TypeDescriptor const * td = sem_resolve_type_expr(ctx, value_node);
+            if (td != NULL)
+            {
+                // Type alias: Handle :: int, Handle :: MyType
+                value_node->resolved_type = (TypeDescriptor *)td;
+                TypedValue tv = create_typed_value(NULL, td, false);
+                scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+                if (sym)
+                    sym->kind = SYMBOL_TYPE;
+                break;
+            }
+            sem_evaluate_expr(ctx, value_node);
         }
         else
         {
