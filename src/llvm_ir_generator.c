@@ -5299,6 +5299,16 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 break;
             }
 
+            // Ensure val is a pointer for GEP — if it's a loaded struct (e.g. from
+            // a previous slice operation), create a temporary alloca
+            LLVMValueRef base_ptr = val;
+            if (LLVMGetTypeKind(LLVMTypeOf(base_ptr)) != LLVMPointerTypeKind)
+            {
+                LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, cur_type->llvm_type, "slice.base.tmp");
+                LLVMBuildStore(ctx->builder, base_ptr, tmp);
+                base_ptr = tmp;
+            }
+
             LLVMValueRef data, len;
 
             if (cur_type->kind == TD_KIND_SLICE)
@@ -5308,7 +5318,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                     = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
                 LLVMValueRef data_gep = LLVMBuildInBoundsGEP2(
-                    ctx->builder, cur_type->llvm_type, val, field0_indices, 2, "slice.data.gep"
+                    ctx->builder, cur_type->llvm_type, base_ptr, field0_indices, 2, "slice.data.gep"
                 );
                 data = LLVMBuildLoad2(ctx->builder, LLVMPointerType(elem_type->llvm_type, 0), data_gep, "slice.data");
                 // Load length from slice struct field 1 via GEP+Load
@@ -5316,7 +5326,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                     = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
                 LLVMValueRef len_gep
-                    = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, val, field1_indices, 2, "slice.len.gep");
+                    = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, base_ptr, field1_indices, 2, "slice.len.gep");
                 len = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), len_gep, "slice.len");
             }
             else
@@ -5326,7 +5336,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 LLVMValueRef zero_indices[]
                     = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-                data = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, val, zero_indices, 2, "arr.ptr");
+                data = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, base_ptr, zero_indices, 2, "arr.ptr");
                 len = LLVMConstInt(
                     LLVMInt64TypeInContext(ctx->context), (unsigned long long)cur_type->as.array.count, false
                 );

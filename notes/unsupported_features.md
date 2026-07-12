@@ -24,8 +24,11 @@ Used to override struct/field alignment. Need to parse the alignment value and p
 ### `@(builtin)` — Builtin annotation
 Marks a procedure as a compiler intrinsic. Would integrate with the built-in proc dispatch system.
 
-### Slice expression syntax — `arr[low:high]`, `arr[:]`
-Full-slice (`arr[:]`) and sub-slice (`arr[low:high]`) parsing is missing. PostfixSlice grammar rules exist but need debugging. Affects any API taking `[]byte` where you need to pass an array sub-range. Requires semantic analysis (bounds + result type) and IR generation (GEP + slice struct construction).
+### Bounds checking on array/slice/map subscripts
+Currently subscript operations (`x[i]`) generate no runtime bounds checks. Need to emit index-vs-length comparisons and trap/branch on out-of-bounds. The `#no_bounds_check` directive should then suppress these checks.
+
+### Exhaustiveness checking for switches
+Currently switch statements accept any set of cases without verifying completeness. Need to detect when a switch (without `#partial`) covers all variants of an enum or other finite type, and emit an error for missing cases. The `#partial switch` directive should suppress this check.
 
 ### Type alias `::` declaration — `Handle :: int`
 `ConstantDecl = Identifier :: (ProcedureLiteral | Expression)` rejects type names (like `int`) as the RHS because type keywords aren't valid `Expression`s. Requires a separate grammar rule or extending `Expression` to include `TypeName`, plus semantic analysis to create transparent type aliases.
@@ -107,3 +110,4 @@ The following features were previously listed as unsupported but are now impleme
 - `#no_bounds_check` — Grammar accepts it; no-op at IR level (bounds checking not yet implemented, so the directive is correct as a no-op marker)
 - `#partial switch` — Grammar accepts it; no-op at semantic level (exhaustiveness checking not yet implemented, so it's correct as a no-op marker)
 - Chained member access with reserved keyword field names (`.len`, `.data`, `.cap` on string/slice/dynamic_array/array/maybe; pointer auto-dereference `p.field` in rvalue context)
+- Slice expression syntax (`arr[low..high]`, `arr[..]`, `arr[low..]`, `arr[..high]`, `arr[..<high]`, `arr[low..<high]`) with semantic analysis and IR generation (GEP + slice struct construction); works for both arrays and slices, including chained slicing
