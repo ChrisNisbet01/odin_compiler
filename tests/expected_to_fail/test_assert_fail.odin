@@ -1,9 +1,10 @@
 package main
+import "core:os"
 
-main :: proc() -> int {
+main :: proc() {
     #assert[false]
     #assert[1 + 1 == 3]
     #assert[5 < 3]
     #assert[true && false]
-    return 0
+    os.exit(0)
 }

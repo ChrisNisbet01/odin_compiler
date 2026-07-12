@@ -1,3 +1,11 @@
+## Accomplishments (session 2026-07-12)
+
+### Implemented `#assert[expr]` compile-time assertions
+- **Fixed semantic analyser**: Replaced premature `break` loop in `AST_NODE_DIRECTIVE_WITH_ARGS` handler with proper single-expression enforcement (error on 0 or multiple expressions). The expression is now fully evaluated and checked as a compile-time boolean constant.
+- **Added top-level `#assert` support**: Added `AST_NODE_DIRECTIVE_WITH_ARGS` handler in `sem_pass1_register_top_level_ex` so `#assert` works outside procedure bodies too.
+- **Updated tests**: Fixed `test_assert_fail.odin` to use void main (so `#assert` failure is the actual reason). Added `test_assert_toplevel.odin` (passing top-level assertions) and `test_assert_toplevel_fail.odin` (expected-to-fail top-level assertion).
+- **All 117 tests pass**. Works with arithmetic, boolean, comparison, bitwise, `typeid_of`, `size_of`, `align_of`, and `offset_of` expressions.
+
 ## Accomplishments (session 2026-07-11)
 
 ### Refactored print_string/print_byte/int_to_string into intrinsic-based runtime package

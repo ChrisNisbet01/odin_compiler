@@ -3,6 +3,7 @@
 Features present in the official Odin language that our compiler does not yet support, ordered by estimated implementation complexity (easiest first).
 
 ## Recently fixed
+- **`#assert[expr]` compile-time assertions**: Now fully functional. Enforces exactly one expression. Evaluates at compile-time in both procedure bodies and top-level scope. Fails with `#assert failed` error when expression evaluates to false. Works with arithmetic, boolean, comparison, bitwise, `typeid_of`, `size_of`, `align_of`, and `offset_of` expressions.
 - **`core:os` + runtime intrinsics**: `os.exit()` now uses runtime intrinsic `os_exit` (inline syscall, no `foreign libc`). `print_string`/`print_byte`/`int_to_string` refactored from special AST nodes to `core:runtime` prelude auto-import + IR generator intrinsic body generation. `stubs/src/` deleted (dead code).
 - **Recursive function calls**: Fixed link error (`fib.4` undefined) by moving `generator_add_symbol` before body generation in IR generator. Fixed recursive call semantic analysis (returned NULL type for recursive calls) by pre-registering procedure type in symbol table before body analysis. `fibonacci.odin` now compiles without any casts.
 - **Implicit conversion of untyped literals**: Added `sem_can_implicitly_convert()` — recognizes `AST_NODE_INTEGER_VALUE`/`AST_NODE_FLOAT_VALUE` as untyped literals that can convert to any matching numeric type. Applied to return statement type checks. IR generator coerces return values to match function return type.
@@ -10,9 +11,6 @@ Features present in the official Odin language that our compiler does not yet su
 - **Extended `core:fmt` variants**: Added `printfln`, `eprintln`, `eprintf`, `eprintfln` to `stubs/core/fmt/fmt.odin`. Each is a standalone copy (no `..args` forwarding, no `[]any` param delegation — both unsupported). Tested via `test_fmt_more.odin`.
 
 ## Low Complexity
-
-### `#assert[expr]` compile-time assertions
-Basic support exists (evaluates condition, errors on false). May be incomplete for complex expressions.
 
 ### `when` with complex enum comparisons
 `when ODIN_OS == .Windows` requires compile-time enum resolution in `when` conditions. Currently only `when true`/`when false` works reliably.

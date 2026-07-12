@@ -2471,6 +2471,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
     {
         if (node->text && strncmp(node->text, "#assert", 7) == 0)
         {
+            odin_grammar_node_t * expr = NULL;
             for (size_t i = 0; i < node->list.count; i++)
             {
                 odin_grammar_node_t * child = node->list.children[i];
@@ -2480,15 +2481,28 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (child->type == AST_NODE_IDENTIFIER)
                     continue;
 
-                sem_evaluate_expr(ctx, child);
-                if (child->resolved_type == NULL)
-                    continue;
-
-                int result = sem_evaluate_constant_bool(ctx, child);
-                if (result == 0)
-                    sem_error_list_add(&ctx->errors, NULL, node, "#assert failed");
-                break;
+                if (expr != NULL) {
+                    sem_error_list_add(&ctx->errors, NULL, node,
+                        "#assert requires exactly one expression");
+                    return NULL;
+                }
+                expr = child;
             }
+
+            if (expr == NULL)
+            {
+                sem_error_list_add(&ctx->errors, NULL, node,
+                    "#assert requires an expression");
+                return NULL;
+            }
+
+            sem_evaluate_expr(ctx, expr);
+            if (expr->resolved_type == NULL)
+                return NULL;
+
+            int result = sem_evaluate_constant_bool(ctx, expr);
+            if (result == 0)
+                sem_error_list_add(&ctx->errors, NULL, node, "#assert failed");
         }
         return NULL;
     }
@@ -3632,6 +3646,25 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                             sem_register_top_level_variable(ctx, inner);
                         else if (inner->type == AST_NODE_CONSTANT_DECL)
                             sem_register_top_level_declaration(ctx, inner);
+                    }
+                }
+                else if (top_decl->type == AST_NODE_DIRECTIVE_WITH_ARGS)
+                {
+                    if (top_decl->text && strncmp(top_decl->text, "#assert", 7) == 0)
+                    {
+                        for (size_t k = 0; k < top_decl->list.count; k++)
+                        {
+                            odin_grammar_node_t * ac = top_decl->list.children[k];
+                            if (ac == NULL || ac->type == AST_NODE_IDENTIFIER)
+                                continue;
+                            sem_evaluate_expr(ctx, ac);
+                            if (ac->resolved_type == NULL)
+                                break;
+                            int result = sem_evaluate_constant_bool(ctx, ac);
+                            if (result == 0)
+                                sem_error_list_add(&ctx->errors, NULL, top_decl, "#assert failed");
+                            break;
+                        }
                     }
                 }
                 else if (top_decl->type == AST_NODE_WHEN_DECL)
