@@ -153,6 +153,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
         | KwTypeidOf;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
+FieldName = lexeme(identifier) @AST_ACTION_IDENTIFIER;
 
 PolyIdent = lexeme("$" identifier) @AST_ACTION_POLY_IDENT;
 
@@ -359,7 +360,7 @@ PostfixOpCall = LParen ArgumentList? RParen @AST_ACTION_POSTFIX_CALL;
 PostfixOpSubscript = LBracket Expression RBracket @AST_ACTION_POSTFIX_SUBSCRIPT;
 PostfixOpSlice = LBracket (LogOrExpression? DotDot LogOrExpression?) RBracket @AST_ACTION_POSTFIX_SLICE;
 PostfixOpSliceLt = LBracket (LogOrExpression? DotDotLt LogOrExpression?) RBracket @AST_ACTION_POSTFIX_SLICE_LT;
-PostfixOpMember = Dot Identifier @AST_ACTION_POSTFIX_MEMBER;
+PostfixOpMember = Dot FieldName @AST_ACTION_POSTFIX_MEMBER;
 PostfixOpDeref = PointerCaret @AST_ACTION_POSTFIX_DEREF;
 PostfixOpAssertion = Dot LParen TypeName RParen @AST_ACTION_POSTFIX_ASSERTION;
 

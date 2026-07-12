@@ -1,3 +1,14 @@
+## Accomplishments (session 2026-07-12, continued)
+
+### Implemented chained member access with reserved keyword field names
+- **Grammar fix**: Added `FieldName = lexeme(identifier) @AST_ACTION_IDENTIFIER` rule. Changed `PostfixOpMember = Dot Identifier` → `PostfixOpMember = Dot FieldName`. This allows reserved keywords (`len`, `cap`, `type`, …) as field names after a dot, since `Identifier` excludes reserved words via `not(AllReservedWords)`.
+- **IR gen rvalue POSTFIX_MEMBER**: Added GEP-based field extraction for `string .len` / `.data`, `slice .len` / `.data`, `dynamic_array .len` / `.cap` / `.data`, and `array .len`.
+- **IR gen identifier loading**: Added `TD_KIND_BASIC` with name `"string"` to composite types check, so string variables return their alloca pointer (needed for GEP in member access).
+- **IR gen auto-load exclusion**: Prevented auto-loading string pointers (the pointer is needed for subsequent GEP).
+- **IR gen pointer auto-dereference (rvalue)**: `p.field` now works — `val` is already the pointer value (struct address), just update `cur_type` to pointee without loading.
+- **Tests**: `test_chained_member.odin` updated with 11 subtests covering string `.len`/`.data`, array `.len`, `Maybe.value`, chained `loc.file.len`/`loc.file.data`, and pointer deref `p.line`/`p.column`/`p.file.len`.
+- **All 115 tests pass** (117 total, 2 pre-existing baseline failures: `test_file_io`, `test_foreign_strings`).
+
 ## Accomplishments (session 2026-07-12)
 
 ### Implemented `#assert[expr]` compile-time assertions
