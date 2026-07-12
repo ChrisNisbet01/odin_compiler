@@ -291,9 +291,7 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
                 || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_SOA
                 || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY || sym->value.type_info->kind == TD_KIND_MAP
                 || sym->value.type_info->kind == TD_KIND_BIT_FIELD || sym->value.type_info->kind == TD_KIND_UNION
-                || sym->value.type_info->kind == TD_KIND_MAYBE
-                || (sym->value.type_info->kind == TD_KIND_BASIC && sym->value.type_info->as.basic.name != NULL
-                    && strcmp(sym->value.type_info->as.basic.name, "string") == 0)))
+                || sym->value.type_info->kind == TD_KIND_MAYBE))
         {
             return sym->value.value;
         }
@@ -5409,13 +5407,11 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             bool is_ptr_valued_basic = (cur_type->kind == TD_KIND_BASIC
                 && LLVMGetTypeKind(cur_type->llvm_type) == LLVMPointerTypeKind);
-            bool is_string = (cur_type->kind == TD_KIND_BASIC && cur_type->as.basic.name != NULL
-                && strcmp(cur_type->as.basic.name, "string") == 0);
             if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA && cur_type->kind != TD_KIND_ARRAY
                 && cur_type->kind != TD_KIND_SLICE && cur_type->kind != TD_KIND_PROC
                 && cur_type->kind != TD_KIND_DYNAMIC_ARRAY && cur_type->kind != TD_KIND_MAP
                 && cur_type->kind != TD_KIND_BIT_FIELD && cur_type->kind != TD_KIND_BIT_SET
-                && cur_type->kind != TD_KIND_UNION && !is_ptr_valued_basic && !is_string)
+                && cur_type->kind != TD_KIND_UNION && !is_ptr_valued_basic)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }
