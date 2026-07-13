@@ -126,6 +126,10 @@ static void sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDes
 static void sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast);
 static void sem_pass2_analyse_bodies_ast(SemContext * ctx, odin_grammar_node_t * program);
 static void sem_analyse_attributes(odin_grammar_node_t * decl_node);
+static void sem_check_assignment(
+    SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * target_type,
+    TypeDescriptor const * src_type, odin_grammar_node_t * src_node
+);
 
 // --- Compile-time constant integer evaluation ---
 // Evaluates a constant expression to an integer at compile time.
@@ -422,7 +426,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_DISTINCT_TYPE:
     {
         // DistinctType = KwDistinct TypePrefix
-        // Resolve the inner type and return its descriptor (treating distinct as transparent)
+        // Create a new distinct type descriptor wrapping the resolved base type
         odin_grammar_node_t * inner = NULL;
         for (size_t i = 0; i < node->list.count; i++)
         {
@@ -435,9 +439,12 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (inner == NULL)
             return NULL;
         TypeDescriptor const * base = sem_resolve_type_expr(ctx, inner);
-        if (base)
-            node->resolved_type = (TypeDescriptor *)base;
-        return base;
+        if (base == NULL)
+            return NULL;
+        TypeDescriptor const * distinct_td = create_distinct_type(ctx->type_registry, base);
+        if (distinct_td)
+            node->resolved_type = (TypeDescriptor *)distinct_td;
+        return distinct_td;
     }
 
     case AST_NODE_SLICE_TYPE:
@@ -1408,12 +1415,21 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_IDENTIFIER:
     {
+        if (node->text == NULL)
+            return NULL;
         // Look up the identifier in the current scope to see if it's a type alias
         symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
         if (sym != NULL && sym->kind == SYMBOL_TYPE && sym->value.type_info != NULL)
         {
             node->resolved_type = (TypeDescriptor *)sym->value.type_info;
             return sym->value.type_info;
+        }
+        // Fallback: check if this is a known built-in type name (e.g. i128, u128)
+        TypeDescriptor const * bt = get_basic_type_by_name(ctx->type_registry, node->text);
+        if (bt != NULL)
+        {
+            node->resolved_type = (TypeDescriptor *)bt;
+            return bt;
         }
         return NULL;
     }
@@ -2133,6 +2149,18 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             if (node->list.children[i] != NULL)
                 sem_evaluate_expr(ctx, node->list.children[i]);
         }
+        // Type check LHS vs RHS for a = b expression (3 children: lhs, op, rhs)
+        if (node->list.count >= 3)
+        {
+            odin_grammar_node_t * lhs_node = node->list.children[0];
+            odin_grammar_node_t * rhs_node = node->list.children[node->list.count - 1];
+            TypeDescriptor const * lhs_type = lhs_node ? lhs_node->resolved_type : NULL;
+            TypeDescriptor const * rhs_type = rhs_node ? rhs_node->resolved_type : NULL;
+            if (lhs_type != NULL && rhs_type != NULL)
+            {
+                sem_check_assignment(ctx, lhs_node, lhs_type, rhs_type, rhs_node);
+            }
+        }
         TypeDescriptor const * lhs_type = node->list.children[0] ? node->list.children[0]->resolved_type : NULL;
         if (lhs_type)
             node->resolved_type = (TypeDescriptor *)lhs_type;
@@ -2735,6 +2763,60 @@ sem_can_implicitly_convert(
             return true;
     }
     return false;
+}
+
+static bool
+sem_types_assignable(
+    SemContext * ctx, odin_grammar_node_t * src_node, TypeDescriptor const * src_type, TypeDescriptor const * dst_type
+)
+{
+    if (src_type == dst_type)
+        return true;
+    if (src_type == NULL || dst_type == NULL)
+        return false;
+    // Allow untyped literal → any numeric type (including distinct numeric)
+    if (sem_can_implicitly_convert(ctx, src_node, src_type, dst_type))
+        return true;
+    // Distinct types are only assignable to themselves (not to/from their base type)
+    // This is enforced by the pointer-equality check above (src_type == dst_type).
+    return false;
+}
+
+static void
+sem_check_assignment(
+    SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * target_type,
+    TypeDescriptor const * src_type, odin_grammar_node_t * src_node
+)
+{
+    // Only enforce type checking for distinct types — the old code had no
+    // general assignment type checking, and adding it would break existing tests
+    // that rely on implicit conversions (bool→int, int→i64, etc.).
+    // Distinct types must not be assignable to/from their base type without a cast.
+    if (target_type == NULL || src_type == NULL)
+        return;
+    if (target_type->kind != TD_KIND_DISTINCT && src_type->kind != TD_KIND_DISTINCT)
+        return; // No distinct types involved — use old lax behavior
+    if (sem_types_assignable(ctx, src_node, src_type, target_type))
+        return;
+    // Skip error for auto_cast expressions — they explicitly request a cast
+    if (src_node != NULL)
+    {
+        odin_grammar_node_t * inner = src_node;
+        while (inner != NULL && inner->list.count > 0
+               && (inner->type == AST_NODE_EXPRESSION || inner->type == AST_NODE_ASSIGN_EXPRESSION
+                   || inner->type == AST_NODE_PRIMARY_EXPRESSION))
+        {
+            inner = inner->list.children[0];
+        }
+        if (inner != NULL && inner->type == AST_NODE_AUTO_CAST_EXPR)
+            return;
+    }
+    char tbuf[128], sbuf[128];
+    type_write_canonical_name(target_type, tbuf, sizeof(tbuf));
+    type_write_canonical_name(src_type, sbuf, sizeof(sbuf));
+    char buf[256];
+    snprintf(buf, sizeof(buf), "cannot assign '%s' to '%s'", sbuf, tbuf);
+    sem_error_list_add(&ctx->errors, NULL, node, buf);
 }
 
 static void
@@ -3946,11 +4028,56 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         break;
 
     case AST_NODE_ASSIGN_STATEMENT:
+    {
+        // Find the assign operator to split LHS / RHS
+        odin_grammar_node_t * op_node = node_find_op(node);
+        size_t rhs_idx = node->list.count;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            if (node->list.children[i] == op_node && i + 1 < node->list.count)
+            {
+                rhs_idx = i + 1;
+                break;
+            }
+        }
         for (size_t i = 0; i < node->list.count; i++)
         {
             sem_evaluate_expr(ctx, node->list.children[i]);
         }
+        // Type check: LHS[0] type vs RHS type (only for simple single-LHS assignments)
+        if (rhs_idx < node->list.count && op_node != NULL)
+        {
+            odin_grammar_node_t * rhs_node = node->list.children[rhs_idx];
+            // Get LHS type (first child, skipping the operator)
+            TypeDescriptor const * lhs_type = NULL;
+            odin_grammar_node_t * lhs_node = NULL;
+            for (size_t i = 0; i < rhs_idx; i++)
+            {
+                if (node->list.children[i] != NULL && node->list.children[i] != op_node)
+                {
+                    lhs_type = node->list.children[i]->resolved_type;
+                    lhs_node = node->list.children[i];
+                    break;
+                }
+            }
+            // Unwrap expression wrappers to find the innermost node with a resolved_type
+            odin_grammar_node_t * lhs_inner = lhs_node;
+            while (lhs_inner != NULL && lhs_inner->list.count == 1 && lhs_inner->list.children[0] != NULL
+                   && (lhs_inner->type == AST_NODE_EXPRESSION || lhs_inner->type == AST_NODE_PRIMARY_EXPRESSION
+                       || lhs_inner->type == AST_NODE_POSTFIX_EXPRESSION))
+            {
+                lhs_inner = lhs_inner->list.children[0];
+                if (lhs_inner->resolved_type != NULL)
+                    lhs_type = lhs_inner->resolved_type;
+            }
+            TypeDescriptor const * rhs_type = rhs_node ? rhs_node->resolved_type : NULL;
+            if (lhs_type != NULL && rhs_type != NULL)
+            {
+                sem_check_assignment(ctx, lhs_node, lhs_type, rhs_type, rhs_node);
+            }
+        }
         break;
+    }
 
     case AST_NODE_VARIABLE_DECL:
     {
@@ -3970,9 +4097,9 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             odin_grammar_node_t * child = node->list.children[i];
             if (child == NULL)
                 continue;
-            if (is_type_node(child))
+            if (is_type_node(child) || child->type == AST_NODE_IDENTIFIER)
                 type_node = child;
-            else if (child->type != AST_NODE_IDENTIFIER)
+            else
                 init_node = child;
         }
         if (type_node == NULL && init_node == NULL)
@@ -3998,10 +4125,14 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         if (init_node)
         {
             TypeDescriptor const * init_type = sem_evaluate_expr(ctx, init_node);
-
             if (type_node == NULL)
             {
                 var_type = init_type;
+            }
+            else if (var_type != NULL && init_type != NULL)
+            {
+                // Check init type is compatible with declared variable type
+                sem_check_assignment(ctx, node, var_type, init_type, init_node);
             }
 
             // Multi-return destructuring: a, b := foo()

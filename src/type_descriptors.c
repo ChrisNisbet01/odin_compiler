@@ -1289,6 +1289,25 @@ get_or_create_maybe_type(TypeDescriptors * registry, TypeDescriptor const * inne
 }
 
 TypeDescriptor const *
+create_distinct_type(TypeDescriptors * registry, TypeDescriptor const * base_type)
+{
+    if (base_type == NULL)
+        return NULL;
+
+    // Distinct types are always unique — each occurrence creates a new type.
+    // Do NOT deduplicate by hash or content (unlike get_or_create_* functions).
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_DISTINCT;
+    td->distinct_base_type = base_type;
+    td->llvm_type = base_type->llvm_type;
+    type_compute_hash(td);
+    return td;
+}
+
+TypeDescriptor const *
 type_descriptor_get_context_type(TypeDescriptors * registry)
 {
     return registry->context_type;
@@ -1364,7 +1383,9 @@ is_integer_kind(TypeDescriptor const * desc)
 {
     if (desc == NULL)
         return false;
-    if (desc->kind != TD_KIND_BASIC)
+    if (desc->kind == TD_KIND_DISTINCT)
+        desc = desc->distinct_base_type;
+    if (desc == NULL || desc->kind != TD_KIND_BASIC)
         return false;
     return !desc->as.basic.is_float && desc->as.basic.width > 0;
 }
@@ -1374,7 +1395,9 @@ is_floating_kind(TypeDescriptor const * desc)
 {
     if (desc == NULL)
         return false;
-    if (desc->kind != TD_KIND_BASIC)
+    if (desc->kind == TD_KIND_DISTINCT)
+        desc = desc->distinct_base_type;
+    if (desc == NULL || desc->kind != TD_KIND_BASIC)
         return false;
     return desc->as.basic.is_float;
 }

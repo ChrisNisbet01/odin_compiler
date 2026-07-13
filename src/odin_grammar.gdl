@@ -70,10 +70,12 @@ KwI8 = lexeme("i8" IdBoundary);
 KwI16 = lexeme("i16" IdBoundary);
 KwI32 = lexeme("i32" IdBoundary);
 KwI64 = lexeme("i64" IdBoundary);
+KwI128 = lexeme("i128" IdBoundary);
 KwU8 = lexeme("u8" IdBoundary);
 KwU16 = lexeme("u16" IdBoundary);
 KwU32 = lexeme("u32" IdBoundary);
 KwU64 = lexeme("u64" IdBoundary);
+KwU128 = lexeme("u128" IdBoundary);
 KwF32 = lexeme("f32" IdBoundary);
 KwF64 = lexeme("f64" IdBoundary);
 KwBool = lexeme("bool" IdBoundary);
@@ -140,8 +142,8 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwTrue | KwFalse | KwNil | KwNone
     | KwContext | KwAsm | KwAutoCast
     | KwOrElse | KwOrReturn | KwNot | KwAnd | KwOr | KwNotIn
-    | KwInt | KwI8 | KwI16 | KwI32 | KwI64
-    | KwU8 | KwU16 | KwU32 | KwU64
+    | KwInt | KwI8 | KwI16 | KwI32 | KwI64 | KwI128
+    | KwU8 | KwU16 | KwU32 | KwU64 | KwU128
     | KwF16 | KwF32 | KwF64 | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring | KwAny | KwTypeId | KwType
     | KwI16Le | KwI32Le | KwI64Le | KwI16Be | KwI32Be | KwI64Be
     | KwU16Le | KwU32Le | KwU64Le | KwU16Be | KwU32Be | KwU64Be
@@ -276,8 +278,8 @@ PipeInType = lexeme('|' not('|') not('='));
 
 // --- Basic Types ---
 
-BasicType = (KwInt | KwI8 | KwI16 | KwI32 | KwI64
-          | KwU8 | KwU16 | KwU32 | KwU64
+BasicType = (KwInt | KwI8 | KwI16 | KwI32 | KwI64 | KwI128
+          | KwU8 | KwU16 | KwU32 | KwU64 | KwU128
           | KwF16 | KwF32 | KwF64
           | KwBool | KwString | KwRune | KwByte | KwUintptr | KwCstring
           | KwAny | KwTypeId | KwType

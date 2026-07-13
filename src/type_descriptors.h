@@ -200,6 +200,8 @@ get_or_create_soa_type(TypeDescriptors * registry, struct_or_union_members_st co
 TypeDescriptor const *
 get_or_create_maybe_type(TypeDescriptors * registry, TypeDescriptor const * inner_type);
 
+TypeDescriptor const * create_distinct_type(TypeDescriptors * registry, TypeDescriptor const * base_type);
+
 int type_descriptor_find_union_field_index(TypeDescriptor const * desc, char const * name);
 
 struct_field_t const * type_descriptor_get_union_field(TypeDescriptor const * desc, int index);
