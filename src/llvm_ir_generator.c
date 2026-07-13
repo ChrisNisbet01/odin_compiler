@@ -3598,21 +3598,7 @@ ir_gen_collect_foreign_import(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 }
 
-// --- Runtime intrinsic support for bodyless procedures ---
-
-static bool
-ir_gen_is_runtime_intrinsic(IrGenContext * ctx, char const * func_name)
-{
-    (void)ctx;
-    return (strcmp(func_name, "print_string") == 0)
-        || (strcmp(func_name, "print_byte") == 0)
-        || (strcmp(func_name, "int_to_string") == 0)
-        || (strcmp(func_name, "os_exit") == 0)
-        || (strcmp(func_name, "sys_open") == 0)
-        || (strcmp(func_name, "sys_read") == 0)
-        || (strcmp(func_name, "sys_write") == 0)
-        || (strcmp(func_name, "sys_close") == 0);
-}
+// --- Runtime intrinsic support for @(builtin) procedures ---
 
 static void
 ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
@@ -3936,6 +3922,11 @@ ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
         LLVMValueRef sr_result = LLVMBuildCall2(ctx->builder, asm_ftype, asm_val, sr_asm_args, 4, "sr.result");
         LLVMBuildRet(ctx->builder, sr_result);
     }
+    else
+    {
+        // Unknown builtin — should have been caught earlier; emit trap just in case
+        LLVMBuildUnreachable(ctx->builder);
+    }
 }
 
 // --- Top-level declaration codegen ---
@@ -4076,9 +4067,8 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
 
         bool is_builtin = (attrs && attrs->is_builtin);
-        bool is_known_intrinsic = ir_gen_is_runtime_intrinsic(ctx, func_name);
 
-        if (body_node || is_builtin || is_known_intrinsic)
+        if (body_node || is_builtin)
         {
             LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
             LLVMPositionBuilderAtEnd(ctx->builder, entry);
@@ -4123,14 +4113,8 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
             if (body_node)
                 ir_gen_node(ctx, body_node);
-            else if (is_known_intrinsic)
+            else
                 ir_gen_runtime_intrinsic_body(ctx, func_name, proc_type);
-            else if (is_builtin)
-            {
-                // TODO: include func_name in error message once ir_gen_error_collection_add supports formatting
-                ir_gen_error_collection_add(&ctx->errors, NULL, node, "unknown builtin (not in compiler intrinsic list)");
-                LLVMBuildUnreachable(ctx->builder);
-            }
 
             LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
             LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);
