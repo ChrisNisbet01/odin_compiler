@@ -171,8 +171,9 @@ KwLoad = lexeme("load" IdBoundary);
 KwAssert = lexeme("assert" IdBoundary);
 KwNoBoundsCheck = lexeme("no_bounds_check" IdBoundary);
 KwCallerLocation = lexeme("caller_location" IdBoundary);
+KwAlign = lexeme("align" IdBoundary);
 
-DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert | KwNoBoundsCheck | KwCallerLocation;
+DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert | KwNoBoundsCheck | KwCallerLocation | KwAlign;
 Directive = lexeme("#" DirectiveName) @AST_ACTION_DIRECTIVE;
 DirectiveWithArgs = (lexeme("#" DirectiveName) LBracket Expression RBracket) @AST_ACTION_DIRECTIVE_WITH_ARGS;
 
@@ -316,10 +317,10 @@ BitFieldType = KwBitField Directive? LBrace BitFieldFieldList RBrace @AST_ACTION
 BitSetRange = LogOrExpression (DotDotLt | DotDot) LogOrExpression @AST_ACTION_BIT_SET_RANGE;
 BitSetType = KwBitSet LBracket (TypePrefix | BitSetRange) RBracket @AST_ACTION_BIT_SET_TYPE;
 
-StructField = KwUsing? Identifier (Comma Identifier)* Colon TypePrefix @AST_ACTION_STRUCT_FIELD;
+StructField = KwUsing? Identifier (Comma Identifier)* Colon TypePrefix (Directive IntegerLiteral)? @AST_ACTION_STRUCT_FIELD;
 StructFieldList = delimited(StructField, Semicolon) Semicolon? @AST_ACTION_STRUCT_FIELD_LIST;
 StructRawBody = LBrace StructFieldList RBrace;
-StructType = KwStruct (SoaType | (Directive? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
+StructType = KwStruct (SoaType | ((Directive IntegerLiteral?)? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
 StructTypeRef = KwStruct Identifier @AST_ACTION_STRUCT_TYPE_REF;
 
 Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon VariadicMarker? TypePrefix @AST_ACTION_PARAMETER;

@@ -13,9 +13,6 @@ Features present in the official Odin language that our compiler does not yet su
 
 ## Medium Complexity
 
-### `#align` struct alignment
-Used to override struct/field alignment. Need to parse the alignment value and pass it to LLVM's struct layout.
-
 ### `@(builtin)` — Builtin annotation
 Marks a procedure as a compiler intrinsic. Would integrate with the built-in proc dispatch system.
 
@@ -104,3 +101,4 @@ The following features were previously listed as unsupported but are now impleme
 - Chained member access with reserved keyword field names (`.len`, `.data`, `.cap` on string/slice/dynamic_array/array/maybe; pointer auto-dereference `p.field` in rvalue context)
 - Slice expression syntax (`arr[low..high]`, `arr[..]`, `arr[low..]`, `arr[..high]`, `arr[..<high]`, `arr[low..<high]`) with semantic analysis and IR generation (GEP + slice struct construction); works for both arrays and slices, including chained slicing
 - Type alias `::` declaration (`Handle :: int`, `PtrToInt :: ^int`, `MyHandle :: Handle`): Added `TypePrefix` alternative to `ConstantDecl` grammar. Semantic analyser detects type values and stores them as `SYMBOL_TYPE` symbols; `sem_resolve_type_expr` handles `AST_NODE_IDENTIFIER` for type alias lookups. Variable declarations (`x: Handle`) resolve type via the identifier scope lookup path.
+- `#align` struct alignment (`struct #align N { ... }` and field-level `field: type #align N`): Grammar parses `KwAlign` directive + size on both struct type and struct fields. Semantic analyser extracts alignment from directive children, overrides `struct_metadata.alignment` after type registration. IR generator uses user alignment in `LLVMSetAlignment` for struct allocas.

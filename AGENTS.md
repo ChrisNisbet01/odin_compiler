@@ -261,5 +261,15 @@
 - **Test runner**: `bash tests/run_tests.sh` confirms all 106 tests pass.
 - **Root cause of delegation failure**: `ir_gen_identifier` returns alloca pointers for composite types (slices, structs, etc.) at line 291. When passed as function call arguments, the IR receives `ptr %args` instead of loading `{ptr, i64}`. Fix requires either loading composite type values at call sites or a separate argument evaluation path.
 
+## Accomplishments (session 2026-07-13, continued)
+
+### Implemented `#align` struct/field alignment
+- **Grammar** (`odin_grammar.gdl`): Added `KwAlign` lexeme, added to `DirectiveName`. `StructType` changed to `KwStruct (SoaType | ((Directive IntegerLiteral?)? StructRawBody))`. `StructField` changed to accept `(Directive IntegerLiteral)?` after `TypePrefix`.
+- **Semantic analyser** (`semantic_analyser.c`): `AST_NODE_STRUCT_TYPE` handler scans children for `AST_NODE_DIRECTIVE` with text `"#align"` and extracts subsequent `AST_NODE_INTEGER_VALUE`. Overrides `struct_metadata.alignment` after `register_struct_type`. Field-level `#align` extracted and stored in `struct_field_t.user_alignment`.
+- **IR generator** (`llvm_ir_generator.c`): `ir_gen_variable_decl` uses `struct_metadata.alignment` for `LLVMSetAlignment` when it exceeds ABI alignment.
+- **Pre-existing bug discovered**: `:: struct { ... }` (ConstantDecl with inline struct type) never worked even before changes — `End of input not found` error.
+- **Tests**: `test_align.odin` with struct-level and field-level `#align` in variable declarations.
+- **All 122 tests pass** (121 previous + 1 new).
+
 ### Key insight
 The `any` type system had two fundamental flaws: (a) integer arguments were stored as `inttoptr` values (data pointer = integer cast to pointer) instead of storing the integer in memory and pointing to it; (b) the `type_of` builtin only worked at compile time, making runtime type dispatch impossible. Fixing both enabled proper runtime type identification and safe type assertion through the `any` struct's `{ptr data, i64 type_id}` layout.

@@ -11,6 +11,7 @@ typedef struct
     char const * name;
     TypeDescriptor const * type_desc;
     bool is_using;
+    uint32_t user_alignment;
     uint64_t offset;
     unsigned bit_offset;
     unsigned bit_width;

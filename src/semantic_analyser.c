@@ -988,13 +988,28 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_STRUCT_TYPE:
     {
         bool is_soa = false;
+        uint32_t struct_alignment = 0;
         for (size_t ci = 0; ci < node->list.count; ci++)
         {
             odin_grammar_node_t * child = node->list.children[ci];
-            if (child && child->type == AST_NODE_DIRECTIVE && child->text && strcmp(child->text, "#soa") == 0)
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_DIRECTIVE && child->text)
             {
-                is_soa = true;
-                break;
+                if (strcmp(child->text, "#soa") == 0)
+                {
+                    is_soa = true;
+                    break;
+                }
+                if (strcmp(child->text, "#align") == 0)
+                {
+                    if (ci + 1 < node->list.count)
+                    {
+                        odin_grammar_node_t * align_val = node->list.children[ci + 1];
+                        if (align_val && align_val->type == AST_NODE_INTEGER_VALUE && align_val->text)
+                            struct_alignment = (uint32_t)strtoull(align_val->text, NULL, 0);
+                    }
+                }
             }
         }
 
@@ -1024,12 +1039,15 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const ** field_types = malloc((size_t)field_count * sizeof(TypeDescriptor const *));
         LLVMTypeRef * llvm_field_types = malloc((size_t)field_count * sizeof(LLVMTypeRef));
         bool * field_is_using = malloc((size_t)field_count * sizeof(bool));
-        if (field_names == NULL || field_types == NULL || llvm_field_types == NULL || field_is_using == NULL)
+        uint32_t * field_alignments = malloc((size_t)field_count * sizeof(uint32_t));
+        if (field_names == NULL || field_types == NULL || llvm_field_types == NULL || field_is_using == NULL
+            || field_alignments == NULL)
         {
             free((void *)field_names);
             free((void *)field_types);
             free(llvm_field_types);
             free(field_is_using);
+            free(field_alignments);
             return NULL;
         }
 
@@ -1043,9 +1061,10 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             // Detect "using" keyword (stored as text by the struct field action)
             bool is_using = (field->text != NULL && strcmp(field->text, "using") == 0);
 
-            // Find field name (first Identifier child)
+            // Find field name (first Identifier child) and type (first type node child)
             odin_grammar_node_t * name_node = NULL;
             odin_grammar_node_t * type_node = NULL;
+            uint32_t field_alignment = 0;
             for (size_t ci = 0; ci < field->list.count; ci++)
             {
                 odin_grammar_node_t * child = field->list.children[ci];
@@ -1055,6 +1074,16 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                     name_node = child;
                 else if (is_type_node(child))
                     type_node = child;
+                else if (child->type == AST_NODE_DIRECTIVE && child->text
+                         && strcmp(child->text, "#align") == 0)
+                {
+                    if (ci + 1 < field->list.count)
+                    {
+                        odin_grammar_node_t * align_val = field->list.children[ci + 1];
+                        if (align_val && align_val->type == AST_NODE_INTEGER_VALUE && align_val->text)
+                            field_alignment = (uint32_t)strtoull(align_val->text, NULL, 0);
+                    }
+                }
             }
 
             if (name_node == NULL || name_node->text == NULL || type_node == NULL)
@@ -1079,6 +1108,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             }
             field_names[fi] = name_node->text;
             field_is_using[fi] = is_using;
+            field_alignments[fi] = field_alignment;
             fi++;
         }
 
@@ -1088,6 +1118,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             free((void *)field_types);
             free(llvm_field_types);
             free(field_is_using);
+            free(field_alignments);
             return NULL;
         }
 
@@ -1101,6 +1132,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                 members.fields[j].name = field_names[j];
                 members.fields[j].type_desc = field_types[j];
                 members.fields[j].is_using = field_is_using[j];
+                members.fields[j].user_alignment = field_alignments[j];
                 members.fields[j].offset = 0;
                 members.fields[j].bit_offset = 0;
                 members.fields[j].bit_width = 0;
@@ -1113,6 +1145,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             free((void *)field_types);
             free(llvm_field_types);
             free(field_is_using);
+            free(field_alignments);
             free(members.fields);
 
             if (soa_td)
@@ -1131,6 +1164,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             members.fields[j].name = field_names[j];
             members.fields[j].type_desc = field_types[j];
             members.fields[j].is_using = field_is_using[j];
+            members.fields[j].user_alignment = field_alignments[j];
             members.fields[j].offset = 0;
             members.fields[j].bit_offset = 0;
             members.fields[j].bit_width = 0;
@@ -1139,10 +1173,19 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
 
         TypeDescriptor const * struct_td = register_struct_type(ctx->type_registry, llvm_struct, true, &members);
 
+        // Override struct alignment if user specified #align
+        if (struct_td && struct_alignment > 0)
+        {
+            TypeDescriptor * mutable_td = (TypeDescriptor *)struct_td;
+            if (struct_alignment > mutable_td->struct_metadata.alignment)
+                mutable_td->struct_metadata.alignment = struct_alignment;
+        }
+
         free((void *)field_names);
         free((void *)field_types);
         free(llvm_field_types);
         free(field_is_using);
+        free(field_alignments);
         free(members.fields);
 
         if (struct_td)
@@ -1201,6 +1244,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             members.fields[fi].name = name_node->text;
             members.fields[fi].type_desc = ftype;
             members.fields[fi].is_using = false;
+            members.fields[fi].user_alignment = 0;
             members.fields[fi].offset = 0;
             members.fields[fi].bit_offset = 0;
             members.fields[fi].bit_width = 0;
@@ -1276,6 +1320,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                 backing_members.fields[j].name = src->name;
                 backing_members.fields[j].type_desc = slice_type;
                 backing_members.fields[j].is_using = src->is_using;
+                backing_members.fields[j].user_alignment = src->user_alignment;
                 backing_members.fields[j].offset = 0;
                 backing_members.fields[j].bit_offset = 0;
                 backing_members.fields[j].bit_width = 0;
@@ -1372,6 +1417,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
             backing_members.fields[j].name = src->name;
             backing_members.fields[j].type_desc = array_type;
             backing_members.fields[j].is_using = src->is_using;
+            backing_members.fields[j].user_alignment = src->user_alignment;
             backing_members.fields[j].offset = 0;
             backing_members.fields[j].bit_offset = 0;
             backing_members.fields[j].bit_width = 0;

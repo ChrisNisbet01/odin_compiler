@@ -1318,7 +1318,10 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
     LLVMTypeRef llvm_type = var_type->llvm_type;
     LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, llvm_type, name_node->text);
-    LLVMSetAlignment(alloca, LLVMABIAlignmentOfType(ctx->data_layout, llvm_type));
+    unsigned alignment = LLVMABIAlignmentOfType(ctx->data_layout, llvm_type);
+    if (var_type->kind == TD_KIND_STRUCT && var_type->struct_metadata.alignment > alignment)
+        alignment = var_type->struct_metadata.alignment;
+    LLVMSetAlignment(alloca, alignment);
 
     LLVMBuildStore(ctx->builder, LLVMConstNull(llvm_type), alloca);
 
