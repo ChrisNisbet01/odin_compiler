@@ -232,7 +232,7 @@ Question = lexeme('?');
 
 AttrValue = StringLiteral | TrueLiteral | FalseLiteral;
 AttrItem = Identifier (Assign AttrValue)? @AST_ACTION_ATTR_ITEM;
-AttrList = delimited(AttrItem, Comma) Comma? @AST_ACTION_ATTR_LIST;
+AttrList = delimited_flex(AttrItem, Comma) Comma? @AST_ACTION_ATTR_LIST;
 Attribute = At LParen AttrList? RParen @AST_ACTION_ATTRIBUTE;
 DotDot = lexeme(".." not('.'));
 DotDotLt = lexeme("..<");
@@ -302,23 +302,23 @@ MapType = KwMap LBracket TypePrefix RBracket TypePrefix @AST_ACTION_MAP_TYPE;
 SoaType = (DirectiveWithArgs | Directive) TypePrefix @AST_ACTION_SOA_TYPE;
 
 Enumerator = Identifier (Assign Expression)? @AST_ACTION_ENUMERATOR;
-EnumeratorList = delimited(Enumerator, Comma) Comma? @AST_ACTION_ENUMERATOR_LIST;
+EnumeratorList = delimited_flex(Enumerator, Comma) Comma? @AST_ACTION_ENUMERATOR_LIST;
 EnumType = KwEnum Directive? Identifier? LBrace EnumeratorList RBrace @AST_ACTION_ENUM_TYPE;
 EnumTypeRef = KwEnum Identifier @AST_ACTION_ENUM_TYPE_REF;
 
 UnionField = KwUsing? Identifier Colon TypePrefix @AST_ACTION_UNION_FIELD;
-UnionFieldList = delimited(UnionField, Semicolon) Semicolon? @AST_ACTION_UNION_FIELD_LIST;
+UnionFieldList = delimited_flex(UnionField, Semicolon) Semicolon? @AST_ACTION_UNION_FIELD_LIST;
 UnionType = KwUnion Directive? LBrace UnionFieldList RBrace @AST_ACTION_UNION_TYPE;
 
 BitFieldField = Identifier Colon TypePrefix PipeInType IntegerLiteral @AST_ACTION_BIT_FIELD_FIELD;
-BitFieldFieldList = delimited(BitFieldField, Comma) Comma? @AST_ACTION_BIT_FIELD_FIELD_LIST;
+BitFieldFieldList = delimited_flex(BitFieldField, Comma) Comma? @AST_ACTION_BIT_FIELD_FIELD_LIST;
 BitFieldType = KwBitField Directive? LBrace BitFieldFieldList RBrace @AST_ACTION_BIT_FIELD_TYPE;
 
 BitSetRange = LogOrExpression (DotDotLt | DotDot) LogOrExpression @AST_ACTION_BIT_SET_RANGE;
 BitSetType = KwBitSet LBracket (TypePrefix | BitSetRange) RBracket @AST_ACTION_BIT_SET_TYPE;
 
 StructField = KwUsing? Identifier (Comma Identifier)* Colon TypePrefix (Directive IntegerLiteral)? @AST_ACTION_STRUCT_FIELD;
-StructFieldList = delimited(StructField, Semicolon) Semicolon? @AST_ACTION_STRUCT_FIELD_LIST;
+StructFieldList = delimited_flex(StructField, Semicolon) Semicolon? @AST_ACTION_STRUCT_FIELD_LIST;
 StructRawBody = LBrace StructFieldList RBrace;
 StructType = KwStruct (SoaType | ((Directive IntegerLiteral?)? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
 StructTypeRef = KwStruct Identifier @AST_ACTION_STRUCT_TYPE_REF;
@@ -327,8 +327,8 @@ Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon VariadicMarker? TypePre
 Parameters = Ellipsis | (Parameter (Comma Parameter)* (Comma Ellipsis)?) @AST_ACTION_PARAMETERS;
 ParameterList = LParen Parameters? RParen @AST_ACTION_PARAMETER_LIST;
 NamedReturn = Identifier Colon TypePrefix @AST_ACTION_NAMED_RETURN;
-ReturnList = delimited(NamedReturn, Comma) Comma? @AST_ACTION_RETURN_LIST;
-ReturnTypeList = delimited(TypePrefix, Comma) Comma? @AST_ACTION_RETURN_TYPE_LIST;
+ReturnList = delimited_flex(NamedReturn, Comma) Comma? @AST_ACTION_RETURN_LIST;
+ReturnTypeList = delimited_flex(TypePrefix, Comma) Comma? @AST_ACTION_RETURN_TYPE_LIST;
 Returns = Arrow (LParen (ReturnList | ReturnTypeList) RParen | TypePrefix) @AST_ACTION_RETURNS;
 WhereClause = KwWhere Expression @AST_ACTION_WHERE_CLAUSE;
 CallingConvention = StringLiteral @AST_ACTION_CALLING_CONVENTION;
@@ -512,7 +512,7 @@ ImportUsing = KwImport KwUsing StringLiteral @AST_ACTION_IMPORT_USING;
 ImportSimple = KwImport StringLiteral @AST_ACTION_IMPORT;
 ImportDecl = ImportNamed | ImportUsing | ImportSimple;
 
-IdentifierList = delimited(Identifier, Comma) Comma? @AST_ACTION_IDENTIFIER_LIST;
+IdentifierList = delimited_flex(Identifier, Comma) Comma? @AST_ACTION_IDENTIFIER_LIST;
 VariableDecl = IdentifierList (Colon TypePrefix (Assign Expression)? | ColonAssign Expression) @AST_ACTION_VARIABLE_DECL;
 
 ConstantDecl = Attribute? Identifier DoubleColon (ProcedureLiteral | Expression | TypePrefix) @AST_ACTION_CONSTANT_DECL;

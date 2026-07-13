@@ -261,7 +261,12 @@
 - **Test runner**: `bash tests/run_tests.sh` confirms all 106 tests pass.
 - **Root cause of delegation failure**: `ir_gen_identifier` returns alloca pointers for composite types (slices, structs, etc.) at line 291. When passed as function call arguments, the IR receives `ptr %args` instead of loading `{ptr, i64}`. Fix requires either loading composite type values at call sites or a separate argument evaluation path.
 
-## Accomplishments (session 2026-07-13, continued)
+## Accomplishments (session 2026-07-14)
+
+### Fixed `:: struct` type alias parsing and trailing separator bugs
+- **Root cause**: The `delimited` combinator in strict mode (`delimited_flex` available at `easy_pc/lib/parsers.c:2875`) errors on trailing separators instead of backtracking over them. The `Semicolon?`/`Comma?` after every `delimited` in the grammar was dead code — never reached.
+- **Fix**: Changed all 8 `delimited(X, Sep)` calls in `odin_grammar.gdl` to `delimited_flex(X, Sep)`. `delimited_flex` backtracks over the trailing separator, then `Sep?` consumes it. This fixes `:: struct { x: int; }`, `enum { A; B; }`, `union { x: int; y: int; }`, `@(a, b,)`, `bit_field { a: 0; b: 1; }`, etc.
+- **Tests**: `test_type_alias_struct.odin` uses `:: struct` with field access. All 123 tests pass.
 
 ### Implemented `#align` struct/field alignment
 - **Grammar** (`odin_grammar.gdl`): Added `KwAlign` lexeme, added to `DirectiveName`. `StructType` changed to `KwStruct (SoaType | ((Directive IntegerLiteral?)? StructRawBody))`. `StructField` changed to accept `(Directive IntegerLiteral)?` after `TypePrefix`.
