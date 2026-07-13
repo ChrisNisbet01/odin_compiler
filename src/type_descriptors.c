@@ -31,6 +31,8 @@ struct TypeDescriptors
     TypeDescriptor * context_type;
     TypeDescriptor * allocator_type;
     TypeDescriptor * source_location_type;
+    TypeDescriptor * type_info_type;
+    TypeDescriptor * type_info_ptr_type;
 };
 
 static TypeDescriptor *
@@ -672,6 +674,42 @@ register_builtin_context_types(TypeDescriptors * registry)
 
     registry->source_location_type = (TypeDescriptor *)register_struct_type(registry, sl_llvm, true, &sl_members);
     free(sl_members.fields);
+
+    // type_info struct (compiler-internal): { size: i64, align: i64, id: i64, kind: i64 }
+    LLVMTypeRef ti_fields[4];
+    ti_fields[0] = registry->i64_type->llvm_type;  // size
+    ti_fields[1] = registry->i64_type->llvm_type;  // align
+    ti_fields[2] = registry->i64_type->llvm_type;  // id (typeid)
+    ti_fields[3] = registry->i64_type->llvm_type;  // kind
+    LLVMTypeRef ti_llvm = LLVMStructTypeInContext(registry->context, ti_fields, 4, false);
+
+    struct_or_union_members_st ti_members;
+    ti_members.count = 4;
+    ti_members.fields = malloc(4 * sizeof(struct_field_t));
+    ti_members.fields[0].name = "size";
+    ti_members.fields[0].type_desc = registry->i64_type;
+    ti_members.fields[0].is_using = false;
+    ti_members.fields[1].name = "align";
+    ti_members.fields[1].type_desc = registry->i64_type;
+    ti_members.fields[1].is_using = false;
+    ti_members.fields[2].name = "id";
+    ti_members.fields[2].type_desc = registry->i64_type;
+    ti_members.fields[2].is_using = false;
+    ti_members.fields[3].name = "kind";
+    ti_members.fields[3].type_desc = registry->i64_type;
+    ti_members.fields[3].is_using = false;
+
+    registry->type_info_type = (TypeDescriptor *)register_struct_type(registry, ti_llvm, true, &ti_members);
+    free(ti_members.fields);
+
+    // ^type_info pointer type
+    registry->type_info_ptr_type = type_descriptor_alloc(registry);
+    if (registry->type_info_ptr_type)
+    {
+        registry->type_info_ptr_type->kind = TD_KIND_POINTER;
+        registry->type_info_ptr_type->pointee = registry->type_info_type;
+        registry->type_info_ptr_type->llvm_type = LLVMPointerType(ti_llvm, 0);
+    }
 }
 
 TypeDescriptor const *
@@ -1317,6 +1355,18 @@ TypeDescriptor const *
 type_descriptor_get_source_location_type(TypeDescriptors * registry)
 {
     return registry->source_location_type;
+}
+
+TypeDescriptor const *
+type_descriptor_get_type_info_type(TypeDescriptors * registry)
+{
+    return registry->type_info_type;
+}
+
+TypeDescriptor const *
+type_descriptor_get_type_info_ptr_type(TypeDescriptors * registry)
+{
+    return registry->type_info_ptr_type;
 }
 
 TypeDescriptor const *

@@ -1,3 +1,25 @@
+## Accomplishments (session 2026-07-13)
+
+### Implemented `distinct` type creation with type isolation
+- **`create_distinct_type()`** (`type_descriptors.c`/`.h`): Allocates a new `TD_KIND_DISTINCT` descriptor with same LLVM layout as base, unique hash (no dedup).
+- **`is_integer_kind()` / `is_floating_kind()`**: Unwrap `TD_KIND_DISTINCT` to base before checking, so distinct numeric types accept untyped literals.
+- **`sem_types_assignable()` / `sem_check_assignment()`**: Enforce distinct-type assignment rules (only assign to same distinct type, or from untyped literal); all other assignments use old lax behaviour.
+- **Fixed `AST_NODE_VARIABLE_DECL`**: Added `child->type == AST_NODE_IDENTIFIER` to type-node classification so `x: MyInt` and `x: Handle` (type alias) both resolve correctly.
+- **Tests**: `test_distinct.odin` (6 subtests), `test_distinct_assign_base.odin` (expected fail), `test_distinct_to_base.odin` (expected fail). All pass.
+
+### Fixed `i128`/`u128` regression
+- **Root cause**: `i128`/`u128` not in `BasicType` grammar rule → parsed as `Identifier` → the new `child->type == AST_NODE_IDENTIFIER` check made them match as type nodes, but `sem_resolve_type_expr` for `AST_NODE_IDENTIFIER` only checked scope (not type registry) → returned NULL → "undeclared identifier".
+- **Fix**: Added `KwI128`/`KwU128` lexemes to `BasicType` rule + `AllReservedWords` in grammar; added `get_basic_type_by_name` fallback in `sem_resolve_type_expr` for robustness.
+- **All 120 tests pass** (previously 120 passing).
+
+### Implemented `type_info_of(T)` runtime type info
+- **Grammar**: Added `KwTypeInfoOf` lexeme, `TypeInfoOfExpr` rule, updated `UnaryExpression` and `AllReservedWords`.
+- **AST**: Added `AST_NODE_TYPE_INFO_OF_EXPR` enum, action, node name.
+- **Type descriptors**: Added `type_info` struct `{i64 size, i64 align, i64 id, i64 kind}` as a compiler-internal type, registered in `register_builtin_context_types`. Added getter functions for the opaque `TypeDescriptors` struct.
+- **Semantic analyser**: `AST_NODE_TYPE_INFO_OF_EXPR` resolves operand type and returns `^type_info` pointer type.
+- **IR generator**: `ir_gen_get_or_create_type_info_global()` lazily creates `internal unnamed_addr constant` globals per unique type, deduplicated by `type_id`. `.id` field stores the type's hash. Fixed signed/unsigned comparison bug (`td->type_id >= 0` truncated high-bit-set hashes to 0).
+- **Tests**: `test_type_info_of.odin` (19 subtests covering size, id, pointer comparison, kind). **All 121 tests pass**.
+
 ## Accomplishments (session 2026-07-12, continued)
 
 ### Implemented chained member access with reserved keyword field names

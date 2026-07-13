@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 
 // --- Forward declarations ---
 static LLVMValueRef ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node);
@@ -5491,6 +5492,85 @@ ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr)
     return LLVMBuildCall2(ctx->builder, strlen_type, strlen_fn, args, 1, "strlen");
 }
 
+// --- Type info globals ---
+
+static int
+type_info_kind_from_td_kind(td_kind_t kind)
+{
+    switch (kind)
+    {
+        case TD_KIND_BASIC: return 1;
+        case TD_KIND_POINTER: return 2;
+        case TD_KIND_ARRAY: return 3;
+        case TD_KIND_SLICE: return 4;
+        case TD_KIND_DYNAMIC_ARRAY: return 5;
+        case TD_KIND_STRUCT: return 6;
+        case TD_KIND_UNION: return 7;
+        case TD_KIND_ENUM: return 8;
+        case TD_KIND_BIT_FIELD: return 9;
+        case TD_KIND_BIT_SET: return 10;
+        case TD_KIND_MAP: return 11;
+        case TD_KIND_PROC: return 12;
+        case TD_KIND_DISTINCT: return 13;
+        case TD_KIND_SOA: return 14;
+        case TD_KIND_RANGE: return 15;
+        case TD_KIND_MAYBE: return 16;
+        default: return 0;
+    }
+}
+
+static LLVMValueRef
+ir_gen_get_or_create_type_info_global(IrGenContext * ctx, TypeDescriptor const * td)
+{
+    if (td == NULL || td->llvm_type == NULL)
+        return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+
+    // Check if we already created a global for this type
+    for (int i = 0; i < ctx->type_info_global_count; i++)
+    {
+        if (ctx->type_info_globals[i].type_id == td->type_id)
+            return ctx->type_info_globals[i].global;
+    }
+
+    if (ctx->type_info_global_count >= MAX_TYPE_INFO_GLOBALS)
+        return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+
+    // Compute size and alignment
+    uint64_t size = LLVMABISizeOfType(ctx->data_layout, td->llvm_type);
+    uint64_t align = LLVMABIAlignmentOfType(ctx->data_layout, td->llvm_type);
+    uint64_t type_id = (uint64_t)td->type_id;
+    uint64_t kind = (uint64_t)type_info_kind_from_td_kind(td->kind);
+
+    TypeDescriptor const * ti_td = type_descriptor_get_type_info_type(ctx->type_registry);
+    if (ti_td == NULL)
+        return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+    LLVMTypeRef ti_type = ti_td->llvm_type;
+
+    LLVMValueRef fields[4];
+    fields[0] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), size, false);
+    fields[1] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), align, false);
+    fields[2] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), type_id, false);
+    fields[3] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), kind, false);
+
+    LLVMValueRef init_val = LLVMConstNamedStruct(ti_type, fields, 4);
+
+    // Create a unique name for the global
+    char global_name[128];
+    snprintf(global_name, sizeof(global_name), "_type_info_%" PRIx64, td->type_id);
+
+    LLVMValueRef global = LLVMAddGlobal(ctx->module, ti_type, global_name);
+    LLVMSetInitializer(global, init_val);
+    LLVMSetGlobalConstant(global, true);
+    LLVMSetLinkage(global, LLVMInternalLinkage);
+    LLVMSetUnnamedAddr(global, true);
+
+    int idx = ctx->type_info_global_count++;
+    ctx->type_info_globals[idx].type_id = td->type_id;
+    ctx->type_info_globals[idx].global = global;
+
+    return global;
+}
+
 // --- Main node dispatcher ---
 
 static LLVMValueRef
@@ -5756,6 +5836,18 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         if (operand_type == NULL)
             return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
         return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)operand_type->type_id, false);
+    }
+
+    case AST_NODE_TYPE_INFO_OF_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        odin_grammar_node_t * operand_node = node->list.children[0];
+        TypeDescriptor const * operand_type = operand_node->resolved_type;
+        if (operand_type == NULL)
+            return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+        // Return a pointer to the type_info global for this type
+        return ir_gen_get_or_create_type_info_global(ctx, operand_type);
     }
 
     case AST_NODE_SIZE_OF_EXPR:

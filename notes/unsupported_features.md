@@ -3,6 +3,7 @@
 Features present in the official Odin language that our compiler does not yet support, ordered by estimated implementation complexity (easiest first).
 
 ## Recently fixed
+- **`type_info_of(T)` — Runtime type info**: Returns a `^type_info` pointer with `size`, `align`, `id`, `kind` fields. LLVM globals generated lazily per unique type and deduplicated by `type_id`. Works with all basic and derived types.
 - **`#assert[expr]` compile-time assertions**: Now fully functional. Enforces exactly one expression. Evaluates at compile-time in both procedure bodies and top-level scope. Fails with `#assert failed` error when expression evaluates to false. Works with arithmetic, boolean, comparison, bitwise, `typeid_of`, `size_of`, `align_of`, and `offset_of` expressions.
 - **`core:os` + runtime intrinsics**: `os.exit()` now uses runtime intrinsic `os_exit` (inline syscall, no `foreign libc`). `print_string`/`print_byte`/`int_to_string` refactored from special AST nodes to `core:runtime` prelude auto-import + IR generator intrinsic body generation. `stubs/src/` deleted (dead code).
 - **Recursive function calls**: Fixed link error (`fib.4` undefined) by moving `generator_add_symbol` before body generation in IR generator. Fixed recursive call semantic analysis (returned NULL type for recursive calls) by pre-registering procedure type in symbol table before body analysis. `fibonacci.odin` now compiles without any casts.
@@ -11,12 +12,6 @@ Features present in the official Odin language that our compiler does not yet su
 - **Extended `core:fmt` variants**: Added `printfln`, `eprintln`, `eprintf`, `eprintfln` to `stubs/core/fmt/fmt.odin`. Each is a standalone copy (no `..args` forwarding, no `[]any` param delegation — both unsupported). Tested via `test_fmt_more.odin`.
 
 ## Medium Complexity
-
-### `type_info_of(T)` — Get runtime type info
-Returns a pointer to the type descriptor at runtime. Requires generating type info data sections in LLVM IR.
-
-### `distinct` type creation
-Parsed but semantically transparent (doesn't create a new type). Need `get_or_create_distinct_type` that allocates a separate descriptor, and enforce type distinctness in assignment/equality.
 
 ### `#align` struct alignment
 Used to override struct/field alignment. Need to parse the alignment value and pass it to LLVM's struct layout.
@@ -78,7 +73,7 @@ The following features were previously listed as unsupported but are now impleme
 - `@(link_name="...")` — Custom link name (rename symbols at link time)
 - `@(require_results)` — Require results annotation
 - `@(private)` — Visibility control (cross-package access restriction)
-- `distinct` (parsed — still transparent, see Medium Complexity above)
+- `distinct` type creation with type isolation (`MyInt :: distinct int`): creates a unique type descriptor; enforces assignment only with explicit cast; untyped literals implicitly convert to distinct numeric types
 - `bit_set` range syntax (e.g. `bit_set[0..<32]`)
 - `struct #soa { ... }` (slice-backed SOA struct)
 - `#soa[N]` (array-backed SOA)

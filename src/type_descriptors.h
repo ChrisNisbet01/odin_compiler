@@ -228,6 +228,10 @@ TypeDescriptor const * type_descriptor_get_context_type(TypeDescriptors * regist
 
 TypeDescriptor const * type_descriptor_get_source_location_type(TypeDescriptors * registry);
 
+TypeDescriptor const * type_descriptor_get_type_info_type(TypeDescriptors * registry);
+
+TypeDescriptor const * type_descriptor_get_type_info_ptr_type(TypeDescriptors * registry);
+
 bool is_integer_kind(TypeDescriptor const * desc);
 
 bool is_floating_kind(TypeDescriptor const * desc);

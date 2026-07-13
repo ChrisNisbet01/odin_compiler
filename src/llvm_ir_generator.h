@@ -14,6 +14,13 @@
 #define MAX_LOOP_DEPTH 64
 #define MAX_FUNC_DEPTH 64
 #define MAX_DEFERS 128
+#define MAX_TYPE_INFO_GLOBALS 256
+
+typedef struct
+{
+    int64_t type_id;
+    LLVMValueRef global;
+} TypeInfoGlobalEntry;
 
 typedef struct
 {
@@ -73,6 +80,9 @@ typedef struct
 
     LLVMValueRef odin_argc_global;
     LLVMValueRef odin_argv_global;
+
+    TypeInfoGlobalEntry type_info_globals[MAX_TYPE_INFO_GLOBALS];
+    int type_info_global_count;
 } IrGenContext;
 
 IrGenContext *

@@ -1841,6 +1841,27 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return typeid_type;
     }
 
+    case AST_NODE_TYPE_INFO_OF_EXPR:
+    {
+        if (node->list.count < 1)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        odin_grammar_node_t * operand = node->list.children[0];
+        TypeDescriptor const * td = sem_resolve_type_expr(ctx, operand);
+        if (td == NULL)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        operand->resolved_type = (TypeDescriptor *)td;
+        // type_info_of(T) returns ^type_info
+        TypeDescriptor const * ti_ptr = type_descriptor_get_type_info_ptr_type(ctx->type_registry);
+        node->resolved_type = (TypeDescriptor *)ti_ptr;
+        return ti_ptr;
+    }
+
     case AST_NODE_MIN_EXPR:
     case AST_NODE_MAX_EXPR:
     {

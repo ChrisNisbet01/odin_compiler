@@ -283,6 +283,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "TypeOfExpr";
     case AST_NODE_TYPEID_OF_EXPR:
         return "TypeidOfExpr";
+    case AST_NODE_TYPE_INFO_OF_EXPR:
+        return "TypeInfoOfExpr";
     case AST_NODE_MAKE_EXPR:
         return "MakeExpr";
     case AST_NODE_NEW_EXPR:
