@@ -4075,7 +4075,10 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         TypedValue tv = create_typed_value(func, proc_type, false);
         generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
 
-        if (body_node || ir_gen_is_runtime_intrinsic(ctx, func_name))
+        bool is_builtin = (attrs && attrs->is_builtin);
+        bool is_known_intrinsic = ir_gen_is_runtime_intrinsic(ctx, func_name);
+
+        if (body_node || is_builtin || is_known_intrinsic)
         {
             LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
             LLVMPositionBuilderAtEnd(ctx->builder, entry);
@@ -4120,8 +4123,14 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
             if (body_node)
                 ir_gen_node(ctx, body_node);
-            else
+            else if (is_known_intrinsic)
                 ir_gen_runtime_intrinsic_body(ctx, func_name, proc_type);
+            else if (is_builtin)
+            {
+                // TODO: include func_name in error message once ir_gen_error_collection_add supports formatting
+                ir_gen_error_collection_add(&ctx->errors, NULL, node, "unknown builtin (not in compiler intrinsic list)");
+                LLVMBuildUnreachable(ctx->builder);
+            }
 
             LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
             LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);

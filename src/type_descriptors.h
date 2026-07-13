@@ -82,6 +82,7 @@ typedef struct
     char * link_name;
     bool require_results;
     bool is_private;
+    bool is_builtin;
 } ProcDeclAttributes;
 
 typedef struct TypeDescriptor

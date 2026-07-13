@@ -3584,6 +3584,10 @@ sem_analyse_attributes(odin_grammar_node_t * decl_node)
         {
             attrs->is_private = true;
         }
+        else if (strcmp(name_node->text, "builtin") == 0)
+        {
+            attrs->is_builtin = true;
+        }
     }
     decl_node->metadata = attrs;
 }
