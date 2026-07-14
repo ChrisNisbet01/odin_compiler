@@ -128,6 +128,7 @@ KwBitSet = lexeme("bit_set" IdBoundary);
 KwIncl = lexeme("incl" IdBoundary);
 KwExcl = lexeme("excl" IdBoundary);
 KwMaybe = lexeme("Maybe" IdBoundary);
+KwHashType = lexeme("#type" IdBoundary);
 KwProcLiteral = KwProc;
 
 // Reserved words set (for identifier boundary checking)
@@ -154,7 +155,8 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwQuaternion | KwQuaternion64 | KwQuaternion128 | KwQuaternion256
         | KwBitField | KwBitSet | KwIncl | KwExcl
         | KwMaybe
-        | KwTypeidOf | KwTypeInfoOf;
+        | KwTypeidOf | KwTypeInfoOf
+        | KwHashType;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
 FieldName = lexeme(identifier) @AST_ACTION_IDENTIFIER;
@@ -299,6 +301,7 @@ PointerType = PointerCaret TypePrefix @AST_ACTION_POINTER_TYPE;
 ArrayType = LBracket (IntegerLiteral | PolyIdent | Identifier)? RBracket TypePrefix @AST_ACTION_ARRAY_TYPE;
 DynamicArrayType = LBracket KwDynamic RBracket TypePrefix @AST_ACTION_DYNAMIC_ARRAY_TYPE;
 SliceType = LBracket RBracket TypePrefix @AST_ACTION_SLICE_TYPE;
+MultiPointerType = LBracket PointerCaret RBracket TypePrefix @AST_ACTION_MULTI_POINTER_TYPE;
 MapType = KwMap LBracket TypePrefix RBracket TypePrefix @AST_ACTION_MAP_TYPE;
 SoaType = (DirectiveWithArgs | Directive) TypePrefix @AST_ACTION_SOA_TYPE;
 
@@ -334,14 +337,14 @@ Returns = Arrow (LParen (ReturnList | ReturnTypeList) RParen | TypePrefix) @AST_
 WhereClause = KwWhere Expression @AST_ACTION_WHERE_CLAUSE;
 CallingConvention = StringLiteral @AST_ACTION_CALLING_CONVENTION;
 ContextExpr = KwContext @AST_ACTION_CONTEXT_EXPR;
-ProcedureSignature = KwProc CallingConvention? Directive? ParameterList Returns? WhereClause? @AST_ACTION_PROCEDURE_SIGNATURE;
+ProcedureSignature = KwHashType? KwProc CallingConvention? Directive? ParameterList Returns? WhereClause? @AST_ACTION_PROCEDURE_SIGNATURE;
 
 DistinctType = KwDistinct TypePrefix @AST_ACTION_DISTINCT_TYPE;
 
 MaybeType = KwMaybe LParen TypePrefix RParen @AST_ACTION_MAYBE_TYPE;
 
 // Base types for TypeName (no left recursion)
-TypePrefix = PointerType | DynamicArrayType | SliceType | ArrayType
+TypePrefix = PointerType | DynamicArrayType | SliceType | MultiPointerType | ArrayType
            | MapType | SoaType | ProcedureSignature
            | StructType | UnionType | EnumType | BitFieldType | BitSetType
            | DistinctType | BasicType | StructTypeRef | EnumTypeRef

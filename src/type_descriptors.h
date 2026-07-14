@@ -67,6 +67,7 @@ typedef enum
     TD_KIND_SOA,
     TD_KIND_RANGE,
     TD_KIND_MAYBE,
+    TD_KIND_MULTI_POINTER,
 } td_kind_t;
 
 typedef struct
@@ -203,6 +204,9 @@ get_or_create_soa_type(TypeDescriptors * registry, struct_or_union_members_st co
 
 TypeDescriptor const *
 get_or_create_maybe_type(TypeDescriptors * registry, TypeDescriptor const * inner_type);
+
+TypeDescriptor const *
+get_or_create_multi_pointer_type(TypeDescriptors * registry, TypeDescriptor const * element_type);
 
 TypeDescriptor const * create_distinct_type(TypeDescriptors * registry, TypeDescriptor const * base_type);
 

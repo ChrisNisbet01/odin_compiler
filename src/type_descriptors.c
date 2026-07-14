@@ -542,6 +542,14 @@ type_write_canonical_name_internal(TypeDescriptor const * td, char * buf, size_t
         break;
     }
 
+    case TD_KIND_MULTI_POINTER:
+    {
+        char inner[512];
+        type_write_canonical_name_internal(td->element_type, inner, sizeof(inner), depth + 1);
+        snprintf(buf, buf_size, "[^]%s", inner);
+        break;
+    }
+
     default:
         snprintf(buf, buf_size, "?");
         break;
@@ -1322,6 +1330,32 @@ get_or_create_maybe_type(TypeDescriptors * registry, TypeDescriptor const * inne
     LLVMTypeRef fields[2] = {i64_type, inner_type->llvm_type};
     td->llvm_type = LLVMStructTypeInContext(registry->context, fields, 2, false);
 
+    type_compute_hash(td);
+    return td;
+}
+
+TypeDescriptor const *
+get_or_create_multi_pointer_type(TypeDescriptors * registry, TypeDescriptor const * element_type)
+{
+    if (element_type == NULL)
+        return NULL;
+
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_MULTI_POINTER)
+            continue;
+        if (t->element_type == element_type)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_MULTI_POINTER;
+    td->pointee = element_type;
+    td->element_type = element_type;
+    td->llvm_type = LLVMPointerType(element_type->llvm_type, 0);
     type_compute_hash(td);
     return td;
 }

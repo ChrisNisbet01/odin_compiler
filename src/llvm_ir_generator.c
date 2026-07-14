@@ -298,9 +298,10 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
         if (sym->value.type_info
             && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
                 || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_SOA
-                || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY || sym->value.type_info->kind == TD_KIND_MAP
+                || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY                 || sym->value.type_info->kind == TD_KIND_MAP
                 || sym->value.type_info->kind == TD_KIND_BIT_FIELD || sym->value.type_info->kind == TD_KIND_UNION
-                || sym->value.type_info->kind == TD_KIND_MAYBE))
+                || sym->value.type_info->kind == TD_KIND_MAYBE
+                || sym->value.type_info->kind == TD_KIND_MULTI_POINTER))
         {
             return sym->value.value;
         }
@@ -1084,7 +1085,7 @@ ir_gen_unary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             return NULL;
         LLVMTypeRef ptr_type = LLVMTypeOf(operand);
         TypeDescriptor const * td = operand_node->resolved_type;
-        if (td && td->kind == TD_KIND_POINTER && td->pointee)
+        if (td && (td->kind == TD_KIND_POINTER || td->kind == TD_KIND_MULTI_POINTER) && td->pointee)
         {
             return LLVMBuildLoad2(ctx->builder, td->pointee->llvm_type, operand, "deref");
         }
@@ -1337,6 +1338,19 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         if (init_val)
         {
             LLVMTypeRef init_llvm_type = LLVMTypeOf(init_val);
+            // If the initializer produced a pointer but the target type is
+            // a non-pointer value type (e.g., subscript on multi-pointer or
+            // array returns an lvalue pointer), load through the pointer
+            if (init_node != NULL && init_node->resolved_type != NULL
+                && LLVMGetTypeKind(init_llvm_type) == LLVMPointerTypeKind)
+            {
+                LLVMTypeRef expected_type = init_node->resolved_type->llvm_type;
+                if (expected_type != NULL && LLVMGetTypeKind(expected_type) != LLVMPointerTypeKind)
+                {
+                    init_val = LLVMBuildLoad2(ctx->builder, expected_type, init_val, "loadtmp");
+                    init_llvm_type = LLVMTypeOf(init_val);
+                }
+            }
             // Auto-convert string struct {ptr, i64} → cstring ptr
             if (var_type && var_type->kind == TD_KIND_BASIC && var_type->as.basic.name != NULL
                 && strcmp(var_type->as.basic.name, "cstring") == 0
@@ -1739,6 +1753,15 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                     );
                     cur_type = get_basic_type_by_name(ctx->type_registry, "u8");
                 }
+                else if (cur_type->kind == TD_KIND_MULTI_POINTER)
+                {
+                    LLVMValueRef data_ptr = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, ptr, "mp.data");
+                    ptr = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->element_type->llvm_type, data_ptr, &index_val, 1, "mp.subs"
+                    );
+                    if (cur_type->element_type)
+                        cur_type = cur_type->element_type;
+                }
                 else if (cur_type->kind == TD_KIND_MAP)
                 {
                     LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
@@ -1951,7 +1974,7 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
 
                 // Pointer auto-dereference: p.field -> load p, then access member on pointee
-                if (cur_type->kind == TD_KIND_POINTER)
+                if (cur_type->kind == TD_KIND_POINTER || cur_type->kind == TD_KIND_MULTI_POINTER)
                 {
                     TypeDescriptor const * pointee = cur_type->pointee;
                     if (pointee == NULL)
@@ -2162,7 +2185,7 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
 
             case AST_NODE_POSTFIX_DEREF:
             {
-                if (cur_type == NULL || cur_type->kind != TD_KIND_POINTER)
+                if (cur_type == NULL || (cur_type->kind != TD_KIND_POINTER && cur_type->kind != TD_KIND_MULTI_POINTER))
                 {
                     if (cur_type)
                         ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot dereference non-pointer type in lvalue context");
@@ -4760,6 +4783,19 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 val = LLVMBuildLoad2(ctx->builder, LLVMInt8TypeInContext(ctx->context), elem_ptr, "str.char");
                 cur_type = get_basic_type_by_name(ctx->type_registry, "u8");
             }
+            else if (cur_type->kind == TD_KIND_MULTI_POINTER)
+            {
+                LLVMValueRef data = NULL;
+                LLVMTypeRef val_type = LLVMTypeOf(val);
+                if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
+                    data = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "mp.data");
+                else
+                    data = val;
+                LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(
+                    ctx->builder, cur_type->element_type->llvm_type, data, &index_val, 1, "mp.subs"
+                );
+                val = elem_ptr;
+            }
             else if (cur_type->kind == TD_KIND_MAP)
             {
                 LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
@@ -4894,7 +4930,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             }
             else
             {
-                ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot subscript type: not an array, slice, dynamic array, or map");
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot subscript type: not an array, slice, dynamic array, multi-pointer, or map");
                 break;
             }
 
@@ -4951,7 +4987,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
             // Pointer auto-dereference: p.field -> access member on pointee
             // val is already the pointer value (address of struct); just update cur_type
-            if (cur_type && cur_type->kind == TD_KIND_POINTER)
+            if (cur_type && (cur_type->kind == TD_KIND_POINTER || cur_type->kind == TD_KIND_MULTI_POINTER))
             {
                 TypeDescriptor const * pointee = cur_type->pointee;
                 if (pointee)
@@ -5179,7 +5215,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
         case AST_NODE_POSTFIX_DEREF:
         {
-            if (cur_type == NULL || cur_type->kind != TD_KIND_POINTER)
+            if (cur_type == NULL || (cur_type->kind != TD_KIND_POINTER && cur_type->kind != TD_KIND_MULTI_POINTER))
             {
                 if (cur_type)
                     ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot dereference non-pointer type");
@@ -5535,7 +5571,8 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 && cur_type->kind != TD_KIND_SLICE && cur_type->kind != TD_KIND_PROC
                 && cur_type->kind != TD_KIND_DYNAMIC_ARRAY && cur_type->kind != TD_KIND_MAP
                 && cur_type->kind != TD_KIND_BIT_FIELD && cur_type->kind != TD_KIND_BIT_SET
-                && cur_type->kind != TD_KIND_UNION && !is_ptr_valued_basic)
+                && cur_type->kind != TD_KIND_UNION && cur_type->kind != TD_KIND_MULTI_POINTER
+                && !is_ptr_valued_basic)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }
@@ -5623,6 +5660,7 @@ type_info_kind_from_td_kind(td_kind_t kind)
         case TD_KIND_SOA: return 14;
         case TD_KIND_RANGE: return 15;
         case TD_KIND_MAYBE: return 16;
+        case TD_KIND_MULTI_POINTER: return 17;
         default: return 0;
     }
 }

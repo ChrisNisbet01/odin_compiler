@@ -398,9 +398,10 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         odin_grammar_node_t * elem_type_node = NULL;
         for (size_t i = 0; i < node->list.count; i++)
         {
-            if (is_type_node(node->list.children[i]))
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child && (is_type_node(child) || child->type == AST_NODE_IDENTIFIER))
             {
-                elem_type_node = node->list.children[i];
+                elem_type_node = child;
                 break;
             }
         }
@@ -430,9 +431,10 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         odin_grammar_node_t * inner = NULL;
         for (size_t i = 0; i < node->list.count; i++)
         {
-            if (is_type_node(node->list.children[i]))
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child && (is_type_node(child) || child->type == AST_NODE_IDENTIFIER))
             {
-                inner = node->list.children[i];
+                inner = child;
                 break;
             }
         }
@@ -453,9 +455,10 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         odin_grammar_node_t * elem_type_node = NULL;
         for (size_t i = 0; i < node->list.count; i++)
         {
-            if (is_type_node(node->list.children[i]))
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child && (is_type_node(child) || child->type == AST_NODE_IDENTIFIER))
             {
-                elem_type_node = node->list.children[i];
+                elem_type_node = child;
                 break;
             }
         }
@@ -472,14 +475,41 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return slice_type;
     }
 
+    case AST_NODE_MULTI_POINTER_TYPE:
+    {
+        // MultiPointerType = LBracket PointerCaret RBracket TypePrefix
+        odin_grammar_node_t * elem_type_node = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child && (is_type_node(child) || child->type == AST_NODE_IDENTIFIER))
+            {
+                elem_type_node = child;
+                break;
+            }
+        }
+        if (elem_type_node == NULL)
+            return NULL;
+
+        TypeDescriptor const * elem_type = sem_resolve_type_expr(ctx, elem_type_node);
+        if (elem_type == NULL)
+            return NULL;
+
+        TypeDescriptor const * mp_type = get_or_create_multi_pointer_type(ctx->type_registry, elem_type);
+        if (mp_type)
+            node->resolved_type = (TypeDescriptor *)mp_type;
+        return mp_type;
+    }
+
     case AST_NODE_DYNAMIC_ARRAY_TYPE:
     {
         odin_grammar_node_t * elem_type_node = NULL;
         for (size_t i = 0; i < node->list.count; i++)
         {
-            if (is_type_node(node->list.children[i]))
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child && (is_type_node(child) || child->type == AST_NODE_IDENTIFIER))
             {
-                elem_type_node = node->list.children[i];
+                elem_type_node = child;
                 break;
             }
         }
@@ -505,7 +535,7 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         for (size_t i = 0; i < node->list.count; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
-            if (child && is_type_node(child))
+            if (child && (is_type_node(child) || child->type == AST_NODE_IDENTIFIER))
             {
                 if (key_type_node == NULL)
                     key_type_node = child;
@@ -2357,7 +2387,9 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                             break;
 
                         case AST_NODE_POSTFIX_SUBSCRIPT:
-                            if (type && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE))
+                            if (type
+                                && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
+                                    || type->kind == TD_KIND_MULTI_POINTER))
                             {
                                 type = type->element_type;
                                 op->resolved_type = (TypeDescriptor *)type;
@@ -2568,7 +2600,8 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                         sem_error_list_add(&ctx->errors, NULL, op, "array has no field named");
                     }
                 }
-                else if (type && type->kind == TD_KIND_POINTER && op->list.count >= 1 && op->list.children[0])
+                else if (type && (type->kind == TD_KIND_POINTER || type->kind == TD_KIND_MULTI_POINTER)
+                         && op->list.count >= 1 && op->list.children[0])
                 {
                     // Pointer auto-dereference for member access: p.field -> p^.field
                     TypeDescriptor const * pointee = type->pointee;
@@ -2670,7 +2703,9 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 break;
 
             case AST_NODE_POSTFIX_SUBSCRIPT:
-                if (type && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE))
+                if (type
+                    && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
+                        || type->kind == TD_KIND_MULTI_POINTER))
                 {
                     type = type->element_type;
                     op->resolved_type = (TypeDescriptor *)type;
@@ -2689,7 +2724,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                 break;
 
             case AST_NODE_POSTFIX_DEREF:
-                if (type && type->kind == TD_KIND_POINTER)
+                if (type && (type->kind == TD_KIND_POINTER || type->kind == TD_KIND_MULTI_POINTER))
                 {
                     type = type->pointee;
                     op->resolved_type = (TypeDescriptor *)type;

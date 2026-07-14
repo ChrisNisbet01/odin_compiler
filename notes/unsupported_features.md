@@ -19,13 +19,10 @@ Features present in the official Odin language that our compiler does not yet su
 
 (None remaining)
 
-## High Complexity
+## Medium Complexity (Completed)
 
-### `[^]T` — Pointer-to-array with `fmt:` tags
-Fat pointer carrying array length/stride info. New type kind with grammar, type system, and IR changes.
-
-### `#type` — Procedure type alias syntax
-Alternative syntax for procedure type literals. Grammar-only change but interacts with type resolution.
+- **`[^]T` — Multi-pointer type**: Grammar `MultiPointerType = [^] TypePrefix`. AST node `AST_NODE_MULTI_POINTER_TYPE`, type descriptor `TD_KIND_MULTI_POINTER` (LLVM pointer type, canonical name `[^]%s`). Semantic analysis resolves element type, creates type descriptor, subscript resolves to element type. IR generator: lvalue subscript loads pointer then GEP; rvalue subscript GEP then auto-loaded for non-composite types; member-access auto-dereference; explicit deref `^`. Works with basic types and structs (e.g. `[^]int`, `[^]Point`). Type info kind = 17.
+- **`#type` — Procedure type alias syntax**: Grammar adds optional `KwHashType` prefix to `ProcedureSignature`. No new AST node — reuses `AST_NODE_PROCEDURE_SIGNATURE`. `#type proc(x: int) -> int` is semantically identical to `proc(x: int) -> int`.
 
 ## Very High Complexity
 
@@ -108,3 +105,5 @@ The following features were previously listed as unsupported but are now impleme
 
 - **`if cond do stmt`**: Added `KwDo` lexeme (reserved as keyword). `IfStatement` grammar accepts `CompoundStatement | (KwDo Statement)` for both then and else branches. Semantic analyser dispatches `Statement` children to `sem_pass2_node` (not `sem_evaluate_expr`) so statement types like `os.exit()` are correctly analysed. Works with `else if`, `else do`, and mixed `{ }`/`do` forms.
 - **`arr[:]` full-slice syntax**: Added `PostfixOpFullSlice` grammar rule (`LBracket Colon RBracket`) reusing `AST_ACTION_POSTFIX_SLICE`. Semantically and at IR level, `arr[:]` is identical to `arr[..]` — produces a slice covering the full array.
+- **Compound type `is_type_node()` identifier fix**: All compound type resolvers (`[5]T`, `[]T`, `[^]T`, `[dynamic]T`, `distinct T`, `map[T]U`) used `is_type_node()` to find the element type child, but `is_type_node()` returns `false` for `AST_NODE_IDENTIFIER`. Broke types when the element was a struct name or type alias (e.g. `[5]Point`, `[]MyType`, `[^]Handle`). Fixed by adding `|| child->type == AST_NODE_IDENTIFIER` in all 6 handlers.
+- **Multi-pointer subscript lvalue loading**: `p[0]` on `[^]T` produced a GEP pointer; rvalue uses like `v: Point = p[0]` stored the pointer instead of the struct value. Fixed by adding pointer→value auto-load in `ir_gen_variable_decl` when init value is a pointer but resolved type is a non-pointer value type.
