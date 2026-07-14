@@ -4531,6 +4531,29 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 if (cur_type && cur_type->kind == TD_KIND_PROC)
                     proc_type = cur_type;
             }
+
+            // Overload bundle: use resolved symbol from semantic analyser
+            if ((proc_type == NULL || proc_type->kind != TD_KIND_PROC)
+                && op->resolved_symbol != NULL)
+            {
+                symbol_t * resolved = op->resolved_symbol;
+                if (resolved->value.type_info && resolved->value.type_info->kind == TD_KIND_PROC)
+                {
+                    proc_type = resolved->value.type_info;
+                    if (resolved->value.value)
+                    {
+                        val = resolved->value.value;
+                    }
+                    else
+                    {
+                        val = LLVMGetNamedFunction(ctx->module, resolved->name);
+                        if (val == NULL)
+                            val = LLVMAddFunction(ctx->module, resolved->name, proc_type->proc_metadata.func_type);
+                        resolved->value.value = val;
+                    }
+                }
+            }
+
             if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
             {
                 ir_gen_error_collection_add(&ctx->errors, NULL, node, "called value is not a procedure");

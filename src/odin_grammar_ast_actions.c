@@ -427,6 +427,7 @@ DEFINE_ACTION(ast_action_complex_expr_action, AST_NODE_COMPLEX_EXPR)
 DEFINE_ACTION(ast_action_quaternion_expr_action, AST_NODE_QUATERNION_EXPR)
 DEFINE_ACTION(ast_action_multi_pointer_type_action, AST_NODE_MULTI_POINTER_TYPE)
 DEFINE_ACTION(ast_action_maybe_type_action, AST_NODE_MAYBE_TYPE)
+DEFINE_ACTION(ast_action_proc_overload_bundle_action, AST_NODE_PROC_OVERLOAD_BUNDLE)
 // --- Terminal nodes (text captured for semantic use) ---
 DEFINE_TERMINAL_ACTION(ast_action_identifier_action, AST_NODE_IDENTIFIER)
 DEFINE_TERMINAL_ACTION(ast_action_poly_ident_action, AST_NODE_POLY_IDENT)
@@ -547,6 +548,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_FALLTHROUGH_STATEMENT, ast_action_fallthrough_statement_action);
     REGISTER(AST_ACTION_ASSIGN_STATEMENT, ast_action_assign_statement_action);
     REGISTER(AST_ACTION_EXPRESSION_STATEMENT, ast_action_expression_statement_action);
+    REGISTER(AST_ACTION_PROC_OVERLOAD_BUNDLE, ast_action_proc_overload_bundle_action);
     REGISTER(AST_ACTION_PROCEDURE_LITERAL, ast_action_procedure_literal_action);
     REGISTER(AST_ACTION_IDENTIFIER_LIST, ast_action_identifier_list_action);
     REGISTER(AST_ACTION_VARIABLE_DECL, ast_action_variable_decl_action);

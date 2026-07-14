@@ -26,9 +26,6 @@ Features present in the official Odin language that our compiler does not yet su
 
 ## Very High Complexity
 
-### Proc overload bundles — `proc{fn1, fn2}`
-Groups multiple procedures under one name for overload resolution by parameter types. Requires complex dispatch logic.
-
 ### `swizzle` — Vector swizzle operation
 `v.xyzw` syntax for vector component access. Depends on vector type support.
 
@@ -100,6 +97,7 @@ The following features were previously listed as unsupported but are now impleme
 - `#align` struct alignment (`struct #align N { ... }` and field-level `field: type #align N`): Grammar parses `KwAlign` directive + size on both struct type and struct fields. Semantic analyser extracts alignment from directive children, overrides `struct_metadata.alignment` after type registration. IR generator uses user alignment in `LLVMSetAlignment` for struct allocas.
 - **`delimited_flex` fix**: Changed all `delimited(X, Sep)` to `delimited_flex(X, Sep)` in grammar rules with `Sep?` trailing optional. The strict `delimited` combinator errors on trailing separators, making the `Sep?` dead code. `delimited_flex` backtracks over trailing separators, fixing `:: struct { x: int; }` and similar patterns across struct/union field lists, attribute lists, enumerator lists, return lists, and identifier lists.
 - **`@(builtin)` — Builtin annotation**: Added `bool is_builtin` to `ProcDeclAttributes`. `sem_analyse_attributes()` parses `@(builtin)` and stores it. `ir_gen_top_level_decl()` uses `is_builtin` as a primary signal for intrinsic body generation (alongside name-based fallback for backward compatibility). Unknown builtins emit a compile-time error. All runtime intrinsics in `stubs/core/runtime/runtime.odin` now use `@(builtin)`.
+- **`proc{fn1, fn2}` — Overload bundles**: Complete implementation across all compiler layers. Grammar: `ProcOverloadBundle = KwProc LBrace Identifier (Comma Identifier)* RBrace` with `@AST_ACTION_PROC_OVERLOAD_BUNDLE` action. Type descriptors: `TD_KIND_OVERLOAD_BUNDLE` with `candidate_types`/`candidate_symbols` arrays, deduplicated by pointer-equality of candidate types, no LLVM type (`llvm_type = NULL`). Semantic analyser (pass 1): registers bundle symbol in scope, resolves candidate symbols and types, creates bundle type. Semantic analyser (pass 2): re-resolves candidates, updates `resolved_type`. Semantic analyser (call resolution): `sem_resolve_overload_bundle_call()` helper evaluates arg expressions, matches via `sem_types_assignable`, selects unique best match, emits "no matching overload" or "ambiguous call" errors. IR generator: POSTFIX_CALL reads `op->resolved_symbol` (set by semantic analyser), forward-declares winning function if needed. Works with both package-qualified (`pkg.foo(args)`) and normal (`foo(args)`) calls. Tested with 3 test files (basic dispatch, no-match, ambiguous).
 
 ## Earlier Completions (Grammar Fixes)
 

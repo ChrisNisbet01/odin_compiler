@@ -10,6 +10,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Forward declaration for overload bundle resolution (used in POSTFIX_EXPRESSION handler)
+static symbol_t * sem_resolve_overload_bundle_call(
+    SemContext * ctx,
+    TypeDescriptor const * bundle_type,
+    odin_grammar_node_t * arg_list_node,
+    odin_grammar_node_t * call_op,
+    char const * callee_name
+);
+
 static calling_convention_t
 parse_calling_convention(char const * text)
 {
@@ -2319,6 +2328,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (access_pkg != NULL)
         {
             TypeDescriptor const * type = NULL;
+            char const * last_member_name = NULL;
 
             if (node->list.count >= 2)
             {
@@ -2337,6 +2347,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                             if (op->list.count >= 1 && op->list.children[0] && type == NULL)
                             {
                                 char const * member_name = op->list.children[0]->text;
+                                last_member_name = member_name;
                                 symbol_t * sym = scope_find_symbol_entry(access_pkg->package_scope, member_name);
                                 if (sym)
                                 {
@@ -2383,6 +2394,33 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 }
                                 type = type->proc_metadata.return_type;
                                 op->resolved_type = (TypeDescriptor *)type;
+                            }
+                            else if (type && type->kind == TD_KIND_OVERLOAD_BUNDLE)
+                            {
+                                odin_grammar_node_t * arg_list = NULL;
+                                if (op->list.count > 0 && op->list.children[0] != NULL)
+                                    arg_list = op->list.children[0];
+
+                                symbol_t * winner = sem_resolve_overload_bundle_call(
+                                    ctx, type, arg_list, op, last_member_name
+                                );
+                                if (winner && winner->value.type_info)
+                                {
+                                    op->resolved_symbol = winner;
+                                    TypeDescriptor const * proc_type = winner->value.type_info;
+                                    if (proc_type && proc_type->kind == TD_KIND_PROC)
+                                    {
+                                        if (proc_type->proc_metadata.return_count > 1)
+                                        {
+                                            op->resolved_type = (TypeDescriptor *)proc_type;
+                                        }
+                                        else
+                                        {
+                                            type = proc_type->proc_metadata.return_type;
+                                            op->resolved_type = (TypeDescriptor *)type;
+                                        }
+                                    }
+                                }
                             }
                             break;
 
@@ -2467,6 +2505,45 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                     }
                     type = type->proc_metadata.return_type;
                     op->resolved_type = (TypeDescriptor *)type;
+                }
+                else if (type && type->kind == TD_KIND_OVERLOAD_BUNDLE)
+                {
+                    // Get callee name from base expression for error messages
+                    char const * callee_name = NULL;
+                    odin_grammar_node_t * base = node->list.children[0];
+                    if (base != NULL)
+                    {
+                        odin_grammar_node_t * inner = base;
+                        while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
+                            inner = inner->list.children[0];
+                        if (inner->type == AST_NODE_IDENTIFIER && inner->text)
+                            callee_name = inner->text;
+                    }
+
+                    odin_grammar_node_t * arg_list = NULL;
+                    if (op->list.count > 0 && op->list.children[0] != NULL)
+                        arg_list = op->list.children[0];
+
+                    symbol_t * winner = sem_resolve_overload_bundle_call(
+                        ctx, type, arg_list, op, callee_name
+                    );
+                    if (winner && winner->value.type_info)
+                    {
+                        op->resolved_symbol = winner;
+                        TypeDescriptor const * proc_type = winner->value.type_info;
+                        if (proc_type && proc_type->kind == TD_KIND_PROC)
+                        {
+                            if (proc_type->proc_metadata.return_count > 1)
+                            {
+                                op->resolved_type = (TypeDescriptor *)proc_type;
+                            }
+                            else
+                            {
+                                type = proc_type->proc_metadata.return_type;
+                                op->resolved_type = (TypeDescriptor *)type;
+                            }
+                        }
+                    }
                 }
                 break;
 
@@ -2952,6 +3029,116 @@ sem_check_assignment(
     char buf[256];
     snprintf(buf, sizeof(buf), "cannot assign '%s' to '%s'", sbuf, tbuf);
     sem_error_list_add(&ctx->errors, NULL, node, buf);
+}
+
+static symbol_t *
+sem_resolve_overload_bundle_call(
+    SemContext * ctx,
+    TypeDescriptor const * bundle_type,
+    odin_grammar_node_t * arg_list_node,
+    odin_grammar_node_t * call_op,
+    char const * callee_name
+)
+{
+    if (bundle_type == NULL || bundle_type->kind != TD_KIND_OVERLOAD_BUNDLE)
+        return NULL;
+
+    int candidate_count = bundle_type->as.overload_bundle.candidate_count;
+    TypeDescriptor const ** candidate_types = bundle_type->as.overload_bundle.candidate_types;
+    symbol_t ** candidate_symbols = bundle_type->as.overload_bundle.candidate_symbols;
+
+    // Evaluate argument expressions and collect their types
+    int arg_count = 0;
+    TypeDescriptor const * arg_types[64];
+    if (arg_list_node != NULL && arg_list_node->type == AST_NODE_ARGUMENT_LIST)
+    {
+        for (size_t ai = 0; ai < arg_list_node->list.count; ai++)
+        {
+            odin_grammar_node_t * arg_node = arg_list_node->list.children[ai];
+            if (arg_node == NULL)
+                continue;
+            sem_evaluate_expr(ctx, arg_node);
+            if ((size_t)arg_count < 64)
+            {
+                arg_types[arg_count] = arg_node->resolved_type;
+                arg_count++;
+            }
+        }
+    }
+
+    symbol_t * best_match = NULL;
+    int match_count = 0;
+
+    for (int ci = 0; ci < candidate_count; ci++)
+    {
+        TypeDescriptor const * proc_type = candidate_types[ci];
+        if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
+            continue;
+
+        ProcMetadata const * pm = &proc_type->proc_metadata;
+
+        // Check parameter count match (handle variadic)
+        bool params_match = false;
+        if (pm->is_variadic)
+        {
+            // Variadic: must have at least pm->param_count - 1 args (all non-variadic params match)
+            params_match = (arg_count >= pm->param_count - 1);
+        }
+        else
+        {
+            params_match = (arg_count == pm->param_count);
+        }
+
+        if (!params_match)
+            continue;
+
+        // Check each parameter type
+        bool all_args_match = true;
+        for (int ai = 0; ai < arg_count && ai < pm->param_count; ai++)
+        {
+            if (!sem_types_assignable(ctx, NULL, arg_types[ai], pm->params[ai]))
+            {
+                all_args_match = false;
+                break;
+            }
+        }
+        // For variadic, check remaining args against the last param type (repeated)
+        if (all_args_match && pm->is_variadic && pm->param_count > 0)
+        {
+            for (int ai = pm->param_count - 1; ai < arg_count; ai++)
+            {
+                if (!sem_types_assignable(ctx, NULL, arg_types[ai], pm->params[pm->param_count - 1]))
+                {
+                    all_args_match = false;
+                    break;
+                }
+            }
+        }
+
+        if (all_args_match)
+        {
+            best_match = candidate_symbols[ci];
+            match_count++;
+        }
+    }
+
+    if (match_count == 0)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "no matching overload for '%s' with %d argument(s)", callee_name ? callee_name : "?", arg_count);
+        sem_error_list_add(&ctx->errors, NULL, call_op, buf);
+        return NULL;
+    }
+
+    if (match_count > 1)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "ambiguous call to '%s' — %d overloads match", callee_name ? callee_name : "?", match_count);
+        sem_error_list_add(&ctx->errors, NULL, call_op, buf);
+        return NULL;
+    }
+
+    return best_match;
 }
 
 static void
@@ -3476,10 +3663,71 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-    TypeDescriptor const * resolved_type = NULL;
+    // Check for overload bundle inside ProcedureLiteral wrapper
+    odin_grammar_node_t * overload_bundle_node = NULL;
     if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_LITERAL)
     {
+        for (size_t ci = 0; ci < value_node->list.count; ci++)
+        {
+            if (value_node->list.children[ci] && value_node->list.children[ci]->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
+            {
+                overload_bundle_node = value_node->list.children[ci];
+                break;
+            }
+        }
+    }
+
+    TypeDescriptor const * resolved_type = NULL;
+    if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_LITERAL && overload_bundle_node == NULL)
+    {
         resolved_type = sem_resolve_procedure_signature(ctx, value_node, NULL, NULL, NULL, NULL, NULL, NULL);
+    }
+    else if (overload_bundle_node != NULL)
+    {
+        value_node = overload_bundle_node;
+    }
+
+    if (value_node != NULL && value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
+    {
+        int candidate_count = (int)value_node->list.count;
+        if (candidate_count > 0)
+        {
+            TypeDescriptor const ** candidate_types = (TypeDescriptor const **)malloc(
+                (size_t)candidate_count * sizeof(TypeDescriptor const *)
+            );
+            symbol_t ** candidate_symbols = (symbol_t **)malloc(
+                (size_t)candidate_count * sizeof(symbol_t *)
+            );
+            int valid_count = 0;
+            for (int i = 0; i < candidate_count; i++)
+            {
+                odin_grammar_node_t * id_node = value_node->list.children[i];
+                if (id_node == NULL || id_node->type != AST_NODE_IDENTIFIER || id_node->text == NULL)
+                    continue;
+                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), id_node->text);
+                if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
+                {
+                    candidate_types[valid_count] = sym->value.type_info;
+                    candidate_symbols[valid_count] = sym;
+                    valid_count++;
+                }
+                else
+                {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text);
+                    sem_error_list_add(&ctx->errors, NULL, id_node, buf);
+                }
+            }
+            if (valid_count > 0)
+            {
+                resolved_type = get_or_create_overload_bundle_type(
+                    ctx->type_registry, candidate_types, candidate_symbols, valid_count
+                );
+                value_node->resolved_type = (TypeDescriptor *)resolved_type;
+            }
+            free(candidate_types);
+            free(candidate_symbols);
+        }
     }
 
     if (name_node->type == AST_NODE_IDENTIFIER)
@@ -4328,9 +4576,70 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         if (value_node == NULL)
             break;
 
+        // Check for overload bundle inside ProcedureLiteral wrapper
+        odin_grammar_node_t * overload_bundle_node = NULL;
         if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
         {
+            for (size_t ci = 0; ci < value_node->list.count; ci++)
+            {
+                if (value_node->list.children[ci] && value_node->list.children[ci]->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
+                {
+                    overload_bundle_node = value_node->list.children[ci];
+                    break;
+                }
+            }
+        }
+
+        if (value_node->type == AST_NODE_PROCEDURE_LITERAL && overload_bundle_node == NULL)
+        {
             sem_analyse_procedure_literal(ctx, value_node, name_node->text);
+        }
+        else if (overload_bundle_node != NULL)
+        {
+            value_node = overload_bundle_node;
+        }
+
+        if (value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
+        {
+            int candidate_count = (int)value_node->list.count;
+            if (candidate_count > 0)
+            {
+                TypeDescriptor const ** candidate_types = (TypeDescriptor const **)malloc(
+                    (size_t)candidate_count * sizeof(TypeDescriptor const *)
+                );
+                symbol_t ** candidate_symbols = (symbol_t **)malloc(
+                    (size_t)candidate_count * sizeof(symbol_t *)
+                );
+                int valid_count = 0;
+                for (int i = 0; i < candidate_count; i++)
+                {
+                    odin_grammar_node_t * id_node = value_node->list.children[i];
+                    if (id_node == NULL || id_node->type != AST_NODE_IDENTIFIER || id_node->text == NULL)
+                        continue;
+                    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), id_node->text);
+                    if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
+                    {
+                        candidate_types[valid_count] = sym->value.type_info;
+                        candidate_symbols[valid_count] = sym;
+                        valid_count++;
+                    }
+                    else
+                    {
+                        char buf[256];
+                        snprintf(buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text);
+                        sem_error_list_add(&ctx->errors, NULL, id_node, buf);
+                    }
+                }
+                if (valid_count > 0)
+                {
+                    TypeDescriptor const * bundle_type = get_or_create_overload_bundle_type(
+                        ctx->type_registry, candidate_types, candidate_symbols, valid_count
+                    );
+                    value_node->resolved_type = (TypeDescriptor *)bundle_type;
+                }
+                free(candidate_types);
+                free(candidate_symbols);
+            }
         }
         else if (is_type_node(value_node) || value_node->type == AST_NODE_IDENTIFIER)
         {

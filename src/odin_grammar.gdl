@@ -492,7 +492,8 @@ AssignStatement = SuffixExpression (Comma SuffixExpression)* (AssignOp | ColonAs
 ExpressionStatement = Expression @AST_ACTION_EXPRESSION_STATEMENT;
 
 ProcBody = CompoundStatement | TripleDash;
-ProcedureLiteral = ProcedureSignature ProcBody @AST_ACTION_PROCEDURE_LITERAL;
+ProcOverloadBundle = KwProc LBrace Identifier (Comma Identifier)* RBrace @AST_ACTION_PROC_OVERLOAD_BUNDLE;
+ProcedureLiteral = ProcOverloadBundle | ProcedureSignature ProcBody @AST_ACTION_PROCEDURE_LITERAL;
 
 Statement = DeferStatement
           | IfStatement

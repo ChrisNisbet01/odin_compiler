@@ -161,6 +161,7 @@ typedef enum
     AST_NODE_ATTRIBUTE,
     AST_NODE_ATTR_LIST,
     AST_NODE_ATTR_ITEM,
+    AST_NODE_PROC_OVERLOAD_BUNDLE,
 } odin_grammar_node_type_t;
 
 typedef struct

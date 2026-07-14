@@ -550,6 +550,24 @@ type_write_canonical_name_internal(TypeDescriptor const * td, char * buf, size_t
         break;
     }
 
+    case TD_KIND_OVERLOAD_BUNDLE:
+    {
+        size_t pos = 0;
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "proc{");
+        for (int i = 0; i < td->as.overload_bundle.candidate_count; i++)
+        {
+            if (i > 0)
+                pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, ", ");
+            char cbuf[256];
+            type_write_canonical_name_internal(
+                td->as.overload_bundle.candidate_types[i], cbuf, sizeof(cbuf), depth + 1
+            );
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s", cbuf);
+        }
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "}");
+        break;
+    }
+
     default:
         snprintf(buf, buf_size, "?");
         break;
@@ -595,6 +613,11 @@ type_descriptors_destroy_registry(TypeDescriptors * registry)
         if (registry->types[i]->proc_metadata.returns)
         {
             free((void *)registry->types[i]->proc_metadata.returns);
+        }
+        if (registry->types[i]->kind == TD_KIND_OVERLOAD_BUNDLE)
+        {
+            free(registry->types[i]->as.overload_bundle.candidate_types);
+            free(registry->types[i]->as.overload_bundle.candidate_symbols);
         }
         free(registry->types[i]);
     }
@@ -1375,6 +1398,59 @@ create_distinct_type(TypeDescriptors * registry, TypeDescriptor const * base_typ
     td->kind = TD_KIND_DISTINCT;
     td->distinct_base_type = base_type;
     td->llvm_type = base_type->llvm_type;
+    type_compute_hash(td);
+    return td;
+}
+
+TypeDescriptor const *
+get_or_create_overload_bundle_type(
+    TypeDescriptors * registry,
+    TypeDescriptor const ** candidate_types,
+    symbol_t ** candidate_symbols,
+    int candidate_count
+)
+{
+    if (registry == NULL || candidate_count <= 0 || candidate_types == NULL)
+        return NULL;
+
+    // Try to find an existing matching bundle type (deduplicate)
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_OVERLOAD_BUNDLE)
+            continue;
+        if (t->as.overload_bundle.candidate_count != candidate_count)
+            continue;
+        bool match = true;
+        for (int j = 0; j < candidate_count; j++)
+        {
+            if (t->as.overload_bundle.candidate_types[j] != candidate_types[j])
+            {
+                match = false;
+                break;
+            }
+        }
+        if (match)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_OVERLOAD_BUNDLE;
+    td->as.overload_bundle.candidate_count = candidate_count;
+    td->as.overload_bundle.candidate_types = (TypeDescriptor const **)malloc(
+        (size_t)candidate_count * sizeof(TypeDescriptor const *)
+    );
+    td->as.overload_bundle.candidate_symbols = (symbol_t **)malloc(
+        (size_t)candidate_count * sizeof(symbol_t *)
+    );
+    for (int j = 0; j < candidate_count; j++)
+    {
+        td->as.overload_bundle.candidate_types[j] = candidate_types[j];
+        td->as.overload_bundle.candidate_symbols[j] = candidate_symbols[j];
+    }
+    td->llvm_type = NULL;
     type_compute_hash(td);
     return td;
 }
