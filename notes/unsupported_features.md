@@ -100,9 +100,7 @@ The following features were previously listed as unsupported but are now impleme
 - **`delimited_flex` fix**: Changed all `delimited(X, Sep)` to `delimited_flex(X, Sep)` in grammar rules with `Sep?` trailing optional. The strict `delimited` combinator errors on trailing separators, making the `Sep?` dead code. `delimited_flex` backtracks over trailing separators, fixing `:: struct { x: int; }` and similar patterns across struct/union field lists, attribute lists, enumerator lists, return lists, and identifier lists.
 - **`@(builtin)` — Builtin annotation**: Added `bool is_builtin` to `ProcDeclAttributes`. `sem_analyse_attributes()` parses `@(builtin)` and stores it. `ir_gen_top_level_decl()` uses `is_builtin` as a primary signal for intrinsic body generation (alongside name-based fallback for backward compatibility). Unknown builtins emit a compile-time error. All runtime intrinsics in `stubs/core/runtime/runtime.odin` now use `@(builtin)`.
 
-## Grammar Limitations
+## Earlier Completions (Grammar Fixes)
 
-Pre-existing syntax gaps discovered during testing (not full language features, just missing grammar alternatives):
-
-- **`if condition do statement`**: Only the braced form `if condition { statements }` is supported. The `do` form (single-statement if without braces) causes a parse error (`End of input not found`). Never exposed by existing tests.
-- **`arr[:]` full-slice syntax**: The colon-based full-slice syntax is unsupported. Only `arr[..]` works. The `[:]` form causes a parse error. Use `arr[..]` as a workaround.
+- **`if cond do stmt`**: Added `KwDo` lexeme (reserved as keyword). `IfStatement` grammar accepts `CompoundStatement | (KwDo Statement)` for both then and else branches. Semantic analyser dispatches `Statement` children to `sem_pass2_node` (not `sem_evaluate_expr`) so statement types like `os.exit()` are correctly analysed. Works with `else if`, `else do`, and mixed `{ }`/`do` forms.
+- **`arr[:]` full-slice syntax**: Added `PostfixOpFullSlice` grammar rule (`LBracket Colon RBracket`) reusing `AST_ACTION_POSTFIX_SLICE`. Semantically and at IR level, `arr[:]` is identical to `arr[..]` — produces a slice covering the full array.

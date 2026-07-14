@@ -23,6 +23,7 @@ KwSwitch = lexeme("switch" IdBoundary);
 KwCase = lexeme("case" IdBoundary);
 KwDefer = lexeme("defer" IdBoundary);
 KwWhen = lexeme("when" IdBoundary);
+KwDo = lexeme("do" IdBoundary);
 KwBreak = lexeme("break" IdBoundary);
 KwContinue = lexeme("continue" IdBoundary);
 KwFallthrough = lexeme("fallthrough" IdBoundary);
@@ -134,7 +135,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwProc | KwReturn | KwWhere
     | KwIf | KwElse | KwFor | KwIn
     | KwSwitch | KwCase
-    | KwDefer | KwWhen
+    | KwDefer | KwWhen | KwDo
     | KwBreak | KwContinue | KwFallthrough
     | KwUsing | KwConst
     | KwStruct | KwUnion | KwEnum | KwMap | KwDynamic
@@ -364,11 +365,12 @@ PostfixOpCall = LParen ArgumentList? RParen @AST_ACTION_POSTFIX_CALL;
 PostfixOpSubscript = LBracket Expression RBracket @AST_ACTION_POSTFIX_SUBSCRIPT;
 PostfixOpSlice = LBracket (LogOrExpression? DotDot LogOrExpression?) RBracket @AST_ACTION_POSTFIX_SLICE;
 PostfixOpSliceLt = LBracket (LogOrExpression? DotDotLt LogOrExpression?) RBracket @AST_ACTION_POSTFIX_SLICE_LT;
+PostfixOpFullSlice = LBracket Colon RBracket @AST_ACTION_POSTFIX_SLICE;
 PostfixOpMember = Dot FieldName @AST_ACTION_POSTFIX_MEMBER;
 PostfixOpDeref = PointerCaret @AST_ACTION_POSTFIX_DEREF;
 PostfixOpAssertion = Dot LParen TypeName RParen @AST_ACTION_POSTFIX_ASSERTION;
 
-PostfixOp = PostfixOpCall | PostfixOpSlice | PostfixOpSliceLt | PostfixOpSubscript
+PostfixOp = PostfixOpCall | PostfixOpSlice | PostfixOpSliceLt | PostfixOpFullSlice | PostfixOpSubscript
            | PostfixOpMember | PostfixOpDeref | PostfixOpAssertion;
 
 PostfixOps = PostfixOp* @AST_ACTION_POSTFIX_OPS;
@@ -460,8 +462,8 @@ WhenStatement = KwWhen Expression CompoundStatement
                 @AST_ACTION_WHEN_STATEMENT;
 
 IfStatement = KwIf (Expression | (Identifier ColonAssign Expression Semicolon Expression))
-              CompoundStatement
-              (KwElse IfStatement | KwElse CompoundStatement)?
+              (CompoundStatement | (KwDo Statement))
+              (KwElse IfStatement | KwElse (CompoundStatement | (KwDo Statement)))?
               @AST_ACTION_IF_STATEMENT;
 
 ForInitStmt = Identifier ColonAssign Expression | Expression;

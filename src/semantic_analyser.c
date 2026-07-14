@@ -4345,6 +4345,24 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             {
                 sem_pass2_node(ctx, child, expected_return_type);
             }
+            else if (child->type == AST_NODE_EXPRESSION_STATEMENT
+                     || child->type == AST_NODE_ASSIGN_STATEMENT
+                     || child->type == AST_NODE_VARIABLE_DECL
+                     || child->type == AST_NODE_CONSTANT_DECL
+                     || child->type == AST_NODE_RETURN_STATEMENT
+                     || child->type == AST_NODE_BREAK_STATEMENT
+                     || child->type == AST_NODE_CONTINUE_STATEMENT
+                     || child->type == AST_NODE_DEFER_STATEMENT
+                     || child->type == AST_NODE_FALLTHROUGH_STATEMENT
+                     || child->type == AST_NODE_FOR_STATEMENT
+                     || child->type == AST_NODE_SWITCH_STATEMENT
+                     || child->type == AST_NODE_WHEN_STATEMENT)
+            {
+                // `if cond do stmt` form — analyse the statement directly
+                generator_push_scope(ctx->gen_ctx);
+                sem_pass2_node(ctx, child, expected_return_type);
+                generator_pop_scope(ctx->gen_ctx);
+            }
             else
             {
                 sem_evaluate_expr(ctx, child);

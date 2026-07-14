@@ -305,3 +305,21 @@ The `any` type system had two fundamental flaws: (a) integer arguments were stor
 
 ### Key insight
 The `if condition do statement` form is not supported by the grammar (only `if condition { statements }` with braces). This was a pre-existing limitation never exposed by tests. The `arr[:]` full-slice syntax is also unsupported — only `arr[..]` works.
+
+## Accomplishments (session 2026-07-14, continued)
+
+### Implemented `if cond do stmt` grammar form
+- **Grammar** (`odin_grammar.gdl`): Added `KwDo = lexeme("do" IdBoundary)` keyword. Added `KwDo` to `AllReservedWords` (prevents `do` from being used as an identifier). Changed `IfStatement` rule from `CompoundStatement` to `(CompoundStatement | (KwDo Statement))` for both then and else branches, allowing `if cond do stmt`, `else do stmt`, `else if cond do stmt` alongside the existing braced form.
+- **Semantic analyser** (`semantic_analyser.c`): The `AST_NODE_IF_STATEMENT` handler previously only handled `AST_NODE_COMPOUND_STATEMENT` children for scope/analysis; other children fell through to `sem_evaluate_expr`, which broke for statement nodes (`os.exit()`, etc.). Added explicit dispatch for statement-type children (`AST_NODE_EXPRESSION_STATEMENT`, `AST_NODE_ASSIGN_STATEMENT`, `AST_NODE_VARIABLE_DECL`, `AST_NODE_RETURN_STATEMENT`, etc.) to `sem_pass2_node` with scope push/pop.
+- **IR generator**: No changes needed — `ir_gen_if_statement` already uses `ir_gen_node` for branch bodies, which dispatches correctly for both `CompoundStatement` and `ExpressionStatement`.
+- **Tests**: `test_if_do.odin` (basic if-do), `test_if_do_else.odin` (if-do + else-if-do + else-do + mixed braces).
+- **All 128 tests pass** (125 previous + 3 new).
+
+### Implemented `arr[:]` full-slice syntax
+- **Grammar** (`odin_grammar.gdl`): Added `PostfixOpFullSlice = LBracket Colon RBracket @AST_ACTION_POSTFIX_SLICE` rule. Added `PostfixOpFullSlice` to `PostfixOp` alternatives. Reuses the same AST action as `PostfixOpSlice`, so `arr[:]` produces an `AST_NODE_POSTFIX_SLICE` node identical to `arr[..]`.
+- **No semantic/IR changes needed**: The existing `POSTFIX_SLICE` handling in semantic analyser and IR generator already treats both `arr[..]` and `arr[:]` identically (full slice with `low=0, high=array.count`).
+- **Tests**: `test_arr_full_slice.odin` (3 subtests covering `arr[:]` with explicit type, `:=` shorthand, element access).
+- **All 128 tests pass** (no regressions).
+
+### Key insight (this session)
+The `@AST_ACTION_POSTFIX_SLICE` action is shared between `PostfixOpSlice` (for `arr[..]`, `arr[low..high]`, etc.) and the new `PostfixOpFullSlice` (for `arr[:]`). Both produce `AST_NODE_POSTFIX_SLICE` nodes, so the semantic analyser and IR generator handle them identically without needing to distinguish the source syntax.
