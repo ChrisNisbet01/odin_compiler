@@ -219,8 +219,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "AssignStatement";
     case AST_NODE_EXPRESSION_STATEMENT:
         return "ExpressionStatement";
-    case AST_NODE_PROCEDURE_LITERAL:
-        return "ProcedureLiteral";
+    case AST_NODE_PROCEDURE_DEFINITION:
+        return "ProcedureDefinition";
     case AST_NODE_VARIABLE_DECL:
         return "VariableDecl";
     case AST_NODE_CONSTANT_DECL:

@@ -3663,72 +3663,53 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-    // Check for overload bundle inside ProcedureLiteral wrapper
-    odin_grammar_node_t * overload_bundle_node = NULL;
-    if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_LITERAL)
-    {
-        for (size_t ci = 0; ci < value_node->list.count; ci++)
+        TypeDescriptor const * resolved_type = NULL;
+        if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_DEFINITION)
         {
-            if (value_node->list.children[ci] && value_node->list.children[ci]->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
-            {
-                overload_bundle_node = value_node->list.children[ci];
-                break;
-            }
+            resolved_type = sem_resolve_procedure_signature(ctx, value_node, NULL, NULL, NULL, NULL, NULL, NULL);
         }
-    }
-
-    TypeDescriptor const * resolved_type = NULL;
-    if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_LITERAL && overload_bundle_node == NULL)
-    {
-        resolved_type = sem_resolve_procedure_signature(ctx, value_node, NULL, NULL, NULL, NULL, NULL, NULL);
-    }
-    else if (overload_bundle_node != NULL)
-    {
-        value_node = overload_bundle_node;
-    }
-
-    if (value_node != NULL && value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
-    {
-        int candidate_count = (int)value_node->list.count;
-        if (candidate_count > 0)
+        else if (value_node != NULL && value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
         {
-            TypeDescriptor const ** candidate_types = (TypeDescriptor const **)malloc(
-                (size_t)candidate_count * sizeof(TypeDescriptor const *)
-            );
-            symbol_t ** candidate_symbols = (symbol_t **)malloc(
-                (size_t)candidate_count * sizeof(symbol_t *)
-            );
-            int valid_count = 0;
-            for (int i = 0; i < candidate_count; i++)
+            int candidate_count = (int)value_node->list.count;
+            if (candidate_count > 0)
             {
-                odin_grammar_node_t * id_node = value_node->list.children[i];
-                if (id_node == NULL || id_node->type != AST_NODE_IDENTIFIER || id_node->text == NULL)
-                    continue;
-                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), id_node->text);
-                if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
-                {
-                    candidate_types[valid_count] = sym->value.type_info;
-                    candidate_symbols[valid_count] = sym;
-                    valid_count++;
-                }
-                else
-                {
-                    char buf[256];
-                    snprintf(buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text);
-                    sem_error_list_add(&ctx->errors, NULL, id_node, buf);
-                }
-            }
-            if (valid_count > 0)
-            {
-                resolved_type = get_or_create_overload_bundle_type(
-                    ctx->type_registry, candidate_types, candidate_symbols, valid_count
+                TypeDescriptor const ** candidate_types = (TypeDescriptor const **)malloc(
+                    (size_t)candidate_count * sizeof(TypeDescriptor const *)
                 );
-                value_node->resolved_type = (TypeDescriptor *)resolved_type;
+                symbol_t ** candidate_symbols = (symbol_t **)malloc(
+                    (size_t)candidate_count * sizeof(symbol_t *)
+                );
+                int valid_count = 0;
+                for (int i = 0; i < candidate_count; i++)
+                {
+                    odin_grammar_node_t * id_node = value_node->list.children[i];
+                    if (id_node == NULL || id_node->type != AST_NODE_IDENTIFIER || id_node->text == NULL)
+                        continue;
+                    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), id_node->text);
+                    if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
+                    {
+                        candidate_types[valid_count] = sym->value.type_info;
+                        candidate_symbols[valid_count] = sym;
+                        valid_count++;
+                    }
+                    else
+                    {
+                        char buf[256];
+                        snprintf(buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text);
+                        sem_error_list_add(&ctx->errors, NULL, id_node, buf);
+                    }
+                }
+                if (valid_count > 0)
+                {
+                    resolved_type = get_or_create_overload_bundle_type(
+                        ctx->type_registry, candidate_types, candidate_symbols, valid_count
+                    );
+                    value_node->resolved_type = (TypeDescriptor *)resolved_type;
+                }
+                free(candidate_types);
+                free(candidate_symbols);
             }
-            free(candidate_types);
-            free(candidate_symbols);
         }
-    }
 
     if (name_node->type == AST_NODE_IDENTIFIER)
     {
@@ -3737,7 +3718,7 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         sem_set_symbol_private(generator_current_scope(ctx->gen_ctx), name_node->text, is_private);
 
         // Try to evaluate as a compile-time integer constant
-        if (value_node != NULL && value_node->type != AST_NODE_PROCEDURE_LITERAL)
+        if (value_node != NULL && value_node->type != AST_NODE_PROCEDURE_DEFINITION && value_node->type != AST_NODE_PROC_OVERLOAD_BUNDLE)
         {
             int const_ok = 0;
             long long const_val = sem_evaluate_constant_int(ctx, value_node, &const_ok);
@@ -4576,30 +4557,11 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         if (value_node == NULL)
             break;
 
-        // Check for overload bundle inside ProcedureLiteral wrapper
-        odin_grammar_node_t * overload_bundle_node = NULL;
-        if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
-        {
-            for (size_t ci = 0; ci < value_node->list.count; ci++)
-            {
-                if (value_node->list.children[ci] && value_node->list.children[ci]->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
-                {
-                    overload_bundle_node = value_node->list.children[ci];
-                    break;
-                }
-            }
-        }
-
-        if (value_node->type == AST_NODE_PROCEDURE_LITERAL && overload_bundle_node == NULL)
+        if (value_node->type == AST_NODE_PROCEDURE_DEFINITION)
         {
             sem_analyse_procedure_literal(ctx, value_node, name_node->text);
         }
-        else if (overload_bundle_node != NULL)
-        {
-            value_node = overload_bundle_node;
-        }
-
-        if (value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
+        else if (value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
         {
             int candidate_count = (int)value_node->list.count;
             if (candidate_count > 0)
@@ -4667,7 +4629,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
 
         // Error: main proc must not have a return type; use os.exit() to set exit codes
-        if (value_node->type == AST_NODE_PROCEDURE_LITERAL && strcmp(name_node->text, "main") == 0)
+        if (value_node->type == AST_NODE_PROCEDURE_DEFINITION && strcmp(name_node->text, "main") == 0)
         {
             if (val_type != NULL && val_type->kind == TD_KIND_PROC
                 && val_type->proc_metadata.return_count > 0

@@ -4155,7 +4155,7 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
         return NULL;
 
-    if (value_node->type == AST_NODE_PROCEDURE_LITERAL)
+    if (value_node->type == AST_NODE_PROCEDURE_DEFINITION)
     {
         TypeDescriptor const * proc_type = value_node->resolved_type;
         if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
@@ -4351,7 +4351,7 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
         return NULL;
 
-    if (value_node == NULL || value_node->type != AST_NODE_PROCEDURE_LITERAL)
+    if (value_node == NULL || value_node->type != AST_NODE_PROCEDURE_DEFINITION)
         return NULL;
 
     TypeDescriptor const * proc_type = value_node->resolved_type;

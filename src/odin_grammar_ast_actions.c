@@ -361,7 +361,7 @@ DEFINE_ACTION(ast_action_continue_statement_action, AST_NODE_CONTINUE_STATEMENT)
 DEFINE_ACTION(ast_action_fallthrough_statement_action, AST_NODE_FALLTHROUGH_STATEMENT)
 DEFINE_ACTION(ast_action_assign_statement_action, AST_NODE_ASSIGN_STATEMENT)
 DEFINE_ACTION(ast_action_expression_statement_action, AST_NODE_EXPRESSION_STATEMENT)
-DEFINE_ACTION(ast_action_procedure_literal_action, AST_NODE_PROCEDURE_LITERAL)
+DEFINE_ACTION(ast_action_procedure_definition_action, AST_NODE_PROCEDURE_DEFINITION)
 DEFINE_ACTION(ast_action_identifier_list_action, AST_NODE_IDENTIFIER_LIST)
 DEFINE_ACTION(ast_action_variable_decl_action, AST_NODE_VARIABLE_DECL)
 DEFINE_ACTION(ast_action_constant_decl_action, AST_NODE_CONSTANT_DECL)
@@ -549,7 +549,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_ASSIGN_STATEMENT, ast_action_assign_statement_action);
     REGISTER(AST_ACTION_EXPRESSION_STATEMENT, ast_action_expression_statement_action);
     REGISTER(AST_ACTION_PROC_OVERLOAD_BUNDLE, ast_action_proc_overload_bundle_action);
-    REGISTER(AST_ACTION_PROCEDURE_LITERAL, ast_action_procedure_literal_action);
+    REGISTER(AST_ACTION_PROCEDURE_DEFINITION, ast_action_procedure_definition_action);
     REGISTER(AST_ACTION_IDENTIFIER_LIST, ast_action_identifier_list_action);
     REGISTER(AST_ACTION_VARIABLE_DECL, ast_action_variable_decl_action);
     REGISTER(AST_ACTION_CONSTANT_DECL, ast_action_constant_decl_action);

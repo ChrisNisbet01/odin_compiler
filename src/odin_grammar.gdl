@@ -493,7 +493,8 @@ ExpressionStatement = Expression @AST_ACTION_EXPRESSION_STATEMENT;
 
 ProcBody = CompoundStatement | TripleDash;
 ProcOverloadBundle = KwProc LBrace Identifier (Comma Identifier)* RBrace @AST_ACTION_PROC_OVERLOAD_BUNDLE;
-ProcedureLiteral = ProcOverloadBundle | ProcedureSignature ProcBody @AST_ACTION_PROCEDURE_LITERAL;
+ProcedureDefinition = ProcedureSignature ProcBody @AST_ACTION_PROCEDURE_DEFINITION;
+ProcedureLiteral = ProcOverloadBundle | ProcedureDefinition;
 
 Statement = DeferStatement
           | IfStatement
