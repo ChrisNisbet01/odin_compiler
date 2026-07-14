@@ -83,6 +83,8 @@ typedef struct
 
     TypeInfoGlobalEntry type_info_globals[MAX_TYPE_INFO_GLOBALS];
     int type_info_global_count;
+
+    bool bounds_checking_enabled;
 } IrGenContext;
 
 IrGenContext *

@@ -283,3 +283,25 @@
 
 ### Key insight
 The `any` type system had two fundamental flaws: (a) integer arguments were stored as `inttoptr` values (data pointer = integer cast to pointer) instead of storing the integer in memory and pointing to it; (b) the `type_of` builtin only worked at compile time, making runtime type dispatch impossible. Fixing both enabled proper runtime type identification and safe type assertion through the `any` struct's `{ptr data, i64 type_id}` layout.
+
+## Accomplishments (session 2026-07-14)
+
+### Removed name-based intrinsic detection (cleanup)
+- **Removed `ir_gen_is_runtime_intrinsic()`**: The name-based detection function was redundant now that all runtime intrinsics use `@(builtin)`. The IR generator's `ir_gen_top_level_decl()` now uses `attrs->is_builtin` as the sole signal for intrinsic body generation.
+- **Simplified dispatch**: `body_node || is_builtin` replaces the previous `body_node || is_builtin || is_known_intrinsic` condition. The name-based dispatch inside `ir_gen_runtime_intrinsic_body()` is now only reached from the `@(builtin)` path.
+- **Safety**: Added a final `else` clause to `ir_gen_runtime_intrinsic_body()` that emits `LLVMBuildUnreachable` for unknown builtin names (previously fell through with no terminator, causing LLVM verification errors).
+- **All 124 tests pass**.
+
+### Implemented runtime bounds checking on array/slice/string subscripts
+- **`IrGenContext`** (`llvm_ir_generator.h`): Added `bool bounds_checking_enabled` field, initialized to `true` in `ir_gen_context_create`.
+- **`ir_gen_emit_bounds_check()`** (`llvm_ir_generator.c`): Helper that emits `icmp uge index, len` → conditional branch to trap block. Trap block calls `llvm.trap()` + `unreachable`. Continuation block resumes normal flow. Returns the (possibly extended) index value.
+- **Forward declaration**: Added `static LLVMValueRef ir_gen_emit_bounds_check(...)` to the forward declarations section to resolve implicit declaration conflict (function used in `ir_gen_lvalue` at line ~1666, defined at line ~3971).
+- **Lvalue subscript path** (`ir_gen_lvalue`): For `TD_KIND_ARRAY`, uses `cur_type->as.array.count` as compile-time length constant. For `TD_KIND_SLICE`/`TD_KIND_DYNAMIC_ARRAY`, loads `.len` field (field index 1) via GEP. For `string`, loads `.len` field via GEP. Bounds check emitted before the element-access GEP.
+- **Rvalue subscript path** (`ir_gen_postfix_expression`): Same logic. For arrays, uses compile-time count. For slices/dynamic arrays, loads `.len` via GEP. For strings, uses `LLVMBuildExtractValue` on the string struct to get `.len` (field index 1).
+- **`#no_bounds_check` directive**: `AST_NODE_DIRECTIVE` handler in `ir_gen_node` now checks for `#no_bounds_check` and sets `ctx->bounds_checking_enabled = false`. This is a simple toggle (once disabled, stays disabled for the rest of the compilation unit).
+- **Map subscripts**: Not bounds-checked (use linear-scan lookup, not direct indexing).
+- **Tests**: `test_bounds_check.odin` (7 subtests: array read/write, slice read/write, string read — all in-bounds, verify correctness). Updated `test_no_bounds_check.odin` to test OOB array access with `#no_bounds_check` directive (program runs without trapping). Manually verified: OOB access without `#no_bounds_check` produces SIGILL (exit 132) from `llvm.trap()`.
+- **All 125 tests pass** (124 previous + 1 new; `test_no_bounds_check.odin` updated from no-op syntax test to functional test).
+
+### Key insight
+The `if condition do statement` form is not supported by the grammar (only `if condition { statements }` with braces). This was a pre-existing limitation never exposed by tests. The `arr[:]` full-slice syntax is also unsupported — only `arr[..]` works.

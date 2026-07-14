@@ -13,9 +13,6 @@ Features present in the official Odin language that our compiler does not yet su
 
 ## Medium Complexity
 
-### Bounds checking on array/slice/map subscripts
-Currently subscript operations (`x[i]`) generate no runtime bounds checks. Need to emit index-vs-length comparisons and trap/branch on out-of-bounds. The `#no_bounds_check` directive should then suppress these checks.
-
 ### Exhaustiveness checking for switches
 Currently switch statements accept any set of cases without verifying completeness. Need to detect when a switch (without `#partial`) covers all variants of an enum or other finite type, and emit an error for missing cases. The `#partial switch` directive should suppress this check.
 
@@ -93,7 +90,8 @@ The following features were previously listed as unsupported but are now impleme
 - Octal literal syntax (`0o644`, `0o777`, etc.)
 - Bitwise OR constant folding (`os.O_WRONLY | os.O_CREAT | os.O_TRUNC`) — compile-time evaluation of named constants in `when` conditions and constant declarations
 - `#caller_location` — returns `Source_Location` struct (`file`, `line`, `column`) with the source location of the expression
-- `#no_bounds_check` — Grammar accepts it; no-op at IR level (bounds checking not yet implemented, so the directive is correct as a no-op marker)
+- **Bounds checking on array/slice/string subscripts**: `llvm.trap()` emitted for out-of-bounds access. Index compared against length (compile-time for arrays, loaded `.len` field for slices/strings). `#no_bounds_check` directive suppresses the checks.
+- `#no_bounds_check` — Functions as intended: disables bounds checking for subsequent code in the same scope.
 - `#partial switch` — Grammar accepts it; no-op at semantic level (exhaustiveness checking not yet implemented, so it's correct as a no-op marker)
 - Chained member access with reserved keyword field names (`.len`, `.data`, `.cap` on string/slice/dynamic_array/array/maybe; pointer auto-dereference `p.field` in rvalue context)
 - Slice expression syntax (`arr[low..high]`, `arr[..]`, `arr[low..]`, `arr[..high]`, `arr[..<high]`, `arr[low..<high]`) with semantic analysis and IR generation (GEP + slice struct construction); works for both arrays and slices, including chained slicing

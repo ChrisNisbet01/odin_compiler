@@ -31,6 +31,8 @@ static LLVMValueRef ir_gen_in_expression(
 );
 
 static LLVMValueRef ir_gen_call_malloc(IrGenContext * ctx, LLVMValueRef size);
+static LLVMValueRef ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef index_val,
+                                              LLVMValueRef len_val, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_call_calloc(IrGenContext * ctx, LLVMValueRef size);
 static void ir_gen_call_free(IrGenContext * ctx, LLVMValueRef ptr);
 static LLVMValueRef ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr);
@@ -87,6 +89,7 @@ ir_gen_context_create(char const * module_name, TypeDescriptors * type_registry,
     ctx->foreign_library_count = 0;
     ctx->foreign_library_capacity = 0;
     ir_gen_error_collection_init(&ctx->errors);
+    ctx->bounds_checking_enabled = true;
 
     return ctx;
 }
@@ -1657,6 +1660,13 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
 
                 if (cur_type->kind == TD_KIND_ARRAY)
                 {
+                    if (ctx->bounds_checking_enabled)
+                    {
+                        LLVMValueRef len_val = LLVMConstInt(
+                            LLVMInt64TypeInContext(ctx->context), (long long)cur_type->as.array.count, false
+                        );
+                        index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+                    }
                     LLVMTypeRef arr_type = cur_type->llvm_type;
                     LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false), index_val};
                     ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, ptr, indices, 2, "subs");
@@ -1666,6 +1676,20 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
                 else if (cur_type->kind == TD_KIND_SLICE || cur_type->kind == TD_KIND_DYNAMIC_ARRAY)
                 {
+                    if (ctx->bounds_checking_enabled)
+                    {
+                        // Load .len field (field index 1) from the slice struct
+                        LLVMValueRef len_indices[]
+                            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+                        LLVMValueRef len_ptr = LLVMBuildInBoundsGEP2(
+                            ctx->builder, cur_type->llvm_type, ptr, len_indices, 2, "slice.len.ptr"
+                        );
+                        LLVMValueRef len_val = LLVMBuildLoad2(
+                            ctx->builder, LLVMInt64TypeInContext(ctx->context), len_ptr, "slice.len"
+                        );
+                        index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+                    }
                     LLVMValueRef data_indices[]
                         = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
@@ -1686,6 +1710,20 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 else if (cur_type->kind == TD_KIND_BASIC && cur_type->as.basic.name != NULL
                          && strcmp(cur_type->as.basic.name, "string") == 0)
                 {
+                    if (ctx->bounds_checking_enabled)
+                    {
+                        // Load .len field (field index 1) from the string struct
+                        LLVMValueRef len_indices[]
+                            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+                        LLVMValueRef len_ptr = LLVMBuildInBoundsGEP2(
+                            ctx->builder, cur_type->llvm_type, ptr, len_indices, 2, "str.len.ptr"
+                        );
+                        LLVMValueRef len_val = LLVMBuildLoad2(
+                            ctx->builder, LLVMInt64TypeInContext(ctx->context), len_ptr, "str.len"
+                        );
+                        index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+                    }
                     // String subscript: extract data ptr from {ptr, i64} struct, GEP, store ptr for load
                     LLVMValueRef data_indices[]
                         = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
@@ -3929,6 +3967,52 @@ ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
     }
 }
 
+// --- Bounds checking support ---
+
+static LLVMValueRef
+ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef index_val,
+                         LLVMValueRef len_val, odin_grammar_node_t * node)
+{
+    if (!ctx->bounds_checking_enabled)
+        return index_val;
+
+    (void)node;
+
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+
+    // Extend index to i64 if needed
+    LLVMTypeRef idx_type = LLVMTypeOf(index_val);
+    if (LLVMGetTypeKind(idx_type) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(idx_type) != 64)
+        index_val = LLVMBuildIntCast2(ctx->builder, index_val, i64_type, false, "bc.idx");
+
+    // Check: index >= len → out of bounds
+    LLVMValueRef cond = LLVMBuildICmp(ctx->builder, LLVMIntUGE, index_val, len_val, "oob");
+
+    LLVMBasicBlockRef current_bb = LLVMGetInsertBlock(ctx->builder);
+    LLVMValueRef func = LLVMGetBasicBlockParent(current_bb);
+
+    LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "bc.cont");
+    LLVMBasicBlockRef trap_bb = LLVMAppendBasicBlockInContext(ctx->context, func, "bc.trap");
+
+    LLVMBuildCondBr(ctx->builder, cond, trap_bb, cont_bb);
+
+    // Emit trap block
+    LLVMPositionBuilderAtEnd(ctx->builder, trap_bb);
+    LLVMValueRef trap_fn = LLVMGetNamedFunction(ctx->module, "llvm.trap");
+    if (!trap_fn)
+    {
+        LLVMTypeRef trap_ft = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), NULL, 0, false);
+        trap_fn = LLVMAddFunction(ctx->module, "llvm.trap", trap_ft);
+    }
+    LLVMBuildCall2(ctx->builder, LLVMGlobalGetValueType(trap_fn), trap_fn, NULL, 0, "");
+    LLVMBuildUnreachable(ctx->builder);
+
+    // Continue in cont_bb
+    LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
+
+    return index_val;
+}
+
 // --- Top-level declaration codegen ---
 
 static void
@@ -4611,6 +4695,13 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
             if (cur_type->kind == TD_KIND_ARRAY)
             {
+                if (ctx->bounds_checking_enabled)
+                {
+                    LLVMValueRef len_val = LLVMConstInt(
+                        LLVMInt64TypeInContext(ctx->context), (long long)cur_type->as.array.count, false
+                    );
+                    index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+                }
                 LLVMTypeRef arr_type = cur_type->llvm_type;
                 LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false), index_val};
                 LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, val, indices, 2, "subs");
@@ -4618,6 +4709,20 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             }
             else if (cur_type->kind == TD_KIND_SLICE || cur_type->kind == TD_KIND_DYNAMIC_ARRAY)
             {
+                if (ctx->bounds_checking_enabled)
+                {
+                    // Load .len field (field index 1) from the slice struct
+                    LLVMValueRef len_indices[]
+                        = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                           LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+                    LLVMValueRef len_ptr = LLVMBuildInBoundsGEP2(
+                        ctx->builder, cur_type->llvm_type, val, len_indices, 2, "slice.re.len.ptr"
+                    );
+                    LLVMValueRef len_val = LLVMBuildLoad2(
+                        ctx->builder, LLVMInt64TypeInContext(ctx->context), len_ptr, "slice.re.len"
+                    );
+                    index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+                }
                 LLVMValueRef data_indices[]
                     = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                        LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
@@ -4641,6 +4746,13 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 else
                     struct_val = val;
 
+                if (ctx->bounds_checking_enabled)
+                {
+                    LLVMValueRef len_val = LLVMBuildExtractValue(
+                        ctx->builder, struct_val, 1, "str.re.len"
+                    );
+                    index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+                }
                 LLVMValueRef data = LLVMBuildExtractValue(ctx->builder, struct_val, 0, "str.data");
                 LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(
                     ctx->builder, LLVMInt8TypeInContext(ctx->context), data, &index_val, 1, "str.subs"
@@ -6389,6 +6501,13 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_DIRECTIVE_WITH_ARGS:
     case AST_NODE_DIRECTIVE:
+        // #no_bounds_check — disable bounds checking for subsequent code
+        if (node->text != NULL && strstr(node->text, "#no_bounds_check") != NULL)
+        {
+            ctx->bounds_checking_enabled = false;
+            return NULL;
+        }
+
         // #caller_location — emit Source_Location struct constant
         if (node->text != NULL && strstr(node->text, "#caller_location") != NULL)
         {
