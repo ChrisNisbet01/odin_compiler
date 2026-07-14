@@ -115,6 +115,9 @@ typedef struct TypeDescriptor
         struct
         {
             char const * tag;
+            char const ** enumerator_names;
+            long long * enumerator_values;
+            int enumerator_count;
         } enum_type;
         struct
         {

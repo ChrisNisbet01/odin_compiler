@@ -11,10 +11,13 @@ Features present in the official Odin language that our compiler does not yet su
 - **`printf %d/%x` with unsigned types**: Delegated `%d` and `%x` to `print_value` in stubs `fmt.odin` (handles all integer types uniformly).
 - **Extended `core:fmt` variants**: Added `printfln`, `eprintln`, `eprintf`, `eprintfln` to `stubs/core/fmt/fmt.odin`. Each is a standalone copy (no `..args` forwarding, no `[]any` param delegation — both unsupported). Tested via `test_fmt_more.odin`.
 
+## Low Complexity
+
+(None remaining)
+
 ## Medium Complexity
 
-### Exhaustiveness checking for switches
-Currently switch statements accept any set of cases without verifying completeness. Need to detect when a switch (without `#partial`) covers all variants of an enum or other finite type, and emit an error for missing cases. The `#partial switch` directive should suppress this check.
+(None remaining)
 
 ## High Complexity
 
@@ -92,7 +95,8 @@ The following features were previously listed as unsupported but are now impleme
 - `#caller_location` — returns `Source_Location` struct (`file`, `line`, `column`) with the source location of the expression
 - **Bounds checking on array/slice/string subscripts**: `llvm.trap()` emitted for out-of-bounds access. Index compared against length (compile-time for arrays, loaded `.len` field for slices/strings). `#no_bounds_check` directive suppresses the checks.
 - `#no_bounds_check` — Functions as intended: disables bounds checking for subsequent code in the same scope.
-- `#partial switch` — Grammar accepts it; no-op at semantic level (exhaustiveness checking not yet implemented, so it's correct as a no-op marker)
+- `#partial switch` — Functions as intended: suppresses exhaustiveness checking for enum-typed switches.
+- **Exhaustiveness checking for enum switches**: Switch statements on enum types are checked for completeness. Missing enumerator cases produce a `switch is not exhaustive: missing case for enum value '<name>'` error. The `#partial` directive (placed after `switch` keyword, e.g. `switch #partial c`) suppresses the check. A `default` case also suppresses the check. Enumerators are stored in the `TD_KIND_ENUM` type descriptor (`enumerator_names`, `enumerator_values`, `enumerator_count` fields) by the semantic analyser during `AST_NODE_ENUM_TYPE` processing.
 - Chained member access with reserved keyword field names (`.len`, `.data`, `.cap` on string/slice/dynamic_array/array/maybe; pointer auto-dereference `p.field` in rvalue context)
 - Slice expression syntax (`arr[low..high]`, `arr[..]`, `arr[low..]`, `arr[..high]`, `arr[..<high]`, `arr[low..<high]`) with semantic analysis and IR generation (GEP + slice struct construction); works for both arrays and slices, including chained slicing
 - Type alias `::` declaration (`Handle :: int`, `PtrToInt :: ^int`, `MyHandle :: Handle`): Added `TypePrefix` alternative to `ConstantDecl` grammar. Semantic analyser detects type values and stores them as `SYMBOL_TYPE` symbols; `sem_resolve_type_expr` handles `AST_NODE_IDENTIFIER` for type alias lookups. Variable declarations (`x: Handle`) resolve type via the identifier scope lookup path.

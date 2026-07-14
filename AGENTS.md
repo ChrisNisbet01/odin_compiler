@@ -323,3 +323,14 @@ The `if condition do statement` form is not supported by the grammar (only `if c
 
 ### Key insight (this session)
 The `@AST_ACTION_POSTFIX_SLICE` action is shared between `PostfixOpSlice` (for `arr[..]`, `arr[low..high]`, etc.) and the new `PostfixOpFullSlice` (for `arr[:]`). Both produce `AST_NODE_POSTFIX_SLICE` nodes, so the semantic analyser and IR generator handle them identically without needing to distinguish the source syntax.
+
+## Accomplishments (session 2026-07-14, continued)
+
+### Implemented exhaustiveness checking for enum switches
+- **Type descriptors** (`type_descriptors.h`): Extended `enum_type` struct in `TD_KIND_ENUM` union with `char const ** enumerator_names`, `long long * enumerator_values`, and `int enumerator_count` fields. `calloc` zero-initializes these in `type_descriptor_alloc`, so no changes needed in `get_or_create_enum_type` for new field initialization.
+- **Semantic analyser** (`semantic_analyser.c`): `AST_NODE_ENUM_TYPE` handler now counts enumerators, allocates arrays via `calloc`, and stores each enumerator's name and value in the type descriptor. The allocation is guarded against re-running on deduplicated enum types (only allocates when `enumerator_count == 0`).
+- **`AST_NODE_SWITCH_STATEMENT` handler** (`semantic_analyser.c`): Now detects `#partial` directive among switch children, tracks whether the switch has a `default` case, evaluates the switch expression to determine its type, collects covered case values for enum-typed switches, and emits `switch is not exhaustive: missing case for enum value '<name>'` errors for each uncovered enumerator. The check is suppressed by `#partial` directive or by the presence of a `default` case.
+- **`#partial` directive syntax**: `#partial` sits after the `switch` keyword (per grammar `SwitchStatement = KwSwitch Directive? Expression? SwitchBody`), so the correct syntax is `switch #partial c { ... }`, not `#partial switch c { ... }`.
+- **Tests**: `test_switch_enum_exhaustive.odin` (full coverage — passes), `test_switch_enum_partial.odin` (partial coverage with `#partial` — passes), `test_switch_enum_default.odin` (partial coverage with default case — passes), `expected_to_fail/test_switch_enum_missing.odin` (missing case without `#partial` or default — expected to fail because exhaustiveness error).
+- **All 132 tests pass** (128 previous + 3 new regular + 1 new expected-to-fail).
+- **Pre-existing limitation discovered**: `Color.Green` qualified enumerator access does not work (errors "type has no member"). Only bare enumerators (`Green`) work. This is a separate limitation tracked implicitly.

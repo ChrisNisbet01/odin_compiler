@@ -930,9 +930,32 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (enum_td == NULL)
             return NULL;
 
+        // Count enumerators
+        int num_enumerators = 0;
+        if (enumerator_list)
+        {
+            for (size_t i = 0; i < enumerator_list->list.count; i++)
+            {
+                odin_grammar_node_t * enumerator = enumerator_list->list.children[i];
+                if (enumerator != NULL && enumerator->type == AST_NODE_ENUMERATOR)
+                    num_enumerators++;
+            }
+        }
+
+        // Allocate arrays to store enumerator names and values in the type descriptor
+        // (only if not already set — get_or_create_enum_type deduplicates, so existing
+        // enum types may already have arrays from a previous analysis pass)
+        TypeDescriptor * mutable_td = (TypeDescriptor *)enum_td;
+        if (mutable_td->as.enum_type.enumerator_count == 0 && num_enumerators > 0)
+        {
+            mutable_td->as.enum_type.enumerator_names = calloc(num_enumerators, sizeof(char const *));
+            mutable_td->as.enum_type.enumerator_values = calloc(num_enumerators, sizeof(long long));
+        }
+
         if (enumerator_list)
         {
             int next_value = 0;
+            int enum_idx = 0;
             for (size_t i = 0; i < enumerator_list->list.count; i++)
             {
                 odin_grammar_node_t * enumerator = enumerator_list->list.children[i];
@@ -976,8 +999,18 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
                     en_sym->has_const_int_val = true;
                 }
 
+                // Store enumerator info in the type descriptor
+                if (enum_idx < num_enumerators && mutable_td->as.enum_type.enumerator_names != NULL
+                    && mutable_td->as.enum_type.enumerator_values != NULL)
+                {
+                    mutable_td->as.enum_type.enumerator_names[enum_idx] = en_name_node->text;
+                    mutable_td->as.enum_type.enumerator_values[enum_idx] = next_value;
+                }
+                enum_idx++;
+
                 next_value++;
             }
+            mutable_td->as.enum_type.enumerator_count = num_enumerators;
         }
 
         if (enum_td)
@@ -4436,6 +4469,49 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
 
     case AST_NODE_SWITCH_STATEMENT:
     {
+        // Detect #partial directive among switch children
+        bool is_partial = false;
+        bool has_default = false;
+        odin_grammar_node_t * switch_expr_node = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_DIRECTIVE || child->type == AST_NODE_DIRECTIVE_WITH_ARGS)
+            {
+                if (child->text != NULL && strstr(child->text, "#partial") != NULL)
+                    is_partial = true;
+            }
+            else if (child->type == AST_NODE_SWITCH_DEFAULT)
+            {
+                has_default = true;
+            }
+            else if (child->type != AST_NODE_SWITCH_CASE && child->type != AST_NODE_COMPOUND_STATEMENT)
+            {
+                // First non-directive, non-case, non-default, non-compound child is the switch expression
+                if (switch_expr_node == NULL)
+                    switch_expr_node = child;
+            }
+        }
+
+        // Evaluate switch expression to determine its type
+        TypeDescriptor const * switch_type = NULL;
+        if (switch_expr_node != NULL)
+        {
+            sem_evaluate_expr(ctx, switch_expr_node);
+            switch_type = switch_expr_node->resolved_type;
+        }
+
+        // Collect case values (enumerator values covered by the switch)
+        // Only relevant if the switch type is an enum
+        long long covered_values[64];
+        int covered_count = 0;
+        bool can_check_exhaustiveness = (switch_type != NULL && switch_type->kind == TD_KIND_ENUM
+                                         && !has_default && !is_partial
+                                         && switch_type->as.enum_type.enumerator_count > 0
+                                         && switch_type->as.enum_type.enumerator_values != NULL);
+
         for (size_t i = 0; i < node->list.count; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
@@ -4465,6 +4541,33 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                     else
                     {
                         sem_evaluate_expr(ctx, case_child);
+
+                        // If we're tracking exhaustiveness, record the case value
+                        if (can_check_exhaustiveness && covered_count < 64)
+                        {
+                            symbol_t * case_sym = NULL;
+                            odin_grammar_node_t * ident = case_child;
+                            // Unwrap expression wrappers to find identifier
+                            while (ident != NULL
+                                   && ident->type != AST_NODE_IDENTIFIER
+                                   && ident->list.count > 0)
+                            {
+                                ident = ident->list.children[0];
+                            }
+                            // Try to get the constant int value of the case expression
+                            if (ident != NULL && ident->type == AST_NODE_IDENTIFIER && ident->text != NULL)
+                            {
+                                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
+                                if (sym && sym->has_const_int_val)
+                                    covered_values[covered_count++] = sym->const_int_val;
+                            }
+                            else if (case_child->type == AST_NODE_INTEGER_VALUE)
+                            {
+                                // Direct integer case value
+                                if (case_child->text != NULL)
+                                    covered_values[covered_count++] = strtoll(case_child->text, NULL, 10);
+                            }
+                        }
                     }
                 }
                 generator_pop_scope(ctx->gen_ctx);
@@ -4485,9 +4588,38 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             {
                 sem_analyse_compound_statement(ctx, child, expected_return_type);
             }
-            else
+            else if (child->type != AST_NODE_DIRECTIVE && child->type != AST_NODE_DIRECTIVE_WITH_ARGS)
             {
                 sem_evaluate_expr(ctx, child);
+            }
+        }
+
+        // Exhaustiveness check: verify all enum values are covered
+        if (can_check_exhaustiveness)
+        {
+            int num_enumerators = switch_type->as.enum_type.enumerator_count;
+            char const ** enum_names = switch_type->as.enum_type.enumerator_names;
+            long long * enum_values = switch_type->as.enum_type.enumerator_values;
+
+            // Check each enumerator
+            for (int ei = 0; ei < num_enumerators; ei++)
+            {
+                bool found = false;
+                for (int ci = 0; ci < covered_count; ci++)
+                {
+                    if (covered_values[ci] == enum_values[ei])
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "switch is not exhaustive: missing case for enum value '%s'",
+                             enum_names[ei] ? enum_names[ei] : "<unknown>");
+                    sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
+                }
             }
         }
         break;
