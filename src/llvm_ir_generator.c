@@ -2722,6 +2722,106 @@ ir_gen_bit_set_assign_expr(
     return true;
 }
 
+static bool
+ir_gen_vector_elem_assign(
+    IrGenContext * ctx,
+    odin_grammar_node_t * lhs_expr,
+    LLVMValueRef rhs_val,
+    OperatorKind op_kind,
+    odin_grammar_node_t * rhs_node
+)
+{
+    if (lhs_expr == NULL)
+        return false;
+
+    // Unwrap expression wrapper nodes to find the POSTFIX_EXPRESSION inside
+    odin_grammar_node_t * postfix_expr = lhs_expr;
+    while (postfix_expr->type != AST_NODE_POSTFIX_EXPRESSION
+           && is_expression_wrapper_type(postfix_expr->type)
+           && postfix_expr->list.count >= 1 && postfix_expr->list.children[0])
+        postfix_expr = postfix_expr->list.children[0];
+
+    if (postfix_expr->type != AST_NODE_POSTFIX_EXPRESSION
+        || postfix_expr->list.count < 2)
+        return false;
+
+    odin_grammar_node_t * base = postfix_expr->list.children[0];
+    odin_grammar_node_t * postfix_ops = postfix_expr->list.children[1];
+    if (base == NULL || postfix_ops == NULL)
+        return false;
+
+    TypeDescriptor const * base_type = base->resolved_type;
+    if (base_type == NULL || base_type->kind != TD_KIND_VECTOR)
+        return false;
+
+    odin_grammar_node_t * subscript_op = NULL;
+    for (size_t i = 0; i < postfix_ops->list.count; i++)
+    {
+        odin_grammar_node_t * op = postfix_ops->list.children[i];
+        if (op && op->type == AST_NODE_POSTFIX_SUBSCRIPT)
+        {
+            subscript_op = op;
+            break;
+        }
+    }
+    if (subscript_op == NULL)
+        return false;
+
+    odin_grammar_node_t * index_expr = NULL;
+    for (size_t ci = 0; ci < subscript_op->list.count; ci++)
+    {
+        if (subscript_op->list.children[ci] != NULL)
+        {
+            index_expr = subscript_op->list.children[ci];
+            break;
+        }
+    }
+    if (index_expr == NULL)
+        return false;
+
+    LLVMValueRef vec_ptr = ir_gen_lvalue(ctx, base);
+    if (vec_ptr == NULL)
+    {
+        odin_grammar_node_t * ident = expression_unwrap_to_identifier(base);
+        if (ident == NULL)
+            return false;
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
+        if (sym == NULL || !sym->value.is_lvalue)
+            return false;
+        vec_ptr = sym->value.value;
+    }
+    if (vec_ptr == NULL)
+        return false;
+
+    LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
+    if (index_val == NULL)
+        return true;
+
+    LLVMValueRef vec_val = LLVMBuildLoad2(ctx->builder, base_type->llvm_type, vec_ptr, "vec.load");
+    LLVMTypeRef elem_type = base_type->element_type ? base_type->element_type->llvm_type : NULL;
+
+    LLVMValueRef store_val = rhs_val;
+    if (elem_type)
+        store_val = coerce_value_to_type(ctx, rhs_val, elem_type, false, "vec.ins");
+
+    if (op_kind != OP_ASSIGN)
+    {
+        OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
+        if (bin_op == OP_INVALID)
+            return true;
+        LLVMValueRef elem_val = LLVMBuildExtractElement(ctx->builder, vec_val, index_val, "vec.elem");
+        LLVMValueRef result = ir_gen_binary_op_by_kind(ctx, elem_val, store_val, bin_op);
+        vec_val = LLVMBuildInsertElement(ctx->builder, vec_val, result, index_val, "vec.ins");
+    }
+    else
+    {
+        vec_val = LLVMBuildInsertElement(ctx->builder, vec_val, store_val, index_val, "vec.ins");
+    }
+
+    LLVMBuildStore(ctx->builder, vec_val, vec_ptr);
+    return true;
+}
+
 static LLVMValueRef
 ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -2742,6 +2842,9 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMValueRef rhs_val = ir_gen_node(ctx, node->list.children[2]);
     if (rhs_val == NULL)
         return NULL;
+
+    if (ir_gen_vector_elem_assign(ctx, node->list.children[0], rhs_val, op_kind, node->list.children[2]))
+        return rhs_val;
 
     if (ir_gen_bit_field_write(ctx, node->list.children[0], rhs_val, op_kind))
         return rhs_val;
@@ -2837,6 +2940,9 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 
     // Single LHS assignment
+    if (ir_gen_vector_elem_assign(ctx, node->list.children[0], rhs_val, op_kind, rhs_node))
+        return rhs_val;
+
     if (ir_gen_bit_field_write(ctx, node->list.children[0], rhs_val, op_kind))
         return rhs_val;
 
