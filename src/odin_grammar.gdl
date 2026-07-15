@@ -129,6 +129,7 @@ KwIncl = lexeme("incl" IdBoundary);
 KwExcl = lexeme("excl" IdBoundary);
 KwMaybe = lexeme("Maybe" IdBoundary);
 KwHashType = lexeme("#type" IdBoundary);
+KwSimd = lexeme("#simd" IdBoundary);
 KwProcLiteral = KwProc;
 
 // Reserved words set (for identifier boundary checking)
@@ -156,7 +157,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
         | KwBitField | KwBitSet | KwIncl | KwExcl
         | KwMaybe
         | KwTypeidOf | KwTypeInfoOf
-        | KwHashType;
+        | KwHashType | KwSimd;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
 FieldName = lexeme(identifier) @AST_ACTION_IDENTIFIER;
@@ -343,12 +344,15 @@ DistinctType = KwDistinct TypePrefix @AST_ACTION_DISTINCT_TYPE;
 
 MaybeType = KwMaybe LParen TypePrefix RParen @AST_ACTION_MAYBE_TYPE;
 
+VectorType = KwSimd LBracket IntegerLiteral RBracket TypePrefix @AST_ACTION_VECTOR_TYPE;
+
 // Base types for TypeName (no left recursion)
 TypePrefix = PointerType | DynamicArrayType | SliceType | MultiPointerType | ArrayType
-           | MapType | SoaType | ProcedureSignature
+           | MapType | VectorType | ProcedureSignature
            | StructType | UnionType | EnumType | BitFieldType | BitSetType
            | DistinctType | BasicType | StructTypeRef | EnumTypeRef
-           | Identifier | PolyIdent | MaybeType;
+           | Identifier | PolyIdent | MaybeType
+           | SoaType;
 
 // Full type with optional pipe-separated variants
 TypeName = TypePrefix (PipeInType TypePrefix)* @AST_ACTION_TYPE_NAME;

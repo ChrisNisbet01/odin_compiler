@@ -162,6 +162,7 @@ typedef enum
     AST_NODE_ATTR_LIST,
     AST_NODE_ATTR_ITEM,
     AST_NODE_PROC_OVERLOAD_BUNDLE,
+    AST_NODE_VECTOR_TYPE,
 } odin_grammar_node_type_t;
 
 typedef struct

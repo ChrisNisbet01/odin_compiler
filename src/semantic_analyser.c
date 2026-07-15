@@ -46,6 +46,42 @@ parse_calling_convention(char const * text)
     return CALLING_CONV_NONE;
 }
 
+static bool
+is_valid_swizzle(char const * field, int lane_count)
+{
+    if (field == NULL || field[0] == '\0')
+        return false;
+
+    int swizzle_set = -1;
+    for (char const * p = field; *p; p++)
+    {
+        char c = *p;
+        int char_set = -1;
+        int char_idx = -1;
+        if (c == 'x' || c == 'y' || c == 'z' || c == 'w')
+        {
+            char_set = 0;
+            char_idx = c - 'x';
+        }
+        else if (c == 'r' || c == 'g' || c == 'b' || c == 'a')
+        {
+            char_set = 1;
+            char_idx = c - 'r';
+        }
+        else
+        {
+            return false;
+        }
+        if (swizzle_set == -1)
+            swizzle_set = char_set;
+        else if (swizzle_set != char_set)
+            return false;
+        if (char_idx >= lane_count)
+            return false;
+    }
+    return true;
+}
+
 void
 sem_context_init(
     SemContext * ctx,
@@ -1531,6 +1567,41 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return maybe_type;
     }
 
+    case AST_NODE_VECTOR_TYPE:
+    {
+        // VectorType = KwSimd LBracket IntegerLiteral RBracket TypePrefix
+        // Children: [IntegerLiteral, ElementType]
+        odin_grammar_node_t * int_child = NULL;
+        odin_grammar_node_t * type_child = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL) continue;
+            if (child->type == AST_NODE_INTEGER_VALUE)
+                int_child = child;
+            else if (is_type_node(child) || child->type == AST_NODE_IDENTIFIER)
+                type_child = child;
+        }
+        if (int_child == NULL || type_child == NULL)
+            return NULL;
+
+        TypeDescriptor const * elem_type = sem_resolve_type_expr(ctx, type_child);
+        if (elem_type == NULL)
+            return NULL;
+
+        int const_ok = 0;
+        long long lane_count = sem_evaluate_constant_int(ctx, int_child, &const_ok);
+        if (!const_ok || lane_count <= 0)
+            return NULL;
+
+        TypeDescriptor const * vec_type = get_or_create_vector_type(
+            ctx->type_registry, elem_type, (int)lane_count
+        );
+        if (vec_type)
+            node->resolved_type = (TypeDescriptor *)vec_type;
+        return vec_type;
+    }
+
     case AST_NODE_IDENTIFIER:
     {
         if (node->text == NULL)
@@ -2427,7 +2498,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                         case AST_NODE_POSTFIX_SUBSCRIPT:
                             if (type
                                 && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
-                                    || type->kind == TD_KIND_MULTI_POINTER))
+                                    || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
                             {
                                 type = type->element_type;
                                 op->resolved_type = (TypeDescriptor *)type;
@@ -2601,6 +2672,26 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
                     {
                         type = type->as.maybe.inner_type;
                         op->resolved_type = (TypeDescriptor *)type;
+                    }
+                }
+                else if (type && type->kind == TD_KIND_VECTOR && op->list.count >= 1 && op->list.children[0])
+                {
+                    char const * field_name = op->list.children[0]->text;
+                    if (field_name && is_valid_swizzle(field_name, type->as.vector.lane_count))
+                    {
+                        int swizzle_len = (int)strlen(field_name);
+                        if (swizzle_len == 1)
+                            type = type->element_type;
+                        else
+                            type = get_or_create_vector_type(
+                                ctx->type_registry, type->element_type, swizzle_len
+                            );
+                        op->resolved_type = (TypeDescriptor *)type;
+                    }
+                    else
+                    {
+                        sem_error_list_add(&ctx->errors, NULL, op,
+                            "invalid swizzle or vector has no field named");
                     }
                 }
                 else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
@@ -2782,7 +2873,7 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
             case AST_NODE_POSTFIX_SUBSCRIPT:
                 if (type
                     && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
-                        || type->kind == TD_KIND_MULTI_POINTER))
+                        || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
                 {
                     type = type->element_type;
                     op->resolved_type = (TypeDescriptor *)type;

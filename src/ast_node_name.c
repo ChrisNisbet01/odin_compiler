@@ -313,6 +313,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "AttrItem";
     case AST_NODE_PROC_OVERLOAD_BUNDLE:
         return "ProcOverloadBundle";
+    case AST_NODE_VECTOR_TYPE:
+        return "VectorType";
     }
     return "Unknown";
 }

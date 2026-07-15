@@ -301,7 +301,8 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
                 || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY                 || sym->value.type_info->kind == TD_KIND_MAP
                 || sym->value.type_info->kind == TD_KIND_BIT_FIELD || sym->value.type_info->kind == TD_KIND_UNION
                 || sym->value.type_info->kind == TD_KIND_MAYBE
-                || sym->value.type_info->kind == TD_KIND_MULTI_POINTER))
+                || sym->value.type_info->kind == TD_KIND_MULTI_POINTER
+                || sym->value.type_info->kind == TD_KIND_VECTOR))
         {
             return sym->value.value;
         }
@@ -1752,6 +1753,12 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                         ctx->builder, LLVMInt8TypeInContext(ctx->context), data, &index_val, 1, "str.subs"
                     );
                     cur_type = get_basic_type_by_name(ctx->type_registry, "u8");
+                }
+                else if (cur_type->kind == TD_KIND_VECTOR)
+                {
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op,
+                        "vector element assignment not supported");
+                    return NULL;
                 }
                 else if (cur_type->kind == TD_KIND_MULTI_POINTER)
                 {
@@ -4806,6 +4813,14 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 val = LLVMBuildLoad2(ctx->builder, LLVMInt8TypeInContext(ctx->context), elem_ptr, "str.char");
                 cur_type = get_basic_type_by_name(ctx->type_registry, "u8");
             }
+            else if (cur_type->kind == TD_KIND_VECTOR)
+            {
+                LLVMValueRef vec_val = val;
+                if (LLVMGetTypeKind(LLVMTypeOf(vec_val)) == LLVMPointerTypeKind)
+                    vec_val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, vec_val, "vec.load");
+                val = LLVMBuildExtractElement(ctx->builder, vec_val, index_val, "vec.elem");
+                cur_type = cur_type->element_type;
+            }
             else if (cur_type->kind == TD_KIND_MULTI_POINTER)
             {
                 LLVMValueRef data = NULL;
@@ -5005,6 +5020,52 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 );
                 val = LLVMBuildLoad2(ctx->builder, cur_type->as.maybe.inner_type->llvm_type, payload_ptr, "maybe.val.load");
                 cur_type = cur_type->as.maybe.inner_type;
+                break;
+            }
+
+            // Vector swizzle: v.xyzw -> extractelement/shufflevector
+            if (cur_type && cur_type->kind == TD_KIND_VECTOR && field_name_node->text)
+            {
+                char const * swiz = field_name_node->text;
+                int swiz_len = (int)strlen(swiz);
+                LLVMValueRef vec_val = val;
+                if (LLVMGetTypeKind(LLVMTypeOf(vec_val)) == LLVMPointerTypeKind)
+                    vec_val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, vec_val, "vec.load");
+
+                if (swiz_len == 1)
+                {
+                    int idx = 0;
+                    char c = swiz[0];
+                    if (c == 'x' || c == 'r') idx = 0;
+                    else if (c == 'y' || c == 'g') idx = 1;
+                    else if (c == 'z' || c == 'b') idx = 2;
+                    else if (c == 'w' || c == 'a') idx = 3;
+                    LLVMValueRef index = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), idx, false);
+                    val = LLVMBuildExtractElement(ctx->builder, vec_val, index, swiz);
+                    cur_type = cur_type->element_type;
+                }
+                else
+                {
+                    LLVMTypeRef result_vec_type = LLVMVectorType(
+                        cur_type->element_type->llvm_type, swiz_len
+                    );
+                    int indices[4];
+                    for (int si = 0; si < swiz_len; si++)
+                    {
+                        char c = swiz[si];
+                        if (c == 'x' || c == 'r') indices[si] = 0;
+                        else if (c == 'y' || c == 'g') indices[si] = 1;
+                        else if (c == 'z' || c == 'b') indices[si] = 2;
+                        else if (c == 'w' || c == 'a') indices[si] = 3;
+                    }
+                    LLVMValueRef mask_vals[4];
+                    for (int si = 0; si < swiz_len; si++)
+                        mask_vals[si] = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), indices[si], false);
+                    LLVMValueRef mask_vec = LLVMConstVector(mask_vals, swiz_len);
+                    LLVMValueRef undef_val = LLVMGetUndef(cur_type->llvm_type);
+                    val = LLVMBuildShuffleVector(ctx->builder, vec_val, undef_val, mask_vec, swiz);
+                    cur_type = get_or_create_vector_type(ctx->type_registry, cur_type->element_type, swiz_len);
+                }
                 break;
             }
 
@@ -5684,6 +5745,7 @@ type_info_kind_from_td_kind(td_kind_t kind)
         case TD_KIND_RANGE: return 15;
         case TD_KIND_MAYBE: return 16;
         case TD_KIND_MULTI_POINTER: return 17;
+        case TD_KIND_VECTOR: return 18;
         default: return 0;
     }
 }

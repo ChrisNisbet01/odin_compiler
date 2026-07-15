@@ -550,6 +550,14 @@ type_write_canonical_name_internal(TypeDescriptor const * td, char * buf, size_t
         break;
     }
 
+    case TD_KIND_VECTOR:
+    {
+        char inner[512];
+        type_write_canonical_name_internal(td->element_type, inner, sizeof(inner), depth + 1);
+        snprintf(buf, buf_size, "#simd [%d]%s", td->as.vector.lane_count, inner);
+        break;
+    }
+
     case TD_KIND_OVERLOAD_BUNDLE:
     {
         size_t pos = 0;
@@ -1398,6 +1406,33 @@ create_distinct_type(TypeDescriptors * registry, TypeDescriptor const * base_typ
     td->kind = TD_KIND_DISTINCT;
     td->distinct_base_type = base_type;
     td->llvm_type = base_type->llvm_type;
+    type_compute_hash(td);
+    return td;
+}
+
+TypeDescriptor const *
+get_or_create_vector_type(TypeDescriptors * registry, TypeDescriptor const * element_type, int lane_count)
+{
+    if (element_type == NULL || lane_count <= 0)
+        return NULL;
+
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_VECTOR)
+            continue;
+        if (t->element_type == element_type && t->as.vector.lane_count == lane_count)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_VECTOR;
+    td->element_type = element_type;
+    td->as.vector.element_type = element_type;
+    td->as.vector.lane_count = lane_count;
+    td->llvm_type = LLVMVectorType(element_type->llvm_type, (unsigned)lane_count);
     type_compute_hash(td);
     return td;
 }

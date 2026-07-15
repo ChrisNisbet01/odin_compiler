@@ -1,3 +1,15 @@
+## Accomplishments (session 2026-07-15)
+
+### Implemented `#simd [N]T` vector types with swizzle and subscript
+- **Grammar**: Added `KwSimd` lexeme (`#simd` with IdBoundary), `VectorType` rule (`KwSimd LBracket IntegerLiteral RBracket TypePrefix`). Moved `VectorType` before `SoaType` in `TypePrefix` to fix PEG ordering issue (SoaType's `Directive = lexeme("#" DirectiveName)` split `#simd` into `#` + `simd`).
+- **AST**: Added `AST_NODE_VECTOR_TYPE` enum, action, node name.
+- **Type descriptors**: Added `TD_KIND_VECTOR` with `lane_count`, `element_type`, `llvm_type = LLVMVectorType(...)`.
+- **Semantic analyser**: `AST_NODE_VECTOR_TYPE` handler in `sem_resolve_type_expr` calls `get_or_create_vector_type`. Swizzle detection in POSTFIX_MEMBER: validates field name against {x,y,z,w,r,g,b,a} sets (no mixing), resolves single-component to element type, multi-component to new vector type. `TD_KIND_VECTOR` added to subscriptable types in POSTFIX_SUBSCRIPT.
+- **IR generator**: Added `TD_KIND_VECTOR` to composite types list (auto-load exclusion). Rvalue swizzle: single → `ExtractElement`, multi → `ShuffleVector`. Rvalue subscript: `ExtractElement`. Lvalue subscript: error (read-modify-write pattern not yet implemented).
+- **Key fix**: Removed dead code (`LLVMConstNamedStruct(LLVMStructType(mask_vals, ...))`) that called `LLVMStructType` with `LLVMValueRef*` instead of `LLVMTypeRef*`, causing segfault in `llvm::StructType::get`.
+- **Tests**: `test_vector_type.odin`, `test_vector_swizzle.odin`, `test_vector_swizzle_values.odin`, `test_vector_subscript.odin`. Expected failures: `test_vector_swizzle_mixed.odin`, `test_vector_swizzle_oob.odin`.
+- **All 149 tests pass** (no regressions).
+
 ## Accomplishments (session 2026-07-13)
 
 ### Implemented `distinct` type creation with type isolation
