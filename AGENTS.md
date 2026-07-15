@@ -11,6 +11,18 @@
 - **Tests**: `test_vector_type.odin`, `test_vector_swizzle.odin`, `test_vector_swizzle_values.odin`, `test_vector_subscript.odin`. Expected failures: `test_vector_swizzle_mixed.odin`, `test_vector_swizzle_oob.odin`.
 - **All 149 tests pass** (no regressions).
 
+### Implemented `expand_values` and `compress_values` built-in procedures
+- **Grammar**: Added `KwExpandValues`/`KwCompressValues` lexemes, `ExpandValuesExpr`/`CompressValuesExpr` rules, added to `UnaryExpression`/`AllReservedWords`.
+- **AST**: Added `AST_NODE_EXPAND_VALUES_EXPR`/`AST_NODE_COMPRESS_VALUES_EXPR` enum entries, actions, node names.
+- **Semantic analyser**: `EXPAND_VALUES_EXPR` validates operand is struct/array, sets `resolved_type` to aggregate type. `COMPRESS_VALUES_EXPR` resolves target type, validates field/value count match, evaluates value children.
+- **IR generator — `expand_values` in call context**: `ir_gen_collect_single_arg()` helper detects `EXPAND_VALUES_EXPR` after unwrapping expression chain (single-child wrappers only), loads aggregate, extracts fields via `ExtractValue`. Used by `ir_gen_collect_call_args` for the rightmost operand and single-expression fallback.
+- **IR generator — standalone `expand_values`**: Returns the aggregate value itself (struct/array value).
+- **IR generator — `compress_values`**: Creates `LLVMGetUndef` of target type, inserts each coerced value via `InsertValue`.
+- **Bug fix**: `ir_gen_variable_decl` (line 1388) — added `var_type->kind == TD_KIND_BASIC` guard before accessing `as.basic.name` union member; was reading garbage on non-basic types.
+- **Tests**: `test_expand_values.odin`, `test_compress_values.odin`. Both pass (struct + array variants).
+- **Pre-existing bug discovered**: Bounds-check block insertion (via `ir_gen_emit_bounds_check`) splits basic blocks without updating downstream PHI nodes. Manifests when a bounds-checked subscript appears inside a short-circuit `||`/`&&` chain — PHI references the wrong predecessor block, causing LLVM FastISel crash. Workaround: use separate `if` statements instead of `||` chains.
+- **All 151 tests pass** (+2 new, 0 regressions).
+
 ## Accomplishments (session 2026-07-13)
 
 ### Implemented `distinct` type creation with type isolation

@@ -30,8 +30,7 @@ Features present in the official Odin language that our compiler does not yet su
 ### Vector swizzle lvalue / element write via member access
 `v.x = val` and `v.xy = val` for `#simd [N]T` vectors are not supported. Single-component needs load → `InsertElement` → store (like subscript lvalue already does). Multi-component (`v.xy = val`) needs `ShuffleVector` to merge updated lanes from source into the loaded vector before store. Both are blocked on detecting that a POSTFIX_MEMBER on a vector type appears in lvalue context.
 
-### `expand_values` / `compress_values`
-Struct/array field expansion for variadic functions. Complex IR generation.
+### `expand_values` / `compress_values` ✅ IMPLEMENTED
 
 ### `soa_zip` / `soa_unzip`
 SOA struct field manipulation. Requires multi-field extract/insert at the IR level.
@@ -89,6 +88,7 @@ The following features were previously listed as unsupported but are now impleme
 - Bitwise OR constant folding (`os.O_WRONLY | os.O_CREAT | os.O_TRUNC`) — compile-time evaluation of named constants in `when` conditions and constant declarations
 - `#caller_location` — returns `Source_Location` struct (`file`, `line`, `column`) with the source location of the expression
 - **Bounds checking on array/slice/string subscripts**: `llvm.trap()` emitted for out-of-bounds access. Index compared against length (compile-time for arrays, loaded `.len` field for slices/strings). `#no_bounds_check` directive suppresses the checks.
+- **Known bug**: Bounds-check block insertion (`ir_gen_emit_bounds_check`) splits basic blocks without updating downstream PHI nodes. When a bounds-checked subscript appears inside a `||`/`&&` short-circuit chain, the merge-block PHI references the original predecessor block (now mid-chain) instead of the continuation block (the actual new predecessor). This causes an LLVM FastISel crash during code generation. Workaround: use separate `if` statements instead of `||` chains when accessing array/slice/string elements.
 - `#no_bounds_check` — Functions as intended: disables bounds checking for subsequent code in the same scope.
 - `#partial switch` — Functions as intended: suppresses exhaustiveness checking for enum-typed switches.
 - **Exhaustiveness checking for enum switches**: Switch statements on enum types are checked for completeness. Missing enumerator cases produce a `switch is not exhaustive: missing case for enum value '<name>'` error. The `#partial` directive (placed after `switch` keyword, e.g. `switch #partial c`) suppresses the check. A `default` case also suppresses the check. Enumerators are stored in the `TD_KIND_ENUM` type descriptor (`enumerator_names`, `enumerator_values`, `enumerator_count` fields) by the semantic analyser during `AST_NODE_ENUM_TYPE` processing.

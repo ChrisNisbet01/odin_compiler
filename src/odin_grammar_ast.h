@@ -163,6 +163,8 @@ typedef enum
     AST_NODE_ATTR_ITEM,
     AST_NODE_PROC_OVERLOAD_BUNDLE,
     AST_NODE_VECTOR_TYPE,
+    AST_NODE_EXPAND_VALUES_EXPR,
+    AST_NODE_COMPRESS_VALUES_EXPR,
 } odin_grammar_node_type_t;
 
 typedef struct

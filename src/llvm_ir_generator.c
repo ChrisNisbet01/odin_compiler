@@ -1385,7 +1385,7 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                     LLVMBuildStore(ctx->builder, init_val, payload_gep);
                 }
             }
-            else if (var_type && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
+            else if (var_type && var_type->kind == TD_KIND_BASIC && var_type->as.basic.name && strcmp(var_type->as.basic.name, "any") == 0)
             {
                 // If the initializer is already an any struct, store directly
                 if (init_node->resolved_type == var_type)
@@ -4555,6 +4555,107 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
 // --- Postfix expression / call codegen ---
 
+// Evaluate a single argument expression, possibly expanding struct/array fields
+// for expand_values(). Returns the number of arguments produced.
+static int
+ir_gen_collect_single_arg(IrGenContext * ctx, odin_grammar_node_t * node, LLVMValueRef * args, TypeDescriptor const ** arg_types, int max_args)
+{
+    if (node == NULL || max_args <= 0)
+        return 0;
+
+    // Unwrap single-child expression wrappers to find the actual expression.
+    // The chainl1 combinator with one element produces a wrapper for each
+    // expression level (ASSIGN_EXPRESSION -> LOG_OR -> LOG_AND -> ...).
+    // Multi-child wrappers (ADD_EXPRESSION with `-`, etc.) are NOT unwrapped.
+    while (node != NULL && node->list.count == 1)
+    {
+        switch (node->type)
+        {
+        case AST_NODE_PRIMARY_EXPRESSION:
+        case AST_NODE_POSTFIX_EXPRESSION:
+        case AST_NODE_UNARY_EXPRESSION:
+        case AST_NODE_MUL_EXPRESSION:
+        case AST_NODE_ADD_EXPRESSION:
+        case AST_NODE_SHIFT_EXPRESSION:
+        case AST_NODE_BIT_AND_EXPRESSION:
+        case AST_NODE_BIT_XOR_EXPRESSION:
+        case AST_NODE_BIT_OR_EXPRESSION:
+        case AST_NODE_COMP_EXPRESSION:
+        case AST_NODE_LOG_AND_EXPRESSION:
+        case AST_NODE_LOG_OR_EXPRESSION:
+        case AST_NODE_RANGE_EXPRESSION:
+        case AST_NODE_TERNARY_EXPRESSION:
+        case AST_NODE_OR_ELSE:
+        case AST_NODE_OR_RETURN:
+        case AST_NODE_ASSIGN_EXPRESSION:
+        case AST_NODE_EXPRESSION:
+            node = node->list.children[0];
+            continue;
+        default:
+            break;
+        }
+        break;
+    }
+    if (node == NULL || max_args <= 0)
+        return 0;
+
+    // ExpandValuesExpr: expand struct/array fields as individual arguments
+    if (node->type == AST_NODE_EXPAND_VALUES_EXPR && node->list.count >= 1 && node->list.children[0] != NULL)
+    {
+        odin_grammar_node_t * inner = node->list.children[0];
+        LLVMValueRef agg_val = ir_gen_node(ctx, inner);
+        if (agg_val == NULL)
+            return 0;
+
+        TypeDescriptor const * agg_type = inner->resolved_type;
+        if (agg_type == NULL)
+            return 0;
+
+        // Load if pointer
+        if (LLVMGetTypeKind(LLVMTypeOf(agg_val)) == LLVMPointerTypeKind && agg_type->llvm_type != NULL)
+        {
+            agg_val = LLVMBuildLoad2(ctx->builder, agg_type->llvm_type, agg_val, "expand.load");
+        }
+
+        if (agg_type->kind == TD_KIND_STRUCT)
+        {
+            int field_count = agg_type->struct_metadata.members.count;
+            int count = 0;
+            for (int fi = 0; fi < field_count && count < max_args; fi++)
+            {
+                args[count] = LLVMBuildExtractValue(ctx->builder, agg_val, (unsigned)fi, "expand.field");
+                if (arg_types)
+                {
+                    struct_field_t const * f = type_descriptor_get_struct_field(agg_type, fi);
+                    arg_types[count] = f ? f->type_desc : NULL;
+                }
+                count++;
+            }
+            return count;
+        }
+        else if (agg_type->kind == TD_KIND_ARRAY)
+        {
+            int elem_count = (int)agg_type->as.array.count;
+            int count = 0;
+            for (int ei = 0; ei < elem_count && count < max_args; ei++)
+            {
+                args[count] = LLVMBuildExtractValue(ctx->builder, agg_val, (unsigned)ei, "expand.elem");
+                if (arg_types)
+                    arg_types[count] = agg_type->element_type;
+                count++;
+            }
+            return count;
+        }
+        return 0;
+    }
+
+    // Normal single expression
+    args[0] = ir_gen_node(ctx, node);
+    if (arg_types)
+        arg_types[0] = node->resolved_type;
+    return args[0] ? 1 : 0;
+}
+
 // Walk a comma-chained Expression tree to collect individual argument values.
 // Comma is a terminal (lexeme) so it produces no AST node.
 // chainl1(AssignExpression, Comma) produces a left-associative tree:
@@ -4574,19 +4675,13 @@ ir_gen_collect_call_args(IrGenContext * ctx, odin_grammar_node_t * node, LLVMVal
         int count = ir_gen_collect_call_args(ctx, node->list.children[0], args, arg_types, max_args);
         if (count < max_args && last != NULL)
         {
-            args[count] = ir_gen_node(ctx, last);
-            if (arg_types)
-                arg_types[count] = last->resolved_type;
-            count++;
+            count += ir_gen_collect_single_arg(ctx, last, args + count, arg_types ? arg_types + count : NULL, max_args - count);
         }
         return count;
     }
 
     // Single expression — evaluate directly
-    args[0] = ir_gen_node(ctx, node);
-    if (arg_types)
-        arg_types[0] = node->resolved_type;
-    return args[0] ? 1 : 0;
+    return ir_gen_collect_single_arg(ctx, node, args, arg_types, max_args);
 }
 
 static LLVMValueRef
@@ -6595,6 +6690,53 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
             if (val == NULL)
                 return NULL;
             result = LLVMBuildInsertValue(ctx->builder, result, val, (unsigned)i, "complex.field");
+        }
+        return result;
+    }
+
+    case AST_NODE_EXPAND_VALUES_EXPR:
+    {
+        // expand_values(x) returns the aggregate value itself.
+        // The actual field/array expansion happens in ir_gen_collect_call_args.
+        if (node->list.count < 1)
+            return NULL;
+        return ir_gen_node(ctx, node->list.children[0]);
+    }
+
+    case AST_NODE_COMPRESS_VALUES_EXPR:
+    {
+        // compress_values(T, val1, val2, ...) -> T
+        // children[0] = type node, children[1..N] = values
+        if (node->list.count < 2 || node->resolved_type == NULL)
+            return NULL;
+        TypeDescriptor const * target_type = node->resolved_type;
+        LLVMTypeRef llvm_type = target_type->llvm_type;
+        LLVMValueRef result = LLVMGetUndef(llvm_type);
+        for (size_t i = 1; i < node->list.count; i++)
+        {
+            LLVMValueRef val = ir_gen_node(ctx, node->list.children[i]);
+            if (val == NULL)
+                return NULL;
+            unsigned field_idx = (unsigned)(i - 1);
+            // Coerce value to target field type
+            if (target_type->kind == TD_KIND_STRUCT)
+            {
+                struct_field_t const * field = type_descriptor_get_struct_field(target_type, (int)field_idx);
+                if (field && field->type_desc && field->type_desc->llvm_type
+                    && LLVMTypeOf(val) != field->type_desc->llvm_type)
+                {
+                    val = coerce_value_to_type(ctx, val, field->type_desc,
+                        false, "compress.field");
+                }
+            }
+            else if (target_type->kind == TD_KIND_ARRAY && target_type->element_type
+                     && target_type->element_type->llvm_type
+                     && LLVMTypeOf(val) != target_type->element_type->llvm_type)
+            {
+                val = coerce_value_to_type(ctx, val, target_type->element_type,
+                    false, "compress.elem");
+            }
+            result = LLVMBuildInsertValue(ctx->builder, result, val, field_idx, "compress.field");
         }
         return result;
     }

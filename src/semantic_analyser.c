@@ -1800,6 +1800,76 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
+    case AST_NODE_EXPAND_VALUES_EXPR:
+    {
+        if (node->list.count < 1)
+            return NULL;
+        TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
+        if (inner_type == NULL)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        if (inner_type->kind != TD_KIND_STRUCT && inner_type->kind != TD_KIND_ARRAY)
+        {
+            sem_error_list_add(&ctx->errors, NULL, node,
+                "expand_values: argument must be a struct or array type");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        // The resolved type is the aggregate type itself (fields will be expanded at the call site)
+        node->resolved_type = (TypeDescriptor *)inner_type;
+        return inner_type;
+    }
+
+    case AST_NODE_COMPRESS_VALUES_EXPR:
+    {
+        if (node->list.count < 2)
+        {
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        odin_grammar_node_t * type_node = node->list.children[0];
+        TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, type_node);
+        if (target_type == NULL)
+        {
+            sem_error_list_add(&ctx->errors, NULL, node,
+                "compress_values: first argument must be a type");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        if (target_type->kind != TD_KIND_STRUCT && target_type->kind != TD_KIND_ARRAY)
+        {
+            sem_error_list_add(&ctx->errors, NULL, node,
+                "compress_values: target type must be a struct or array");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        int expected_count = 0;
+        if (target_type->kind == TD_KIND_STRUCT)
+            expected_count = target_type->struct_metadata.members.count;
+        else
+            expected_count = (int)target_type->as.array.count;
+        int actual_count = (int)node->list.count - 1; // skip type node
+        if (actual_count != expected_count)
+        {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                "compress_values: expected %d values but got %d",
+                expected_count, actual_count);
+            sem_error_list_add(&ctx->errors, NULL, node, buf);
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        // Evaluate each value expression
+        for (int i = 1; i < (int)node->list.count; i++)
+        {
+            sem_evaluate_expr(ctx, node->list.children[i]);
+        }
+        node->resolved_type = (TypeDescriptor *)target_type;
+        return target_type;
+    }
+
     case AST_NODE_INCL_EXPR:
     case AST_NODE_EXCL_EXPR:
     {

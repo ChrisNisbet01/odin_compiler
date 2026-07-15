@@ -315,6 +315,10 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "ProcOverloadBundle";
     case AST_NODE_VECTOR_TYPE:
         return "VectorType";
+    case AST_NODE_EXPAND_VALUES_EXPR:
+        return "ExpandValuesExpr";
+    case AST_NODE_COMPRESS_VALUES_EXPR:
+        return "CompressValuesExpr";
     }
     return "Unknown";
 }

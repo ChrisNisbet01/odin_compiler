@@ -429,6 +429,8 @@ DEFINE_ACTION(ast_action_quaternion_expr_action, AST_NODE_QUATERNION_EXPR)
 DEFINE_ACTION(ast_action_multi_pointer_type_action, AST_NODE_MULTI_POINTER_TYPE)
 DEFINE_ACTION(ast_action_maybe_type_action, AST_NODE_MAYBE_TYPE)
 DEFINE_ACTION(ast_action_proc_overload_bundle_action, AST_NODE_PROC_OVERLOAD_BUNDLE)
+DEFINE_ACTION(ast_action_expand_values_expr_action, AST_NODE_EXPAND_VALUES_EXPR)
+DEFINE_ACTION(ast_action_compress_values_expr_action, AST_NODE_COMPRESS_VALUES_EXPR)
 // --- Terminal nodes (text captured for semantic use) ---
 DEFINE_TERMINAL_ACTION(ast_action_identifier_action, AST_NODE_IDENTIFIER)
 DEFINE_TERMINAL_ACTION(ast_action_poly_ident_action, AST_NODE_POLY_IDENT)
@@ -565,6 +567,8 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_USING_DECL, ast_action_using_decl_action);
     REGISTER(AST_ACTION_DIRECTIVE, ast_action_directive_action);
     REGISTER(AST_ACTION_DIRECTIVE_WITH_ARGS, ast_action_directive_with_args_action);
+    REGISTER(AST_ACTION_EXPAND_VALUES_EXPR, ast_action_expand_values_expr_action);
+    REGISTER(AST_ACTION_COMPRESS_VALUES_EXPR, ast_action_compress_values_expr_action);
     REGISTER(AST_ACTION_INTEGER_BASE, ast_action_integer_base_action);
     REGISTER(AST_ACTION_INTEGER_VALUE, ast_action_integer_value_action);
     REGISTER(AST_ACTION_FLOAT_BASE, ast_action_float_base_action);
