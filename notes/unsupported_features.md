@@ -27,6 +27,9 @@ Features present in the official Odin language that our compiler does not yet su
 
 ## Very High Complexity
 
+### Vector swizzle lvalue / element write via member access
+`v.x = val` and `v.xy = val` for `#simd [N]T` vectors are not supported. Single-component needs load → `InsertElement` → store (like subscript lvalue already does). Multi-component (`v.xy = val`) needs `ShuffleVector` to merge updated lanes from source into the loaded vector before store. Both are blocked on detecting that a POSTFIX_MEMBER on a vector type appears in lvalue context.
+
 ### `expand_values` / `compress_values`
 Struct/array field expansion for variadic functions. Complex IR generation.
 
