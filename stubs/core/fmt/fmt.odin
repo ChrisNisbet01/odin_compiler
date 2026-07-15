@@ -211,6 +211,9 @@ print_value :: proc(fd: int, v: any) {
     } else if type_of(v) == type_of(i8) {
         s := int_to_string(v.(i8))
         print_string(fd, s)
+    } else if type_of(v) == type_of(i16) {
+        s := int_to_string(v.(i16))
+        print_string(fd, s)
     } else if type_of(v) == type_of(i32) {
         s := int_to_string(v.(i32))
         print_string(fd, s)
@@ -231,6 +234,12 @@ print_value :: proc(fd: int, v: any) {
         print_string(fd, s)
     } else if type_of(v) == type_of(u64) {
         s := int_to_string(v.(u64))
+        print_string(fd, s)
+    } else if type_of(v) == type_of(uintptr) {
+        s := int_to_string(v.(uintptr))
+        print_string(fd, s)
+    } else if type_of(v) == type_of(rune) {
+        s := int_to_string(v.(rune))
         print_string(fd, s)
     } else if type_of(v) == type_of(byte) {
         b := v.(byte)

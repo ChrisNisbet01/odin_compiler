@@ -40,7 +40,7 @@ Generic procedures with polymorphic type/value parameters. Requires major type s
 
 ## Bugs
 
-(none currently known)
+- **Pointer/integer comparison silently accepted**: The semantic analyser accepts `^int != int` (pointer compared directly with an integer literal) without error. The IR generator compiles this to `icmp ne ptr, inttoptr(i64 X to ptr)` — comparing a stack address as if it were an integer value. The official Odin language rejects this as a type mismatch. Discovered while writing `test_bounds_check_short_circuit.odin` — the test works around it by using `n4^ != 7` (explicit dereference to compare the pointed-to integer). Location: semantic-analyser-side comparison checks (`sem_types_assignable`/`sem_check_assignment` and the binary-expression comparison path).
 
 ## Earlier Completions
 

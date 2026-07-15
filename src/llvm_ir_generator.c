@@ -5041,6 +5041,57 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
             }
 
+            // Phase 5: Coerce integer/float argument values to the declared
+            // parameter types. Without this, passing a u16 to a function
+            // expecting i64 emits a 'call (ptr, i16)' against a '(ptr, i64)'
+            // signature — LLVM silently accepts it, but the callee reads
+            // garbage from the upper bits of the register.
+            {
+                int param_count = proc_type->proc_metadata.param_count;
+                // Skip the implicit context parameter (added above) for ODIN calling convention
+                int context_offset = (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN) ? 1 : 0;
+                // For ..any variadic, the variadic args have been packed into a single
+                // []any slice that occupies the last "parameter" slot; do not coerce it.
+                int effective_param_count = param_count;
+                if (is_any_variadic)
+                    effective_param_count = param_count; // params[] already includes the ..any slice
+
+                for (int pi = 0; pi < effective_param_count && pi + context_offset < arg_count; pi++)
+                {
+                    TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
+                    if (param_type == NULL || param_type->kind != TD_KIND_BASIC || param_type->llvm_type == NULL)
+                        continue;
+
+                    int arg_idx = pi + context_offset;
+                    LLVMValueRef arg_val = args[arg_idx];
+                    if (arg_val == NULL)
+                        continue;
+
+                    LLVMTypeRef arg_llvm_type = LLVMTypeOf(arg_val);
+                    if (arg_llvm_type == param_type->llvm_type)
+                        continue;
+
+                    // Only coerce integers and floats (basic numeric types)
+                    LLVMTypeKind arg_kind = LLVMGetTypeKind(arg_llvm_type);
+                    LLVMTypeKind param_kind = LLVMGetTypeKind(param_type->llvm_type);
+                    bool arg_is_int = (arg_kind == LLVMIntegerTypeKind);
+                    bool param_is_int = (param_kind == LLVMIntegerTypeKind);
+                    bool arg_is_float = (arg_kind == LLVMHalfTypeKind || arg_kind == LLVMFloatTypeKind || arg_kind == LLVMDoubleTypeKind);
+                    bool param_is_float = (param_kind == LLVMHalfTypeKind || param_kind == LLVMFloatTypeKind || param_kind == LLVMDoubleTypeKind);
+                    if (!((arg_is_int && param_is_int) || (arg_is_float && param_is_float)))
+                        continue;
+
+                    // Determine if the source arg is unsigned (look up the source arg type)
+                    bool src_is_unsigned = false;
+                    if (arg_types && arg_types[pi] && arg_types[pi]->kind == TD_KIND_BASIC)
+                        src_is_unsigned = arg_types[pi]->as.basic.is_unsigned;
+
+                    args[arg_idx] = coerce_value_to_type(
+                        ctx, arg_val, param_type->llvm_type, src_is_unsigned, "arg.coerce"
+                    );
+                }
+            }
+
             val = LLVMBuildCall2(
                 ctx->builder,
                 func_type,

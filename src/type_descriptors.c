@@ -147,7 +147,7 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         bool is_float;
         bool is_unsigned;
     } basic_specs[] = {
-        {"int", 64, false, true},
+        {"int", 64, false, false},
         {"i8", 8, false, false},
         {"i16", 16, false, false},
         {"i32", 32, false, false},
