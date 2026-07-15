@@ -27,6 +27,9 @@ Features present in the official Odin language that our compiler does not yet su
 
 ## Very High Complexity
 
+### Vector lvalue subscript / element assignment
+`v[0] = val` and `v.x = val` for `#simd [N]T` vectors are not supported yet. Requires read-modify-write pattern: load vector, `insertelement`, store vector. Currently reports "vector element assignment not supported" error. Only rvalue reads (`a := v[0]`, `a := v.x`) work.
+
 ### `expand_values` / `compress_values`
 Struct/array field expansion for variadic functions. Complex IR generation.
 
