@@ -2755,71 +2755,198 @@ ir_gen_vector_elem_assign(
         return false;
 
     odin_grammar_node_t * subscript_op = NULL;
+    odin_grammar_node_t * member_op = NULL;
     for (size_t i = 0; i < postfix_ops->list.count; i++)
     {
         odin_grammar_node_t * op = postfix_ops->list.children[i];
-        if (op && op->type == AST_NODE_POSTFIX_SUBSCRIPT)
+        if (op)
         {
-            subscript_op = op;
-            break;
+            if (op->type == AST_NODE_POSTFIX_SUBSCRIPT)
+                subscript_op = op;
+            else if (op->type == AST_NODE_POSTFIX_MEMBER)
+                member_op = op;
         }
     }
-    if (subscript_op == NULL)
-        return false;
 
-    odin_grammar_node_t * index_expr = NULL;
-    for (size_t ci = 0; ci < subscript_op->list.count; ci++)
+    if (subscript_op)
     {
-        if (subscript_op->list.children[ci] != NULL)
+        odin_grammar_node_t * index_expr = NULL;
+        for (size_t ci = 0; ci < subscript_op->list.count; ci++)
         {
-            index_expr = subscript_op->list.children[ci];
-            break;
+            if (subscript_op->list.children[ci] != NULL)
+            {
+                index_expr = subscript_op->list.children[ci];
+                break;
+            }
         }
-    }
-    if (index_expr == NULL)
-        return false;
-
-    LLVMValueRef vec_ptr = ir_gen_lvalue(ctx, base);
-    if (vec_ptr == NULL)
-    {
-        odin_grammar_node_t * ident = expression_unwrap_to_identifier(base);
-        if (ident == NULL)
+        if (index_expr == NULL)
             return false;
-        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
-        if (sym == NULL || !sym->value.is_lvalue)
+
+        LLVMValueRef vec_ptr = ir_gen_lvalue(ctx, base);
+        if (vec_ptr == NULL)
+        {
+            odin_grammar_node_t * ident = expression_unwrap_to_identifier(base);
+            if (ident == NULL)
+                return false;
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
+            if (sym == NULL || !sym->value.is_lvalue)
+                return false;
+            vec_ptr = sym->value.value;
+        }
+        if (vec_ptr == NULL)
             return false;
-        vec_ptr = sym->value.value;
-    }
-    if (vec_ptr == NULL)
-        return false;
 
-    LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
-    if (index_val == NULL)
-        return true;
-
-    LLVMValueRef vec_val = LLVMBuildLoad2(ctx->builder, base_type->llvm_type, vec_ptr, "vec.load");
-    LLVMTypeRef elem_type = base_type->element_type ? base_type->element_type->llvm_type : NULL;
-
-    LLVMValueRef store_val = rhs_val;
-    if (elem_type)
-        store_val = coerce_value_to_type(ctx, rhs_val, elem_type, false, "vec.ins");
-
-    if (op_kind != OP_ASSIGN)
-    {
-        OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
-        if (bin_op == OP_INVALID)
+        LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
+        if (index_val == NULL)
             return true;
-        LLVMValueRef elem_val = LLVMBuildExtractElement(ctx->builder, vec_val, index_val, "vec.elem");
-        LLVMValueRef result = ir_gen_binary_op_by_kind(ctx, elem_val, store_val, bin_op);
-        vec_val = LLVMBuildInsertElement(ctx->builder, vec_val, result, index_val, "vec.ins");
+
+        LLVMValueRef vec_val = LLVMBuildLoad2(ctx->builder, base_type->llvm_type, vec_ptr, "vec.load");
+        LLVMTypeRef elem_type = base_type->element_type ? base_type->element_type->llvm_type : NULL;
+
+        LLVMValueRef store_val = rhs_val;
+        if (elem_type)
+            store_val = coerce_value_to_type(ctx, rhs_val, elem_type, false, "vec.ins");
+
+        if (op_kind != OP_ASSIGN)
+        {
+            OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
+            if (bin_op == OP_INVALID)
+                return true;
+            LLVMValueRef elem_val = LLVMBuildExtractElement(ctx->builder, vec_val, index_val, "vec.elem");
+            LLVMValueRef result = ir_gen_binary_op_by_kind(ctx, elem_val, store_val, bin_op);
+            vec_val = LLVMBuildInsertElement(ctx->builder, vec_val, result, index_val, "vec.ins");
+        }
+        else
+        {
+            vec_val = LLVMBuildInsertElement(ctx->builder, vec_val, store_val, index_val, "vec.ins");
+        }
+
+        LLVMBuildStore(ctx->builder, vec_val, vec_ptr);
+        return true;
     }
-    else
+    else if (member_op)
     {
-        vec_val = LLVMBuildInsertElement(ctx->builder, vec_val, store_val, index_val, "vec.ins");
+        // Swizzle lvalue: v.xy = val
+        odin_grammar_node_t * field_name_node = NULL;
+        for (size_t ci = 0; ci < member_op->list.count; ci++)
+        {
+            if (member_op->list.children[ci] && member_op->list.children[ci]->type == AST_NODE_IDENTIFIER)
+            {
+                field_name_node = member_op->list.children[ci];
+                break;
+            }
+        }
+        if (field_name_node == NULL || field_name_node->text == NULL)
+            return false;
+
+        char const * swiz = field_name_node->text;
+        int swiz_len = (int)strlen(swiz);
+        if (swiz_len == 0 || swiz_len > 4)
+            return false;
+
+        int swiz_indices[4];
+        for (int si = 0; si < swiz_len; si++)
+        {
+            char c = swiz[si];
+            if (c == 'x' || c == 'r') swiz_indices[si] = 0;
+            else if (c == 'y' || c == 'g') swiz_indices[si] = 1;
+            else if (c == 'z' || c == 'b') swiz_indices[si] = 2;
+            else swiz_indices[si] = 3;
+        }
+
+        LLVMValueRef vec_ptr = ir_gen_lvalue(ctx, base);
+        if (vec_ptr == NULL)
+        {
+            odin_grammar_node_t * ident = expression_unwrap_to_identifier(base);
+            if (ident == NULL)
+                return false;
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
+            if (sym == NULL || !sym->value.is_lvalue)
+                return false;
+            vec_ptr = sym->value.value;
+        }
+        if (vec_ptr == NULL)
+            return false;
+
+        LLVMValueRef vec_val = LLVMBuildLoad2(ctx->builder, base_type->llvm_type, vec_ptr, "vec.load");
+        LLVMTypeRef elem_type = base_type->element_type ? base_type->element_type->llvm_type : NULL;
+        int lane_count = base_type->as.vector.lane_count;
+
+        if (swiz_len == 1)
+        {
+            // Single-component: v.x = val
+            LLVMValueRef index_val = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), swiz_indices[0], false);
+            LLVMValueRef store_val = rhs_val;
+            if (elem_type)
+                store_val = coerce_value_to_type(ctx, rhs_val, elem_type, false, "vec.ins");
+
+            if (op_kind != OP_ASSIGN)
+            {
+                OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
+                if (bin_op == OP_INVALID)
+                    return true;
+                LLVMValueRef elem_val = LLVMBuildExtractElement(ctx->builder, vec_val, index_val, "vec.elem");
+                LLVMValueRef result = ir_gen_binary_op_by_kind(ctx, elem_val, store_val, bin_op);
+                vec_val = LLVMBuildInsertElement(ctx->builder, vec_val, result, index_val, "vec.ins");
+            }
+            else
+            {
+                vec_val = LLVMBuildInsertElement(ctx->builder, vec_val, store_val, index_val, "vec.ins");
+            }
+
+            LLVMBuildStore(ctx->builder, vec_val, vec_ptr);
+        }
+        else
+        {
+            // Multi-component: v.xy = val
+            // Use InsertElement for each lane to avoid ShuffleVector
+            // mismatched-length operand restrictions
+            LLVMValueRef rhs_vec = rhs_val;
+            if (LLVMGetTypeKind(LLVMTypeOf(rhs_vec)) == LLVMPointerTypeKind)
+            {
+                TypeDescriptor const * swiz_type = member_op->resolved_type;
+                if (swiz_type && swiz_type->llvm_type)
+                    rhs_vec = LLVMBuildLoad2(ctx->builder, swiz_type->llvm_type, rhs_vec, "rhs.vec.load");
+            }
+
+            LLVMValueRef result_vec = vec_val;
+            if (op_kind != OP_ASSIGN)
+            {
+                OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
+                if (bin_op == OP_INVALID)
+                    return true;
+
+                for (int si = 0; si < swiz_len; si++)
+                {
+                    int dst_lane = swiz_indices[si];
+                    LLVMValueRef dst_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), dst_lane, false);
+                    LLVMValueRef src_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), si, false);
+                    LLVMValueRef elem_val = LLVMBuildExtractElement(ctx->builder, result_vec, dst_idx, "vec.elem");
+                    LLVMValueRef rhs_elem = LLVMBuildExtractElement(ctx->builder, rhs_vec, src_idx, "rhs.elem");
+                    LLVMValueRef res_val = ir_gen_binary_op_by_kind(ctx, elem_val, rhs_elem, bin_op);
+                    result_vec = LLVMBuildInsertElement(ctx->builder, result_vec, res_val, dst_idx, "vec.ins");
+                }
+            }
+            else
+            {
+                for (int si = 0; si < swiz_len; si++)
+                {
+                    int dst_lane = swiz_indices[si];
+                    LLVMValueRef dst_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), dst_lane, false);
+                    LLVMValueRef src_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), si, false);
+                    LLVMValueRef elem_val = LLVMBuildExtractElement(ctx->builder, rhs_vec, src_idx, "rhs.elem");
+                    if (elem_type)
+                        elem_val = coerce_value_to_type(ctx, elem_val, elem_type, false, "vec.ins");
+                    result_vec = LLVMBuildInsertElement(ctx->builder, result_vec, elem_val, dst_idx, "vec.ins");
+                }
+            }
+
+            LLVMBuildStore(ctx->builder, result_vec, vec_ptr);
+        }
+        return true;
     }
 
-    LLVMBuildStore(ctx->builder, vec_val, vec_ptr);
-    return true;
+    return false;
 }
 
 static LLVMValueRef
