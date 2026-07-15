@@ -666,6 +666,12 @@ ir_gen_logical_short_circuit(IrGenContext * ctx, odin_grammar_node_t * node, Ope
     }
     LLVMBuildBr(ctx->builder, merge_bb);
 
+    // Re-capture the builder's current block: RHS evaluation may have split
+    // rhs_bb into multiple blocks (e.g. via ir_gen_emit_bounds_check), so the
+    // actual predecessor of merge_bb is now wherever the builder ended up,
+    // not the original rhs_bb.
+    LLVMBasicBlockRef rhs_end_bb = LLVMGetInsertBlock(ctx->builder);
+
     LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
     LLVMTypeRef bool_ty = LLVMInt1TypeInContext(ctx->context);
     LLVMValueRef phi = LLVMBuildPhi(ctx->builder, bool_ty, "log_phi");
@@ -673,13 +679,13 @@ ir_gen_logical_short_circuit(IrGenContext * ctx, odin_grammar_node_t * node, Ope
     if (op_kind == OP_LOG_AND)
     {
         LLVMValueRef incoming_vals[] = {LLVMConstInt(bool_ty, 0, false), rhs_bool};
-        LLVMBasicBlockRef incoming_blocks[] = {entry_bb, rhs_bb};
+        LLVMBasicBlockRef incoming_blocks[] = {entry_bb, rhs_end_bb};
         LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
     }
     else
     {
         LLVMValueRef incoming_vals[] = {LLVMConstInt(bool_ty, 1, false), rhs_bool};
-        LLVMBasicBlockRef incoming_blocks[] = {entry_bb, rhs_bb};
+        LLVMBasicBlockRef incoming_blocks[] = {entry_bb, rhs_end_bb};
         LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
     }
 
@@ -2366,11 +2372,14 @@ ir_gen_or_else_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             rhs = LLVMConstNull(inner_llvm);
         LLVMBuildBr(ctx->builder, merge_bb);
 
+        // Re-capture RHS end block (RHS may have split rhs_bb via bounds checks)
+        LLVMBasicBlockRef rhs_end_bb = LLVMGetInsertBlock(ctx->builder);
+
         // Merge with phi
         LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
         LLVMValueRef phi = LLVMBuildPhi(ctx->builder, inner_llvm, "or.phi");
         LLVMValueRef phi_vals[2] = {payload, rhs};
-        LLVMBasicBlockRef phi_blocks[2] = {entry_bb, rhs_bb};
+        LLVMBasicBlockRef phi_blocks[2] = {entry_bb, rhs_end_bb};
         LLVMAddIncoming(phi, phi_vals, phi_blocks, 2);
         return phi;
     }
@@ -2396,10 +2405,13 @@ ir_gen_or_else_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         rhs = LLVMConstNull(lhs_type);
     LLVMBuildBr(ctx->builder, merge_bb);
 
+    // Re-capture RHS end block (RHS may have split rhs_bb via bounds checks)
+    LLVMBasicBlockRef rhs_end_bb = LLVMGetInsertBlock(ctx->builder);
+
     LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
     LLVMValueRef phi = LLVMBuildPhi(ctx->builder, lhs_type, "or.phi");
     LLVMValueRef incoming_vals[] = {lhs, rhs};
-    LLVMBasicBlockRef incoming_blocks[] = {entry_bb, rhs_bb};
+    LLVMBasicBlockRef incoming_blocks[] = {entry_bb, rhs_end_bb};
     LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
 
     return phi;

@@ -20,8 +20,19 @@
 - **IR generator — `compress_values`**: Creates `LLVMGetUndef` of target type, inserts each coerced value via `InsertValue`.
 - **Bug fix**: `ir_gen_variable_decl` (line 1388) — added `var_type->kind == TD_KIND_BASIC` guard before accessing `as.basic.name` union member; was reading garbage on non-basic types.
 - **Tests**: `test_expand_values.odin`, `test_compress_values.odin`. Both pass (struct + array variants).
-- **Pre-existing bug discovered**: Bounds-check block insertion (via `ir_gen_emit_bounds_check`) splits basic blocks without updating downstream PHI nodes. Manifests when a bounds-checked subscript appears inside a short-circuit `||`/`&&` chain — PHI references the wrong predecessor block, causing LLVM FastISel crash. Workaround: use separate `if` statements instead of `||` chains.
 - **All 151 tests pass** (+2 new, 0 regressions).
+
+## Accomplishments (session 2026-07-16)
+
+### Implemented vector swizzle lvalue assignment
+- **Single-component** (`v.x = val`) and **multi-component** (`v.xy = val`, `v.xyzw = val`, non-contiguous like `v.xz`, partial like `v.yw`) swizzle lvalue assignment for `#simd` vectors. Extended `ir_gen_vector_elem_assign` to handle `POSTFIX_MEMBER` (swizzle) in addition to `POSTFIX_SUBSCRIPT` on vector types. Uses `ExtractElement`/`InsertElement` per-lane merge pattern instead of `ShuffleVector` to avoid LLVM's mismatched vector-length operand restriction. Compound assignment (`+=`, `-=`) works for both forms. RHS vector loaded from alloca pointer via `member_op->resolved_type->llvm_type` when needed (avoids opaque-pointer `LLVMGetElementType` NULL issue).
+- **Tests**: `test_vector_swizzle_lvalue.odin` (39 subtests). All 152 tests pass.
+
+### Fixed bounds-check PHI node predecessor bug
+- **Root cause**: Three PHI-construction sites in `ir_gen_logical_short_circuit` (`src/llvm_ir_generator.c:676,682`) and `ir_gen_or_else` (two variants, lines 2373 and 2402) captured the RHS-starting block *before* evaluating the RHS subtree. When the RHS contained a bounds-checked subscript (`arr[i]`, `s[i]`, `str[i]`), `ir_gen_emit_bounds_check` split that starting block by appending `bc.cont`/`bc.trap` blocks — the unconditional `Br(merge_bb)` actually originated from `bc.cont`, but the PHI still listed the stale pre-split `rhs_bb`, producing a CFG/PHI mismatch that LLVM's FastISel crashes on.
+- **Fix**: Re-capture `LLVMBasicBlockRef rhs_end_bb = LLVMGetInsertBlock(ctx->builder)` *after* RHS evaluation (mirroring the existing correct pattern in ternary at lines 2489/2497), and use `rhs_end_bb` as the PHI's incoming block instead of the stale `rhs_bb`. Small surgical change: 6 added lines plus 3 swapped variable references across 3 sites.
+- **Tests**: `test_bounds_check_short_circuit.odin` (31 subtests covering all three sites: logical `||`, logical `&&`, mixed `||`+`&&` chains, or_else integer variant, or_else Maybe variant, or_else pointer variant, ternary no-regression). Sanity-checked: without the fix, the test triggers the exact FastISel crash reported in the historical notes (`FastISel::handlePHINodesInSuccessorBlocks`, segfault). With the fix, all 32 subtests pass and all 153 tests in the suite pass.
+- **No regressions**: previously-passing tests unaffected — `test_logical_short_circuit.odin` and `test_bounds_check.odin` exercise these paths but always with non-subscript RHS, so they never split `rhs_bb` before this fix was applied.
 
 ## Accomplishments (session 2026-07-13)
 

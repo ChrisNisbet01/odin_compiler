@@ -38,7 +38,15 @@ SOA struct field manipulation. Requires multi-field extract/insert at the IR lev
 ### `$T` / `$N` — Compile-time polymorphic parameters (generics)
 Generic procedures with polymorphic type/value parameters. Requires major type system overhaul, monomorphization, and full compile-time evaluation. The largest missing feature.
 
+## Bugs
+
+(none currently known)
+
 ## Earlier Completions
+
+## Bugs Fixed
+
+- **Bounds-check PHI predecessor bug** (session 2026-07-16): `ir_gen_emit_bounds_check` splits basic blocks without updating downstream PHI nodes. When a bounds-checked subscript appeared inside a `||`/`&&` short-circuit chain, the merge-block PHI referenced the original predecessor block (now mid-chain) instead of the continuation block (the actual new predecessor). This caused an LLVM FastISel crash during code generation. **Fix**: three PHI-construction sites in `ir_gen_logical_short_circuit` and `ir_gen_or_else` (two variants) now re-capture `LLVMGetInsertBlock(ctx->builder)` AFTER RHS evaluation and use that as the PHI's incoming block (mirroring the existing correct pattern in the ternary handler). Test: `tests/test_bounds_check_short_circuit.odin` (32 subtests covering all three sites). No regressions.
 
 The following features were previously listed as unsupported but are now implemented:
 
@@ -88,7 +96,6 @@ The following features were previously listed as unsupported but are now impleme
 - Bitwise OR constant folding (`os.O_WRONLY | os.O_CREAT | os.O_TRUNC`) — compile-time evaluation of named constants in `when` conditions and constant declarations
 - `#caller_location` — returns `Source_Location` struct (`file`, `line`, `column`) with the source location of the expression
 - **Bounds checking on array/slice/string subscripts**: `llvm.trap()` emitted for out-of-bounds access. Index compared against length (compile-time for arrays, loaded `.len` field for slices/strings). `#no_bounds_check` directive suppresses the checks.
-- **Known bug**: Bounds-check block insertion (`ir_gen_emit_bounds_check`) splits basic blocks without updating downstream PHI nodes. When a bounds-checked subscript appears inside a `||`/`&&` short-circuit chain, the merge-block PHI references the original predecessor block (now mid-chain) instead of the continuation block (the actual new predecessor). This causes an LLVM FastISel crash during code generation. Workaround: use separate `if` statements instead of `||` chains when accessing array/slice/string elements.
 - `#no_bounds_check` — Functions as intended: disables bounds checking for subsequent code in the same scope.
 - `#partial switch` — Functions as intended: suppresses exhaustiveness checking for enum-typed switches.
 - **Exhaustiveness checking for enum switches**: Switch statements on enum types are checked for completeness. Missing enumerator cases produce a `switch is not exhaustive: missing case for enum value '<name>'` error. The `#partial` directive (placed after `switch` keyword, e.g. `switch #partial c`) suppresses the check. A `default` case also suppresses the check. Enumerators are stored in the `TD_KIND_ENUM` type descriptor (`enumerator_names`, `enumerator_values`, `enumerator_count` fields) by the semantic analyser during `AST_NODE_ENUM_TYPE` processing.
