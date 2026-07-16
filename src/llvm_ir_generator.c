@@ -23,6 +23,13 @@ static void ir_gen_emit_defers_at_depth(IrGenContext * ctx, int depth);
 static void ir_gen_emit_defers_from_depth(IrGenContext * ctx, int min_depth);
 static void ir_gen_emit_all_defers(IrGenContext * ctx);
 static bool ir_gen_node_contains_auto_cast(odin_grammar_node_t * node);
+static LLVMValueRef ir_gen_assign_store(
+    IrGenContext * ctx,
+    odin_grammar_node_t * lhs_node,
+    LLVMValueRef rhs_val,
+    OperatorKind op_kind,
+    odin_grammar_node_t * rhs_expr_node
+);
 static LLVMValueRef ir_gen_or_else_expression(IrGenContext * ctx, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_or_return_expression(IrGenContext * ctx, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_ternary_expression(IrGenContext * ctx, odin_grammar_node_t * node);
@@ -2894,7 +2901,7 @@ ir_gen_vector_elem_assign(
 }
 
 static LLVMValueRef
-ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
+ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     if (node->list.count < 3)
     {
@@ -2914,45 +2921,7 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     if (rhs_val == NULL)
         return NULL;
 
-    if (ir_gen_vector_elem_assign(ctx, node->list.children[0], rhs_val, op_kind, node->list.children[2]))
-        return rhs_val;
-
-    if (ir_gen_bit_field_write(ctx, node->list.children[0], rhs_val, op_kind))
-        return rhs_val;
-
-    if (ir_gen_bit_set_assign_expr(ctx, node->list.children[0], node->list.children[2], rhs_val, op_kind))
-        return rhs_val;
-
-    LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
-    if (lhs_ptr == NULL)
-        return rhs_val;
-
-    LLVMValueRef store_val = rhs_val;
-    TypeDescriptor const * lhs_type_desc = NULL;
-    odin_grammar_node_t * lhs_expr = node->list.children[0];
-    odin_grammar_node_t * t = expression_chain_unwrap(lhs_expr);
-    if (t)
-        lhs_type_desc = t->resolved_type;
-    if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
-        && strcmp(lhs_type_desc->as.basic.name, "any") == 0)
-    {
-        TypeDescriptor const * rhs_type
-            = (node->list.count > 2 && node->list.children[2]) ? node->list.children[2]->resolved_type : NULL;
-        ir_gen_pack_any(ctx, lhs_ptr, rhs_val, lhs_type_desc->llvm_type, rhs_type);
-        return rhs_val;
-    }
-
-    if (op_kind != OP_ASSIGN)
-    {
-        OperatorKind bin_op = compound_assign_to_binary_op(op_kind);
-        if (lhs_type_desc == NULL)
-            lhs_type_desc = type_descriptor_get_int64_type(ctx->type_registry);
-
-        LLVMValueRef lhs_val = LLVMBuildLoad2(ctx->builder, lhs_type_desc->llvm_type, lhs_ptr, "loadtmp");
-        store_val = ir_gen_binary_op_by_kind(ctx, lhs_val, rhs_val, bin_op);
-    }
-
-    return LLVMBuildStore(ctx->builder, store_val, lhs_ptr);
+    return ir_gen_assign_store(ctx, node->list.children[0], rhs_val, op_kind, node->list.children[2]);
 }
 
 static LLVMValueRef
@@ -3008,30 +2977,40 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         return rhs_val;
     }
 
-    // Single LHS assignment
-    if (ir_gen_vector_elem_assign(ctx, node->list.children[0], rhs_val, op_kind, rhs_node))
+    return ir_gen_assign_store(ctx, node->list.children[0], rhs_val, op_kind, rhs_node);
+}
+
+static LLVMValueRef
+ir_gen_assign_store(
+    IrGenContext * ctx,
+    odin_grammar_node_t * lhs_node,
+    LLVMValueRef rhs_val,
+    OperatorKind op_kind,
+    odin_grammar_node_t * rhs_expr_node
+)
+{
+    if (ir_gen_vector_elem_assign(ctx, lhs_node, rhs_val, op_kind, rhs_expr_node))
         return rhs_val;
 
-    if (ir_gen_bit_field_write(ctx, node->list.children[0], rhs_val, op_kind))
+    if (ir_gen_bit_field_write(ctx, lhs_node, rhs_val, op_kind))
         return rhs_val;
 
-    if (ir_gen_bit_set_assign_expr(ctx, node->list.children[0], rhs_node, rhs_val, op_kind))
+    if (ir_gen_bit_set_assign_expr(ctx, lhs_node, rhs_expr_node, rhs_val, op_kind))
         return rhs_val;
 
-    LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, node->list.children[0]);
+    LLVMValueRef lhs_ptr = ir_gen_lvalue_ptr(ctx, lhs_node);
     if (lhs_ptr == NULL)
         return rhs_val;
 
     LLVMValueRef store_val = rhs_val;
     TypeDescriptor const * lhs_type_desc = NULL;
-    odin_grammar_node_t * lhs_expr = node->list.children[0];
-    odin_grammar_node_t * t = expression_chain_unwrap(lhs_expr);
+    odin_grammar_node_t * t = expression_chain_unwrap(lhs_node);
     if (t)
         lhs_type_desc = t->resolved_type;
     if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
         && strcmp(lhs_type_desc->as.basic.name, "any") == 0)
     {
-        TypeDescriptor const * rhs_type = rhs_node ? rhs_node->resolved_type : NULL;
+        TypeDescriptor const * rhs_type = rhs_expr_node ? rhs_expr_node->resolved_type : NULL;
         ir_gen_pack_any(ctx, lhs_ptr, rhs_val, lhs_type_desc->llvm_type, rhs_type);
         return rhs_val;
     }
