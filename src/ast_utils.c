@@ -2,37 +2,40 @@
 
 #include "odin_grammar_ast.h"
 
+#define AST_NODE_TYPE_COUNT (AST_NODE_SOA_UNZIP_EXPR + 1)
+
+static bool const is_type_node_table[AST_NODE_TYPE_COUNT] = {
+    [AST_NODE_BASIC_TYPE] = true,
+    [AST_NODE_POINTER_TYPE] = true,
+    [AST_NODE_ARRAY_TYPE] = true,
+    [AST_NODE_DYNAMIC_ARRAY_TYPE] = true,
+    [AST_NODE_SLICE_TYPE] = true,
+    [AST_NODE_TYPE_NAME] = true,
+    [AST_NODE_PROCEDURE_SIGNATURE] = true,
+    [AST_NODE_DISTINCT_TYPE] = true,
+    [AST_NODE_ENUM_TYPE] = true,
+    [AST_NODE_UNION_TYPE] = true,
+    [AST_NODE_STRUCT_TYPE] = true,
+    [AST_NODE_ENUM_TYPE_REF] = true,
+    [AST_NODE_STRUCT_TYPE_REF] = true,
+    [AST_NODE_MAP_TYPE] = true,
+    [AST_NODE_SOA_TYPE] = true,
+    [AST_NODE_BIT_FIELD_TYPE] = true,
+    [AST_NODE_BIT_SET_TYPE] = true,
+    [AST_NODE_MULTI_POINTER_TYPE] = true,
+    [AST_NODE_MAYBE_TYPE] = true,
+    [AST_NODE_VECTOR_TYPE] = true,
+    [AST_NODE_TUPLE_TYPE] = true,
+};
+
 bool
 is_type_node(odin_grammar_node_t * node)
 {
-    if (node == NULL) return false;
-    switch (node->type)
-    {
-        case AST_NODE_BASIC_TYPE:
-        case AST_NODE_POINTER_TYPE:
-        case AST_NODE_ARRAY_TYPE:
-        case AST_NODE_DYNAMIC_ARRAY_TYPE:
-        case AST_NODE_SLICE_TYPE:
-        case AST_NODE_TYPE_NAME:
-        case AST_NODE_PROCEDURE_SIGNATURE:
-        case AST_NODE_DISTINCT_TYPE:
-        case AST_NODE_ENUM_TYPE:
-        case AST_NODE_UNION_TYPE:
-        case AST_NODE_STRUCT_TYPE:
-        case AST_NODE_ENUM_TYPE_REF:
-        case AST_NODE_STRUCT_TYPE_REF:
-        case AST_NODE_MAP_TYPE:
-        case AST_NODE_SOA_TYPE:
-        case AST_NODE_BIT_FIELD_TYPE:
-        case AST_NODE_BIT_SET_TYPE:
-        case AST_NODE_MULTI_POINTER_TYPE:
-        case AST_NODE_MAYBE_TYPE:
-        case AST_NODE_VECTOR_TYPE:
-        case AST_NODE_TUPLE_TYPE:
-            return true;
-        default:
-            return false;
-    }
+    if (node == NULL)
+        return false;
+    if ((size_t)node->type >= AST_NODE_TYPE_COUNT)
+        return false;
+    return is_type_node_table[node->type];
 }
 
 odin_grammar_node_t *
