@@ -6,6 +6,7 @@
 
 #include <easy_pc/easy_pc.h>
 #include <libgen.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -323,6 +324,28 @@ file_exists(char const * path)
     return (stat(path, &st) == 0 && S_ISREG(st.st_mode));
 }
 
+static char *
+try_path(char const * fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    int needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) return NULL;
+
+    char * path = malloc((size_t)needed + 1);
+    if (path == NULL) return NULL;
+
+    va_start(args, fmt);
+    vsnprintf(path, (size_t)needed + 1, fmt, args);
+    va_end(args);
+
+    if (file_exists(path))
+        return path;
+    free(path);
+    return NULL;
+}
+
 char *
 resolve_import_path(char const * import_name, char const * source_dir, char const * odin_root)
 {
@@ -346,73 +369,44 @@ resolve_import_path(char const * import_name, char const * source_dir, char cons
         //   <coll_base>/<collection>/<pkg>/<pkg>.odin      (ODIN_ROOT = stubs/)
         //   <coll_base>/<collection>/src/<pkg>/<pkg>.odin  (package under src/)
         //   <coll_base>/stubs/<collection>/<pkg>/<pkg>.odin (ODIN_ROOT = project root, stubs layout)
-        size_t needed;
-        char * candidate;
-
-        // Path 1: <coll_base>/<collection>/<pkg>/<pkg>.odin
-        needed = strlen(coll_base) + 1 + coll_len + 1 + strlen(pkg_name) + 1 + strlen(pkg_name) + 6;
-        candidate = malloc(needed);
-        snprintf(candidate, needed, "%s/%.*s/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
-        if (file_exists(candidate)) return candidate;
-        free(candidate);
-
-        // Path 2: <coll_base>/<collection>/src/<pkg>/<pkg>.odin
-        needed = strlen(coll_base) + 1 + coll_len + 5 + strlen(pkg_name) + 1 + strlen(pkg_name) + 6;
-        candidate = malloc(needed);
-        snprintf(candidate, needed, "%s/%.*s/src/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
-        if (file_exists(candidate)) return candidate;
-        free(candidate);
-
-        // Path 3: <coll_base>/stubs/<collection>/<pkg>/<pkg>.odin
-        needed = strlen(coll_base) + 7 + coll_len + 1 + strlen(pkg_name) + 1 + strlen(pkg_name) + 6;
-        candidate = malloc(needed);
-        snprintf(candidate, needed, "%s/stubs/%.*s/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
-        if (file_exists(candidate)) return candidate;
-        free(candidate);
-
-        // Path 4: <coll_base>/stubs/<collection>/src/<pkg>/<pkg>.odin
-        needed = strlen(coll_base) + 7 + coll_len + 5 + strlen(pkg_name) + 1 + strlen(pkg_name) + 6;
-        candidate = malloc(needed);
-        snprintf(candidate, needed, "%s/stubs/%.*s/src/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
-        if (file_exists(candidate)) return candidate;
-        free(candidate);
+        {
+            char * candidate = try_path("%s/%.*s/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
+            if (candidate) return candidate;
+        }
+        {
+            char * candidate = try_path("%s/%.*s/src/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
+            if (candidate) return candidate;
+        }
+        {
+            char * candidate = try_path("%s/stubs/%.*s/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
+            if (candidate) return candidate;
+        }
+        {
+            char * candidate = try_path("%s/stubs/%.*s/src/%s/%s.odin", coll_base, (int)coll_len, import_name, pkg_name, pkg_name);
+            if (candidate) return candidate;
+        }
 
         return NULL;
     }
 
-    // 1. Check <source_dir>/<import_name>/<import_name>.odin
-    size_t needed = strlen(source_dir) + 1 + strlen(import_name) + 1 + strlen(import_name) + 6;
-    char * candidate = malloc(needed);
-    snprintf(candidate, needed, "%s/%s/%s.odin", source_dir, import_name, import_name);
-    if (file_exists(candidate))
-        return candidate;
-    free(candidate);
-
-    // 2. Check <source_dir>/<import_name>.odin
-    needed = strlen(source_dir) + 1 + strlen(import_name) + 6;
-    candidate = malloc(needed);
-    snprintf(candidate, needed, "%s/%s.odin", source_dir, import_name);
-    if (file_exists(candidate))
-        return candidate;
-    free(candidate);
-
-    // 3. Check <odin_root>/src/<import_name>/<import_name>.odin
+    {
+        char * candidate = try_path("%s/%s/%s.odin", source_dir, import_name, import_name);
+        if (candidate) return candidate;
+    }
+    {
+        char * candidate = try_path("%s/%s.odin", source_dir, import_name);
+        if (candidate) return candidate;
+    }
     if (odin_root != NULL)
     {
-        needed = strlen(odin_root) + 5 + strlen(import_name) + 1 + strlen(import_name) + 6;
-        candidate = malloc(needed);
-        snprintf(candidate, needed, "%s/src/%s/%s.odin", odin_root, import_name, import_name);
-        if (file_exists(candidate))
-            return candidate;
-        free(candidate);
-
-        // 4. Check <odin_root>/src/<import_name>.odin
-        needed = strlen(odin_root) + 5 + strlen(import_name) + 6;
-        candidate = malloc(needed);
-        snprintf(candidate, needed, "%s/src/%s.odin", odin_root, import_name);
-        if (file_exists(candidate))
-            return candidate;
-        free(candidate);
+        {
+            char * candidate = try_path("%s/src/%s/%s.odin", odin_root, import_name, import_name);
+            if (candidate) return candidate;
+        }
+        {
+            char * candidate = try_path("%s/src/%s.odin", odin_root, import_name);
+            if (candidate) return candidate;
+        }
     }
 
     return NULL;

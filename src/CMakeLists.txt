@@ -19,12 +19,11 @@ add_executable(${app}
     scope.c
     scope_lists.c
     generator_lists.c
-    sem_error.c
+    error_list.c
     ast_utils.c
     package_resolver.c
     semantic_analyser.c
     ir_utils.c
-    ir_gen_error.c
     llvm_ir_generator.c
 )
 

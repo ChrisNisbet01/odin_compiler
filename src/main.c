@@ -138,6 +138,47 @@ parse_job_thread(void * arg)
 
 // --- Main ---
 
+typedef struct
+{
+    SemContext * sem_ctx;
+    TypeDescriptors * type_reg;
+    GeneratorContext * gen_ctx;
+    odin_grammar_node_t * ast_root;
+    epc_ast_hook_registry_t * hook_registry;
+    epc_parser_list * parser_list;
+    LLVMBuilderRef builder;
+    LLVMContextRef llvm_ctx;
+    char * source_dir;
+    char * odin_root;
+    char * ll_file;
+    char * exe_file;
+} CompilerResources;
+
+static void
+resources_free(CompilerResources * r)
+{
+    if (r->sem_ctx)
+        sem_context_destroy(r->sem_ctx);
+    if (r->type_reg)
+        type_descriptors_destroy_registry(r->type_reg);
+    if (r->gen_ctx)
+        generator_context_destroy(r->gen_ctx);
+    if (r->ast_root)
+        odin_grammar_node_free(r->ast_root, NULL);
+    if (r->hook_registry)
+        epc_ast_hook_registry_free(r->hook_registry);
+    if (r->parser_list)
+        epc_parser_list_free(r->parser_list);
+    if (r->builder)
+        LLVMDisposeBuilder(r->builder);
+    if (r->llvm_ctx)
+        LLVMContextDispose(r->llvm_ctx);
+    free(r->source_dir);
+    free(r->odin_root);
+    free(r->ll_file);
+    free(r->exe_file);
+}
+
 int
 main(int argc, char * argv[])
 {
@@ -169,6 +210,9 @@ main(int argc, char * argv[])
     }
 
     bool do_codegen = (strcmp(command, "build") == 0 || strcmp(command, "run") == 0);
+
+    CompilerResources r = {0};
+    int exit_code = EXIT_FAILURE;
 
     // Parse options and extract path
     char const * filename = NULL;
@@ -217,22 +261,24 @@ main(int argc, char * argv[])
         fprintf(stderr, "Error: Failed to create parser list.\n");
         return EXIT_FAILURE;
     }
+    r.parser_list = list;
 
     epc_parser_t * base_parser = create_odin_grammar_parser(list);
     if (base_parser == NULL)
     {
         fprintf(stderr, "Error: Failed to create Odin parser.\n");
-        epc_parser_list_free(list);
-        return EXIT_FAILURE;
+        exit_code = EXIT_FAILURE;
+        goto cleanup;
     }
 
     epc_ast_hook_registry_t * hook_registry = epc_ast_hook_registry_create(ODIN_GRAMMAR_AST_ACTION_COUNT__);
     if (hook_registry == NULL)
     {
         fprintf(stderr, "Error: Failed to create hook registry.\n");
-        epc_parser_list_free(list);
-        return EXIT_FAILURE;
+        exit_code = EXIT_FAILURE;
+        goto cleanup;
     }
+    r.hook_registry = hook_registry;
     odin_grammar_ast_hook_registry_init(hook_registry);
 
     // Determine if input is a directory or single file
@@ -257,8 +303,7 @@ main(int argc, char * argv[])
         char ** odin_files = enumerate_odin_files(filename, &file_count);
         if (odin_files == NULL)
         {
-            epc_ast_hook_registry_free(hook_registry);
-            epc_parser_list_free(list);
+            resources_free(&r);
             return EXIT_FAILURE;
         }
 
@@ -309,8 +354,7 @@ main(int argc, char * argv[])
             free(odin_files);
             free(jobs);
             free(threads);
-            epc_ast_hook_registry_free(hook_registry);
-            epc_parser_list_free(list);
+            resources_free(&r);
             return EXIT_FAILURE;
         }
 
@@ -337,8 +381,7 @@ main(int argc, char * argv[])
             free(odin_files);
             free(jobs);
             free(threads);
-            epc_ast_hook_registry_free(hook_registry);
-            epc_parser_list_free(list);
+            resources_free(&r);
             return EXIT_FAILURE;
         }
 
@@ -365,8 +408,7 @@ main(int argc, char * argv[])
         ParsedFile * pf = parse_source_file(filename, base_parser, hook_registry);
         if (pf == NULL)
         {
-            epc_ast_hook_registry_free(hook_registry);
-            epc_parser_list_free(list);
+            resources_free(&r);
             return EXIT_FAILURE;
         }
         ast_root = pf->ast;
@@ -383,47 +425,43 @@ main(int argc, char * argv[])
         printf("Parse successful!\n");
     }
 
+    r.ast_root = ast_root;
+    r.source_dir = source_dir;
+
     // Resolve ODIN_ROOT
     char * odin_root = resolve_odin_root(argv[0]);
+    r.odin_root = odin_root;
     if (odin_root != NULL)
         printf("ODIN_ROOT: %s\n", odin_root);
 
     // Semantic analysis
     LLVMContextRef llvm_ctx = LLVMContextCreate();
+    r.llvm_ctx = llvm_ctx;
     LLVMBuilderRef builder = LLVMCreateBuilderInContext(llvm_ctx);
+    r.builder = builder;
     LLVMTargetDataRef data_layout = NULL;
 
     TypeDescriptors * type_reg = type_descriptors_create_registry(llvm_ctx, data_layout, builder);
     if (type_reg == NULL)
     {
         fprintf(stderr, "Error: Failed to create type registry.\n");
-        free(source_dir);
-        free(odin_root);
-        odin_grammar_node_free(ast_root, NULL);
-        epc_ast_hook_registry_free(hook_registry);
-        epc_parser_list_free(list);
-        LLVMDisposeBuilder(builder);
-        LLVMContextDispose(llvm_ctx);
-        return EXIT_FAILURE;
+        exit_code = EXIT_FAILURE;
+        goto cleanup;
     }
+    r.type_reg = type_reg;
 
     GeneratorContext * gen_ctx = generator_context_create(llvm_ctx, builder, type_reg);
     if (gen_ctx == NULL)
     {
         fprintf(stderr, "Error: Failed to create generator context.\n");
-        free(source_dir);
-        free(odin_root);
-        type_descriptors_destroy_registry(type_reg);
-        odin_grammar_node_free(ast_root, NULL);
-        epc_ast_hook_registry_free(hook_registry);
-        epc_parser_list_free(list);
-        LLVMDisposeBuilder(builder);
-        LLVMContextDispose(llvm_ctx);
-        return EXIT_FAILURE;
+        exit_code = EXIT_FAILURE;
+        goto cleanup;
     }
+    r.gen_ctx = gen_ctx;
 
     SemContext sem_ctx;
     sem_context_init(&sem_ctx, ast_root, type_reg, gen_ctx, filename, source_dir, odin_root, base_parser, hook_registry);
+    r.sem_ctx = &sem_ctx;
 
     bool sem_ok = sem_analyse(&sem_ctx);
 
@@ -497,6 +535,9 @@ main(int argc, char * argv[])
     free(output_base_buf);
     output_base_buf = NULL;
 
+    r.ll_file = ll_file;
+    r.exe_file = exe_file;
+
     if (do_codegen && sem_ok)
     {
         IrGenContext * ir_ctx = ir_gen_context_create("main", type_reg, gen_ctx);
@@ -507,18 +548,7 @@ main(int argc, char * argv[])
         if (ir_ctx == NULL)
         {
             fprintf(stderr, "Error: Failed to create IR generator context.\n");
-            sem_context_destroy(&sem_ctx);
-            type_descriptors_destroy_registry(type_reg);
-            generator_context_destroy(gen_ctx);
-            odin_grammar_node_free(ast_root, NULL);
-            epc_ast_hook_registry_free(hook_registry);
-            epc_parser_list_free(list);
-            LLVMDisposeBuilder(builder);
-            LLVMContextDispose(llvm_ctx);
-            free(source_dir);
-            free(odin_root);
-            free(ll_file);
-            free(exe_file);
+            resources_free(&r);
             return EXIT_FAILURE;
         }
 
@@ -565,19 +595,10 @@ main(int argc, char * argv[])
         ir_gen_context_destroy(ir_ctx);
     }
 
-    // Cleanup
-    sem_context_destroy(&sem_ctx);
-    type_descriptors_destroy_registry(type_reg);
-    generator_context_destroy(gen_ctx);
-    odin_grammar_node_free(ast_root, NULL);
-    epc_ast_hook_registry_free(hook_registry);
-    epc_parser_list_free(list);
-    LLVMDisposeBuilder(builder);
-    LLVMContextDispose(llvm_ctx);
-    free(source_dir);
-    free(odin_root);
-    free(ll_file);
-    free(exe_file);
+    exit_code = EXIT_SUCCESS;
 
-    return sem_ok ? EXIT_SUCCESS : EXIT_FAILURE;
+cleanup:
+    resources_free(&r);
+
+    return exit_code;
 }

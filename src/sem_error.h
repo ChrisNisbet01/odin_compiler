@@ -1,28 +1,29 @@
 #pragma once
 
-#include "odin_grammar_ast.h"
+#include "error_list.h"
 
-#include <stdbool.h>
+typedef ErrorList SemErrorList;
 
-#define MAX_SEM_ERRORS 256
-
-typedef struct
+static inline void
+sem_error_list_init(SemErrorList * list)
 {
-    char const * message;
-    char const * file_path;
-    odin_grammar_node_t * node;
-} SemError;
+    error_list_init(list);
+}
 
-typedef struct
+static inline bool
+sem_error_list_has_errors(SemErrorList const * list)
 {
-    SemError errors[MAX_SEM_ERRORS];
-    int count;
-} SemErrorList;
+    return error_list_has_errors(list);
+}
 
-void sem_error_list_init(SemErrorList * list);
+static inline void
+sem_error_list_add(SemErrorList * list, char const * file_path, odin_grammar_node_t * node, char const * message)
+{
+    error_list_add(list, file_path, node, message);
+}
 
-bool sem_error_list_has_errors(SemErrorList const * list);
-
-void sem_error_list_add(SemErrorList * list, char const * file_path, odin_grammar_node_t * node, char const * message);
-
-void sem_error_list_print(SemErrorList const * list);
+static inline void
+sem_error_list_print(SemErrorList const * list)
+{
+    error_list_print(list);
+}

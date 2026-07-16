@@ -1,28 +1,29 @@
 #pragma once
 
-#include "odin_grammar_ast.h"
+#include "error_list.h"
 
-#include <stdbool.h>
+typedef ErrorList IrGenErrorCollection;
 
-#define MAX_IR_GEN_ERRORS 256
-
-typedef struct
+static inline void
+ir_gen_error_collection_init(IrGenErrorCollection * col)
 {
-    char const * message;
-    char const * file_path;
-    odin_grammar_node_t * node;
-} IrGenError;
+    error_list_init(col);
+}
 
-typedef struct
+static inline bool
+ir_gen_error_collection_has_errors(IrGenErrorCollection const * col)
 {
-    IrGenError errors[MAX_IR_GEN_ERRORS];
-    int count;
-} IrGenErrorCollection;
+    return error_list_has_errors(col);
+}
 
-void ir_gen_error_collection_init(IrGenErrorCollection * col);
+static inline void
+ir_gen_error_collection_add(IrGenErrorCollection * col, char const * file_path, odin_grammar_node_t * node, char const * message)
+{
+    error_list_add(col, file_path, node, message);
+}
 
-bool ir_gen_error_collection_has_errors(IrGenErrorCollection const * col);
-
-void ir_gen_error_collection_add(IrGenErrorCollection * col, char const * file_path, odin_grammar_node_t * node, char const * message);
-
-void ir_gen_error_collection_print(IrGenErrorCollection const * col);
+static inline void
+ir_gen_error_collection_print(IrGenErrorCollection const * col)
+{
+    error_list_print(col);
+}
