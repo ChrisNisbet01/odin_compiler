@@ -359,6 +359,101 @@ ir_gen_bool_value(IrGenContext * ctx, odin_grammar_node_t * node)
     return LLVMConstInt(LLVMInt1TypeInContext(ctx->context), val ? 1 : 0, false);
 }
 
+// --- Helper: string global construction ---
+
+// Builds a private unnamed_addr constant global array of i8 from the given bytes,
+// then creates a {i8*, i64} string struct pointing to it.
+static LLVMValueRef
+make_string_global(IrGenContext * ctx, unsigned char const * bytes, size_t byte_count)
+{
+    LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
+    size_t arr_len = byte_count + 1;
+    LLVMValueRef * elements = malloc(arr_len * sizeof(LLVMValueRef));
+    if (elements == NULL)
+        return NULL;
+    for (size_t i = 0; i < byte_count; i++)
+        elements[i] = LLVMConstInt(i8_type, bytes[i], false);
+    elements[byte_count] = LLVMConstInt(i8_type, 0, false);
+
+    LLVMTypeRef arr_type = LLVMArrayType(i8_type, arr_len);
+    LLVMValueRef arr_const = LLVMConstArray(i8_type, elements, arr_len);
+    free(elements);
+
+    LLVMValueRef global = LLVMAddGlobal(ctx->module, arr_type, ".str");
+    LLVMSetInitializer(global, arr_const);
+    LLVMSetLinkage(global, LLVMPrivateLinkage);
+    LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
+    LLVMSetGlobalConstant(global, true);
+
+    LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    LLVMValueRef indices[] = {zero, zero};
+    LLVMValueRef ptr = LLVMConstInBoundsGEP2(arr_type, global, indices, 2);
+
+    TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
+    LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : LLVMStructType(NULL, 0, false);
+
+    LLVMValueRef len_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)byte_count, false);
+    LLVMValueRef struct_vals[] = {ptr, len_val};
+    return LLVMConstNamedStruct(str_type, struct_vals, 2);
+}
+
+static unsigned char
+hex_char_to_int(char c)
+{
+    if (c >= '0' && c <= '9') return (unsigned char)(c - '0');
+    if (c >= 'a' && c <= 'f') return (unsigned char)(c - 'a' + 10);
+    if (c >= 'A' && c <= 'F') return (unsigned char)(c - 'A' + 10);
+    return 0;
+}
+
+// Processes an escape sequence starting at content[i] where content[i] == '\\'.
+// Sets *byte_value to the decoded byte and *consumed to number of input chars consumed.
+static void
+parse_escape_sequence(char const * content, size_t i, size_t content_len, unsigned char * byte_value, size_t * consumed)
+{
+    if (i + 1 >= content_len)
+    {
+        *byte_value = 0x5C;
+        *consumed = 1;
+        return;
+    }
+    switch (content[i + 1])
+    {
+    case 'a':  *byte_value = 0x07; *consumed = 2; return;
+    case 'b':  *byte_value = 0x08; *consumed = 2; return;
+    case 'e':  *byte_value = 0x1B; *consumed = 2; return;
+    case 'f':  *byte_value = 0x0C; *consumed = 2; return;
+    case 'n':  *byte_value = 0x0A; *consumed = 2; return;
+    case 'r':  *byte_value = 0x0D; *consumed = 2; return;
+    case 't':  *byte_value = 0x09; *consumed = 2; return;
+    case 'v':  *byte_value = 0x0B; *consumed = 2; return;
+    case '\\': *byte_value = 0x5C; *consumed = 2; return;
+    case '\'': *byte_value = 0x27; *consumed = 2; return;
+    case '"':  *byte_value = 0x22; *consumed = 2; return;
+    case '0':  *byte_value = 0x00; *consumed = 2; return;
+    case 'x':
+        if (i + 3 < content_len
+            && ((content[i + 2] >= '0' && content[i + 2] <= '9')
+             || (content[i + 2] >= 'a' && content[i + 2] <= 'f')
+             || (content[i + 2] >= 'A' && content[i + 2] <= 'F'))
+            && ((content[i + 3] >= '0' && content[i + 3] <= '9')
+             || (content[i + 3] >= 'a' && content[i + 3] <= 'f')
+             || (content[i + 3] >= 'A' && content[i + 3] <= 'F')))
+        {
+            *byte_value = (hex_char_to_int(content[i + 2]) << 4) | hex_char_to_int(content[i + 3]);
+            *consumed = 4;
+            return;
+        }
+        *byte_value = 0x5C;
+        *consumed = 1;
+        return;
+    default:
+        *byte_value = 0x5C;
+        *consumed = 1;
+        return;
+    }
+}
+
 static LLVMValueRef
 ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node, bool process_escapes)
 {
@@ -368,7 +463,6 @@ ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node, bool proce
     char const * text = node->text;
     size_t text_len = strlen(text);
 
-    // Strip surrounding quotes/backticks
     char const * content = text;
     size_t content_len = text_len;
     if (text_len >= 2 && (text[0] == '"' || text[0] == '`'))
@@ -377,170 +471,60 @@ ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node, bool proce
         content_len = text_len - 2;
     }
 
-    LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
-
-    // For raw strings (backtick), copy verbatim without escape processing
     if (!process_escapes)
     {
-        size_t arr_len = content_len + 1;
-        LLVMValueRef * elements = malloc(arr_len * sizeof(LLVMValueRef));
-        if (elements == NULL)
+        unsigned char * buf = malloc(content_len * sizeof(unsigned char));
+        if (buf == NULL)
             return NULL;
         for (size_t i = 0; i < content_len; i++)
-            elements[i] = LLVMConstInt(i8_type, (unsigned char)content[i], false);
-        elements[content_len] = LLVMConstInt(i8_type, 0, false);
-
-        LLVMTypeRef arr_type = LLVMArrayType(i8_type, arr_len);
-        LLVMValueRef arr_const = LLVMConstArray(i8_type, elements, arr_len);
-        free(elements);
-
-        LLVMValueRef global = LLVMAddGlobal(ctx->module, arr_type, ".str");
-        LLVMSetInitializer(global, arr_const);
-        LLVMSetLinkage(global, LLVMPrivateLinkage);
-        LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
-        LLVMSetGlobalConstant(global, true);
-
-        LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-        LLVMValueRef indices[] = {zero, zero};
-        LLVMValueRef ptr = LLVMConstInBoundsGEP2(arr_type, global, indices, 2);
-
-        TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
-        LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : LLVMStructType(NULL, 0, false);
-
-        LLVMValueRef len_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)content_len, false);
-        LLVMValueRef struct_vals[] = {ptr, len_val};
-        return LLVMConstNamedStruct(str_type, struct_vals, 2);
+            buf[i] = (unsigned char)content[i];
+        LLVMValueRef result = make_string_global(ctx, buf, content_len);
+        free(buf);
+        return result;
     }
 
-    // Process escape sequences: first pass to count output length
-    size_t arr_len = content_len + 1; // max possible (no escapes)
-
-    // First pass: count escaped length
     size_t escaped_len = 0;
-    for (size_t i = 0; i < content_len; i++)
+    for (size_t i = 0; i < content_len; )
     {
-        if (content[i] == '\\' && i + 1 < content_len)
+        if (content[i] == '\\')
         {
-            switch (content[i + 1])
-            {
-            case 'a': case 'b': case 'e': case 'f': case 'n':
-            case 'r': case 't': case 'v': case '\\': case '\'':
-            case '"': case '0':
-                escaped_len++; i++; break;
-            case 'x':
-                if (i + 3 < content_len
-                    && ((content[i + 2] >= '0' && content[i + 2] <= '9')
-                     || (content[i + 2] >= 'a' && content[i + 2] <= 'f')
-                     || (content[i + 2] >= 'A' && content[i + 2] <= 'F'))
-                    && ((content[i + 3] >= '0' && content[i + 3] <= '9')
-                     || (content[i + 3] >= 'a' && content[i + 3] <= 'f')
-                     || (content[i + 3] >= 'A' && content[i + 3] <= 'F')))
-                {
-                    escaped_len++;
-                    i += 3;
-                }
-                else
-                {
-                    escaped_len++;
-                }
-                break;
-            default: escaped_len++; break;
-            }
+            unsigned char byte_val;
+            size_t consumed;
+            parse_escape_sequence(content, i, content_len, &byte_val, &consumed);
+            escaped_len++;
+            i += consumed;
         }
         else
         {
             escaped_len++;
+            i++;
         }
     }
-    arr_len = escaped_len + 1;
 
-    LLVMValueRef * elements = malloc(arr_len * sizeof(LLVMValueRef));
-    if (elements == NULL)
+    unsigned char * buf = malloc(escaped_len * sizeof(unsigned char));
+    if (buf == NULL)
         return NULL;
-
-    // Second pass: fill elements with escape processing
     size_t out_idx = 0;
-    for (size_t i = 0; i < content_len; i++)
+    for (size_t i = 0; i < content_len; )
     {
-        if (content[i] == '\\' && i + 1 < content_len)
+        if (content[i] == '\\')
         {
-            switch (content[i + 1])
-            {
-            case 'a':  elements[out_idx++] = LLVMConstInt(i8_type, 0x07, false); i++; break;
-            case 'b':  elements[out_idx++] = LLVMConstInt(i8_type, 0x08, false); i++; break;
-            case 'e':  elements[out_idx++] = LLVMConstInt(i8_type, 0x1B, false); i++; break;
-            case 'f':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0C, false); i++; break;
-            case 'n':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0A, false); i++; break;
-            case 'r':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0D, false); i++; break;
-            case 't':  elements[out_idx++] = LLVMConstInt(i8_type, 0x09, false); i++; break;
-            case 'v':  elements[out_idx++] = LLVMConstInt(i8_type, 0x0B, false); i++; break;
-            case '\\': elements[out_idx++] = LLVMConstInt(i8_type, 0x5C, false); i++; break;
-            case '\'': elements[out_idx++] = LLVMConstInt(i8_type, 0x27, false); i++; break;
-            case '"':  elements[out_idx++] = LLVMConstInt(i8_type, 0x22, false); i++; break;
-            case '0':  elements[out_idx++] = LLVMConstInt(i8_type, 0x00, false); i++; break;
-            case 'x':
-                if (i + 3 < content_len
-                    && ((content[i + 2] >= '0' && content[i + 2] <= '9')
-                     || (content[i + 2] >= 'a' && content[i + 2] <= 'f')
-                     || (content[i + 2] >= 'A' && content[i + 2] <= 'F'))
-                    && ((content[i + 3] >= '0' && content[i + 3] <= '9')
-                     || (content[i + 3] >= 'a' && content[i + 3] <= 'f')
-                     || (content[i + 3] >= 'A' && content[i + 3] <= 'F')))
-                {
-                    unsigned char hi = (content[i + 2] >= '0' && content[i + 2] <= '9')
-                        ? (unsigned char)(content[i + 2] - '0')
-                        : (content[i + 2] >= 'a' && content[i + 2] <= 'f')
-                            ? (unsigned char)(content[i + 2] - 'a' + 10)
-                            : (unsigned char)(content[i + 2] - 'A' + 10);
-                    unsigned char lo = (content[i + 3] >= '0' && content[i + 3] <= '9')
-                        ? (unsigned char)(content[i + 3] - '0')
-                        : (content[i + 3] >= 'a' && content[i + 3] <= 'f')
-                            ? (unsigned char)(content[i + 3] - 'a' + 10)
-                            : (unsigned char)(content[i + 3] - 'A' + 10);
-                    elements[out_idx++] = LLVMConstInt(i8_type, (unsigned long long)((hi << 4) | lo), false);
-                    i += 3;
-                }
-                else
-                {
-                    elements[out_idx++] = LLVMConstInt(i8_type, 0x5C, false);
-                }
-                break;
-            default:   elements[out_idx++] = LLVMConstInt(i8_type, 0x5C, false); break;
-            }
+            unsigned char byte_val;
+            size_t consumed;
+            parse_escape_sequence(content, i, content_len, &byte_val, &consumed);
+            buf[out_idx++] = byte_val;
+            i += consumed;
         }
         else
         {
-            elements[out_idx++] = LLVMConstInt(i8_type, (unsigned char)content[i], false);
+            buf[out_idx++] = (unsigned char)content[i];
+            i++;
         }
     }
-    elements[out_idx] = LLVMConstInt(i8_type, 0, false); // null terminator
-    content_len = escaped_len;
 
-    LLVMTypeRef arr_type = LLVMArrayType(i8_type, arr_len);
-    LLVMValueRef arr_const = LLVMConstArray(i8_type, elements, arr_len);
-    free(elements);
-
-    // Private global constant
-    LLVMValueRef global = LLVMAddGlobal(ctx->module, arr_type, ".str");
-    LLVMSetInitializer(global, arr_const);
-    LLVMSetLinkage(global, LLVMPrivateLinkage);
-    LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
-    LLVMSetGlobalConstant(global, true);
-
-    // GEP to i8* pointer to first element (constant expression)
-    LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-    LLVMValueRef indices[] = {zero, zero};
-    LLVMValueRef ptr = LLVMConstInBoundsGEP2(arr_type, global, indices, 2);
-
-    // Build {i8*, i64} string struct as a constant
-    TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
-    LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : LLVMStructType(NULL, 0, false);
-
-    LLVMValueRef len_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), content_len, false);
-    LLVMValueRef struct_vals[] = {ptr, len_val};
-    LLVMValueRef str_val = LLVMConstNamedStruct(str_type, struct_vals, 2);
-
-    return str_val;
+    LLVMValueRef result = make_string_global(ctx, buf, escaped_len);
+    free(buf);
+    return result;
 }
 
 static LLVMValueRef
