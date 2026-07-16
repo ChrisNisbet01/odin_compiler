@@ -32,8 +32,7 @@ Single-component (`v.x = val`) and multi-component (`v.xy = val`, `v.xyzw = val`
 
 ### `expand_values` / `compress_values` ✅ IMPLEMENTED
 
-### `soa_zip` / `soa_unzip`
-SOA struct field manipulation. Requires multi-field extract/insert at the IR level.
+### `soa_zip` / `soa_unzip` ✅ IMPLEMENTED
 
 ### `$T` / `$N` — Compile-time polymorphic parameters (generics)
 Generic procedures with polymorphic type/value parameters. Requires major type system overhaul, monomorphization, and full compile-time evaluation. The largest missing feature.

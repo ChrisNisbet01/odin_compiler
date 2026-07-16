@@ -132,6 +132,8 @@ KwHashType = lexeme("#type" IdBoundary);
 KwSimd = lexeme("#simd" IdBoundary);
 KwExpandValues = lexeme("expand_values" IdBoundary);
 KwCompressValues = lexeme("compress_values" IdBoundary);
+KwSoaZip = lexeme("soa_zip" IdBoundary);
+KwSoaUnzip = lexeme("soa_unzip" IdBoundary);
 KwProcLiteral = KwProc;
 
 // Reserved words set (for identifier boundary checking)
@@ -159,7 +161,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
         | KwBitField | KwBitSet | KwIncl | KwExcl
         | KwMaybe
         | KwTypeidOf | KwTypeInfoOf
-        | KwHashType | KwSimd | KwExpandValues | KwCompressValues;
+        | KwHashType | KwSimd | KwExpandValues | KwCompressValues | KwSoaZip | KwSoaUnzip;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
 FieldName = lexeme(identifier) @AST_ACTION_IDENTIFIER;
@@ -417,8 +419,10 @@ ComplexExpr = KwComplex LParen SuffixExpression Comma SuffixExpression RParen @A
 QuaternionExpr = KwQuaternion LParen SuffixExpression Comma SuffixExpression Comma SuffixExpression Comma SuffixExpression RParen @AST_ACTION_QUATERNION_EXPR;
 ExpandValuesExpr = KwExpandValues LParen Expression RParen @AST_ACTION_EXPAND_VALUES_EXPR;
 CompressValuesExpr = KwCompressValues LParen TypePrefix (Comma AssignExpression)+ RParen @AST_ACTION_COMPRESS_VALUES_EXPR;
+SoaZipExpr = KwSoaZip LParen ArgumentList RParen @AST_ACTION_SOA_ZIP_EXPR;
+SoaUnzipExpr = KwSoaUnzip LParen Expression RParen @AST_ACTION_SOA_UNZIP_EXPR;
 TypeCastByJuxtaposition = TypeName LParen Expression RParen @AST_ACTION_CAST_EXPR;
-UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | SizeOfExpr | AlignOfExpr | OffsetOfExpr | RawDataExpr | MinExpr | MaxExpr | TypeOfExpr | TypeidOfExpr | TypeInfoOfExpr | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | ComplexExpr | QuaternionExpr | ExpandValuesExpr | CompressValuesExpr | UnaryPrefix | PostfixExpression | TypeCastByJuxtaposition;
+UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | SizeOfExpr | AlignOfExpr | OffsetOfExpr | RawDataExpr | MinExpr | MaxExpr | TypeOfExpr | TypeidOfExpr | TypeInfoOfExpr | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | ComplexExpr | QuaternionExpr | ExpandValuesExpr | CompressValuesExpr | SoaZipExpr | SoaUnzipExpr | UnaryPrefix | PostfixExpression | TypeCastByJuxtaposition;
 
 MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
 MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;

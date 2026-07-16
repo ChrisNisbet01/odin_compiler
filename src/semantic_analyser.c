@@ -165,6 +165,39 @@ find_imported_package_by_name(SemContext * ctx, char const * name)
     return NULL;
 }
 
+// --- Comma-chain argument collection ---
+// Walk a comma-chain Expression tree to collect individual argument nodes.
+// Comma is handled by chainl1(AssignExpression, Comma) which produces
+// left-associative Expression trees. For a, b, c, the tree is:
+//   Expr(Expr(a, b), c) — last child is the rightmost operand.
+static void
+sem_collect_comma_chain_args(odin_grammar_node_t * node, odin_grammar_node_t ** out_args, int max_args, int * out_count)
+{
+    if (node == NULL || max_args <= 0)
+        return;
+    if (node->type == AST_NODE_EXPRESSION && node->list.count >= 2)
+    {
+        // children[0] is the left sub-chain, children[last] is the rightmost operand
+        int last_idx = (int)node->list.count - 1;
+        odin_grammar_node_t * last = node->list.children[last_idx];
+        sem_collect_comma_chain_args(node->list.children[0], out_args, max_args, out_count);
+        if (*out_count < max_args && last != NULL)
+        {
+            out_args[*out_count] = last;
+            (*out_count)++;
+        }
+    }
+    else
+    {
+        // Single expression
+        if (*out_count < max_args)
+        {
+            out_args[*out_count] = node;
+            (*out_count)++;
+        }
+    }
+}
+
 // --- Forward declarations ---
 static TypeDescriptor const * sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node);
 static void sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type);
@@ -1908,6 +1941,91 @@ sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
         node->resolved_type = (TypeDescriptor *)target_type;
         return target_type;
+    }
+
+    case AST_NODE_SOA_ZIP_EXPR:
+    {
+        // Collect arguments from comma-chain expression
+        odin_grammar_node_t * arg_list = (node->list.count >= 1) ? node->list.children[0] : NULL;
+        odin_grammar_node_t * arg_expr = (arg_list && arg_list->list.count >= 1) ? arg_list->list.children[0] : NULL;
+        if (arg_expr == NULL)
+        {
+            sem_error_list_add(&ctx->errors, NULL, node, "soa_zip requires at least one argument");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+
+        // Walk comma-chain expression to extract individual arg nodes
+        odin_grammar_node_t * args[128];
+        int arg_count = 0;
+        sem_collect_comma_chain_args(arg_expr, args, 128, &arg_count);
+
+        struct_or_union_members_st backing_members;
+        backing_members.count = arg_count;
+        backing_members.fields = calloc((size_t)arg_count, sizeof(struct_field_t));
+        for (int i = 0; i < arg_count; i++)
+        {
+            TypeDescriptor const * arg_type = sem_evaluate_expr(ctx, args[i]);
+            if (arg_type == NULL)
+            {
+                sem_error_list_add(&ctx->errors, NULL, args[i], "soa_zip: argument has NULL type");
+                free(backing_members.fields);
+                node->resolved_type = NULL;
+                return NULL;
+            }
+            if (arg_type->kind != TD_KIND_SLICE)
+            {
+                sem_error_list_add(&ctx->errors, NULL, args[i], "soa_zip: argument must be a slice type");
+                free(backing_members.fields);
+                node->resolved_type = NULL;
+                return NULL;
+            }
+            char field_name[32];
+            snprintf(field_name, sizeof(field_name), "_%d", i);
+            backing_members.fields[i].name = strdup(field_name);
+            backing_members.fields[i].type_desc = arg_type;
+        }
+        TypeDescriptor const * soa_type = get_or_create_soa_type(ctx->type_registry, &backing_members);
+        // Note: field names in backing_members are shallow-copied into the SOA type
+        // (get_or_create_soa_type uses memcpy), so the strdup'd names must NOT be freed here.
+        free(backing_members.fields);
+        node->resolved_type = (TypeDescriptor *)soa_type;
+        return soa_type;
+    }
+
+    case AST_NODE_SOA_UNZIP_EXPR:
+    {
+        if (node->list.count < 1)
+        {
+            sem_error_list_add(&ctx->errors, NULL, node, "soa_unzip requires one argument");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        TypeDescriptor const * arg_type = sem_evaluate_expr(ctx, node->list.children[0]);
+        if (arg_type == NULL)
+        {
+            sem_error_list_add(&ctx->errors, NULL, node->list.children[0], "soa_unzip: argument has NULL type");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        if (arg_type->kind != TD_KIND_SOA)
+        {
+            sem_error_list_add(&ctx->errors, NULL, node->list.children[0], "soa_unzip: argument must be an SOA struct type");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        int field_count = arg_type->struct_metadata.members.count;
+        TypeDescriptor const ** elem_types = calloc((size_t)field_count, sizeof(TypeDescriptor const *));
+        for (int i = 0; i < field_count; i++)
+        {
+            struct_field_t const * field = &arg_type->struct_metadata.members.fields[i];
+            // Each field is already a slice type ([]T)
+            elem_types[i] = field->type_desc;
+        }
+        TypeDescriptor const * tuple_type = get_or_create_tuple_type(ctx->type_registry, elem_types, field_count);
+        free(elem_types);
+        node->resolved_type = (TypeDescriptor *)tuple_type;
+        return tuple_type;
     }
 
     case AST_NODE_INCL_EXPR:

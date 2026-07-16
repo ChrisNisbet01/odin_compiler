@@ -4802,6 +4802,34 @@ ir_gen_collect_single_arg(IrGenContext * ctx, odin_grammar_node_t * node, LLVMVa
 
 // Walk a comma-chained Expression tree to collect individual argument values.
 // Comma is a terminal (lexeme) so it produces no AST node.
+// Walk a comma-chain Expression tree to collect individual argument nodes.
+// Same pattern as ir_gen_collect_call_args but just collects node pointers.
+static void
+ir_gen_collect_comma_chain_args(odin_grammar_node_t * node, odin_grammar_node_t ** out_args, int max_args, int * out_count)
+{
+    if (node == NULL || max_args <= 0)
+        return;
+    if (node->type == AST_NODE_EXPRESSION && node->list.count >= 2)
+    {
+        int last_idx = (int)node->list.count - 1;
+        odin_grammar_node_t * last = node->list.children[last_idx];
+        ir_gen_collect_comma_chain_args(node->list.children[0], out_args, max_args, out_count);
+        if (*out_count < max_args && last != NULL)
+        {
+            out_args[*out_count] = last;
+            (*out_count)++;
+        }
+    }
+    else
+    {
+        if (*out_count < max_args)
+        {
+            out_args[*out_count] = node;
+            (*out_count)++;
+        }
+    }
+}
+
 // chainl1(AssignExpression, Comma) produces a left-associative tree:
 //   Expr(Expr(a, b), c)   for a, b, c
 static int
@@ -6932,6 +6960,103 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
                     false, "compress.elem");
             }
             result = LLVMBuildInsertValue(ctx->builder, result, val, field_idx, "compress.field");
+        }
+        return result;
+    }
+
+    case AST_NODE_SOA_ZIP_EXPR:
+    {
+        if (node->list.count < 1 || node->resolved_type == NULL)
+            return NULL;
+        // Extract args from ArgumentList → comma-chain Expression
+        odin_grammar_node_t * arg_list = node->list.children[0];
+        odin_grammar_node_t * arg_expr = (arg_list && arg_list->list.count >= 1) ? arg_list->list.children[0] : NULL;
+        if (arg_expr == NULL)
+            return NULL;
+
+        odin_grammar_node_t * ir_args[128];
+        int ir_arg_count = 0;
+        ir_gen_collect_comma_chain_args(arg_expr, ir_args, 128, &ir_arg_count);
+        if (ir_arg_count < 1)
+            return NULL;
+
+        TypeDescriptor const * result_type = node->resolved_type;
+        LLVMTypeRef llvm_type = result_type->llvm_type;
+
+        LLVMValueRef * data_ptrs = malloc((size_t)ir_arg_count * sizeof(LLVMValueRef));
+        LLVMValueRef * len_vals = malloc((size_t)ir_arg_count * sizeof(LLVMValueRef));
+        if (data_ptrs == NULL || len_vals == NULL)
+        {
+            free(data_ptrs);
+            free(len_vals);
+            return NULL;
+        }
+
+        LLVMValueRef min_len = NULL;
+        for (int i = 0; i < ir_arg_count; i++)
+        {
+            LLVMValueRef slice_val = ir_gen_node(ctx, ir_args[i]);
+            if (slice_val == NULL)
+            {
+                free(data_ptrs);
+                free(len_vals);
+                return NULL;
+            }
+            TypeDescriptor const * arg_type = ir_args[i]->resolved_type;
+            if (LLVMGetTypeKind(LLVMTypeOf(slice_val)) == LLVMPointerTypeKind
+                && arg_type != NULL && arg_type->llvm_type != NULL)
+            {
+                slice_val = LLVMBuildLoad2(ctx->builder, arg_type->llvm_type, slice_val, "sz.load");
+            }
+            data_ptrs[i] = LLVMBuildExtractValue(ctx->builder, slice_val, 0, "sz.data");
+            len_vals[i] = LLVMBuildExtractValue(ctx->builder, slice_val, 1, "sz.len");
+
+            if (i == 0)
+            {
+                min_len = len_vals[i];
+            }
+            else
+            {
+                LLVMValueRef cmp = LLVMBuildICmp(ctx->builder, LLVMIntULT, len_vals[i], min_len, "sz.cmp");
+                min_len = LLVMBuildSelect(ctx->builder, cmp, len_vals[i], min_len, "sz.min");
+            }
+        }
+
+        LLVMValueRef result = LLVMGetUndef(llvm_type);
+        for (int i = 0; i < ir_arg_count; i++)
+        {
+            TypeDescriptor const * arg_type = ir_args[i]->resolved_type;
+            LLVMValueRef new_slice = LLVMGetUndef(arg_type->llvm_type);
+            new_slice = LLVMBuildInsertValue(ctx->builder, new_slice, data_ptrs[i], 0, "sz.slice.data");
+            new_slice = LLVMBuildInsertValue(ctx->builder, new_slice, min_len, 1, "sz.slice.len");
+            result = LLVMBuildInsertValue(ctx->builder, result, new_slice, (unsigned)i, "sz.field");
+        }
+
+        free(data_ptrs);
+        free(len_vals);
+        return result;
+    }
+
+    case AST_NODE_SOA_UNZIP_EXPR:
+    {
+        if (node->list.count < 1 || node->resolved_type == NULL)
+            return NULL;
+        LLVMValueRef soa_val = ir_gen_node(ctx, node->list.children[0]);
+        if (soa_val == NULL)
+            return NULL;
+        TypeDescriptor const * arg_type = node->list.children[0]->resolved_type;
+        if (LLVMGetTypeKind(LLVMTypeOf(soa_val)) == LLVMPointerTypeKind
+            && arg_type != NULL && arg_type->llvm_type != NULL)
+        {
+            soa_val = LLVMBuildLoad2(ctx->builder, arg_type->llvm_type, soa_val, "suz.load");
+        }
+        TypeDescriptor const * result_type = node->resolved_type;
+        int field_count = arg_type->struct_metadata.members.count;
+        LLVMValueRef result = LLVMGetUndef(result_type->llvm_type);
+        for (int i = 0; i < field_count; i++)
+        {
+            LLVMValueRef field_val = LLVMBuildExtractValue(ctx->builder, soa_val, (unsigned)i, "suz.field");
+            result = LLVMBuildInsertValue(ctx->builder, result, field_val, (unsigned)i, "suz.tuple");
         }
         return result;
     }

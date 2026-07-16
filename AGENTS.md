@@ -1,3 +1,27 @@
+## Accomplishments (session 2026-07-17)
+
+### Fixed tuple type codegen — 6 interconnected bugs resolved
+
+1. **Missing `llvm_type`**: `TD_KIND_TUPLE` handler in `get_or_create_tuple_type` did not set `llvm_type` (was NULL), causing segfault in `LLVMBuildAlloca`. Fixed by computing `LLVMStructType(field_llvm_types, ...)`.
+2. **Composite types list**: `TD_KIND_TUPLE` was missing from the IR generator's composite types detection, so identifier loading bypassed alloca pointer retrieval (treated as integer type).
+3. **Unexecuted semantic branch**: `AST_NODE_ENUM_TYPE` handler condition `child->type == AST_NODE_TUPLE_TYPE` was wrong (should be `child_type->type == AST_NODE_TUPLE_TYPE`), causing the tuple-in-enum branch (never reached before) to silently skip, leaving `underlying_type` NULL.
+4. **No dedup for tuple types**: `get_or_create_tuple_type` always created a new type on every call, so identical `(int, int)` in different locations got different type IDs. Added deduplication via `type_name_to_descriptor` hash table with `make_tuple_type_name` hash key.
+5. **test_tuple.odin**: Was checking only `result == 0` (which passed even with wrong values). Extended to check both tuple element values via string length and integer comparison.
+6. **IR gen for multi-return destructuring**: `AST_NODE_MULTI_RETURN_VARIABLE_DECL` handler was failing for tuples. Fixed by ensuring tuple variables in `ir_gen_variable_decl` get their `llvm_type` from `var_type->llvm_type`.
+
+### Implemented `soa_zip` and `soa_unzip` expressions
+
+- **Grammar**: Added `KwSoaZip`/`KwSoaUnzip` lexemes, `SoaZipExpr`/`SoaUnzipExpr` rules, added to `UnaryExpression` and `AllReservedWords`. Fixed grammar bug — `(Comma Expression)*` doesn't work because `Expression` (via `chainl1` with `Comma`) already consumes commas; switched to `ArgumentList` which produces a comma-chained `Expression` tree.
+- **AST**: Added `AST_NODE_SOA_ZIP_EXPR`/`AST_NODE_SOA_UNZIP_EXPR` enum entries, actions, node names.
+- **Semantic analyser**: `soa_zip` validates all arguments are slices, creates SOA struct type with `_0`, `_1`, ... field names. `soa_unzip` validates operand is SOA type, resolves to tuple of element types.
+- **IR generator**: `soa_zip` extracts `data` pointers and `len` from each slice, finds minimum length, builds SOA struct with truncated slices. `soa_unzip` extracts fields from SOA struct and builds result tuple.
+- **Comma-chain arg collection**: Added `sem_collect_comma_chain_args()` and `ir_gen_collect_comma_chain_args()` helpers that walk left-associative comma-chain Expression trees.
+- **Tests**: `test_soa_zip.odin` (15 subtests: slice truncation, field access, soa_unzip round-trip).
+- **All 155 tests pass** (154 previous + 1 new).
+
+### Key learning
+In PEG grammars with `chainl1(Expression, Comma)`, the `Expression` rule itself consumes commas, so using `(Comma Expression)*` after an `Expression` never captures additional arguments. Use `ArgumentList` (which wraps a single `Expression?`) and walk the comma-chain tree to extract individual arguments.
+
 ## Accomplishments (session 2026-07-15)
 
 ### Implemented `#simd [N]T` vector types with swizzle and subscript
