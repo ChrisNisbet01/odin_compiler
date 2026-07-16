@@ -48,6 +48,16 @@ node_find_child(odin_grammar_node_t * node, odin_grammar_node_type_t type)
 }
 
 odin_grammar_node_t *
+expression_chain_unwrap(odin_grammar_node_t * node)
+{
+    if (node == NULL)
+        return NULL;
+    while (node->list.count >= 1 && node->list.children[0] != NULL)
+        node = node->list.children[0];
+    return node;
+}
+
+odin_grammar_node_t *
 node_find_op(odin_grammar_node_t * node)
 {
     if (node == NULL) return NULL;

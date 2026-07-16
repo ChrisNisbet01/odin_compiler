@@ -2678,9 +2678,7 @@ ir_gen_bit_set_assign_expr(
 {
     if (lhs_expr == NULL || rhs_node == NULL)
         return false;
-    odin_grammar_node_t * t = lhs_expr;
-    while (t && t->list.count >= 1 && t->list.children[0])
-        t = t->list.children[0];
+    odin_grammar_node_t * t = expression_chain_unwrap(lhs_expr);
     TypeDescriptor const * lhs_td = t ? t->resolved_type : NULL;
     if (lhs_td == NULL || lhs_td->kind != TD_KIND_BIT_SET)
         return false;
@@ -2696,9 +2694,7 @@ ir_gen_bit_set_assign_expr(
     }
 
     // Determine if RHS is also a bit_set
-    odin_grammar_node_t * rt = rhs_node;
-    while (rt && rt->list.count >= 1 && rt->list.children[0])
-        rt = rt->list.children[0];
+    odin_grammar_node_t * rt = expression_chain_unwrap(rhs_node);
     TypeDescriptor const * rhs_td = rt ? rt->resolved_type : NULL;
     bool rhs_is_bit_set = (rhs_td && rhs_td->kind == TD_KIND_BIT_SET);
 
@@ -3003,9 +2999,7 @@ ir_gen_assign_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMValueRef store_val = rhs_val;
     TypeDescriptor const * lhs_type_desc = NULL;
     odin_grammar_node_t * lhs_expr = node->list.children[0];
-    odin_grammar_node_t * t = lhs_expr;
-    while (t && t->list.count >= 1 && t->list.children[0])
-        t = t->list.children[0];
+    odin_grammar_node_t * t = expression_chain_unwrap(lhs_expr);
     if (t)
         lhs_type_desc = t->resolved_type;
     if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
@@ -3100,9 +3094,7 @@ ir_gen_assign_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMValueRef store_val = rhs_val;
     TypeDescriptor const * lhs_type_desc = NULL;
     odin_grammar_node_t * lhs_expr = node->list.children[0];
-    odin_grammar_node_t * t = lhs_expr;
-    while (t && t->list.count >= 1 && t->list.children[0])
-        t = t->list.children[0];
+    odin_grammar_node_t * t = expression_chain_unwrap(lhs_expr);
     if (t)
         lhs_type_desc = t->resolved_type;
     if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
