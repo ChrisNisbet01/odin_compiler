@@ -226,6 +226,11 @@ Add `const` correctness pass — many functions accept mutable pointers they don
 
 In `package_resolver.c`, these two structs have nearly identical fields. Consider a single `SourceFile` type with an `is_imported` flag.
 
+### 6.0 Get rid of all compiler warnings
+
+Unreferenced enums in switch statements. Use #pragma to disable warnings, or handle each case, perhaps with an error if the enum value shouldn't occur in the switch
+There is at least one case where a buffer passed to snprintf() may be too small.
+
 ---
 
 ## Execution Strategy

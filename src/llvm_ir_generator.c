@@ -36,6 +36,15 @@ static LLVMValueRef ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef in
 static LLVMValueRef ir_gen_call_calloc(IrGenContext * ctx, LLVMValueRef size);
 static void ir_gen_call_free(IrGenContext * ctx, LLVMValueRef ptr);
 static LLVMValueRef ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr);
+static bool ir_gen_resolve_aggregate_field(
+    IrGenContext * ctx,
+    TypeDescriptor const * agg_type,
+    char const * field_name,
+    LLVMTypeRef * out_struct_type,
+    int * out_field_idx,
+    TypeDescriptor const ** out_field_type,
+    char const ** out_error_name
+);
 
 // --- Context lifecycle ---
 
@@ -2042,89 +2051,27 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                     break;
                 }
 
-                // String member access: .len -> int, .data -> ^u8
-                if (cur_type->kind == TD_KIND_BASIC && cur_type->as.basic.name != NULL
-                    && strcmp(cur_type->as.basic.name, "string") == 0)
+                // Aggregate member access: string, slice, dynamic_array (.len, .data, .cap)
                 {
-                    LLVMTypeRef struct_type = cur_type->llvm_type;
+                    LLVMTypeRef struct_type = NULL;
                     int field_idx = -1;
-                    if (strcmp(field_name_node->text, "len") == 0)
+                    TypeDescriptor const * resolved_type = NULL;
+                    char const * error_name = NULL;
+                    if (ir_gen_resolve_aggregate_field(ctx, cur_type, field_name_node->text, &struct_type, &field_idx, &resolved_type, &error_name))
                     {
-                        field_idx = 1; // string struct: field 0 = data (ptr), field 1 = len (i64)
-                        cur_type = get_basic_type_by_name(ctx->type_registry, "int");
+                        LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                        LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
+                        ptr = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr, field_indices, 2, field_name_node->text);
+                        cur_type = resolved_type;
+                        break;
                     }
-                    else if (strcmp(field_name_node->text, "data") == 0)
+                    if (error_name)
                     {
-                        field_idx = 0;
-                        cur_type = get_or_create_pointer_type(ctx->type_registry,
-                            get_basic_type_by_name(ctx->type_registry, "u8"));
-                    }
-                    else
-                    {
-                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "string has no field named");
+                        char err_buf[128];
+                        snprintf(err_buf, sizeof(err_buf), "%s has no field named", error_name);
+                        ir_gen_error_collection_add(&ctx->errors, NULL, op, err_buf);
                         return NULL;
                     }
-                    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                    LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
-                    ptr = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr, field_indices, 2, field_name_node->text);
-                    break;
-                }
-
-                // Slice member access: .len -> int, .data -> ^T
-                if (cur_type->kind == TD_KIND_SLICE)
-                {
-                    LLVMTypeRef struct_type = cur_type->llvm_type;
-                    int field_idx = -1;
-                    if (strcmp(field_name_node->text, "len") == 0)
-                    {
-                        field_idx = 1;
-                        cur_type = get_basic_type_by_name(ctx->type_registry, "int");
-                    }
-                    else if (strcmp(field_name_node->text, "data") == 0)
-                    {
-                        field_idx = 0;
-                        cur_type = get_or_create_pointer_type(ctx->type_registry, cur_type->element_type);
-                    }
-                    else
-                    {
-                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "slice has no field named");
-                        return NULL;
-                    }
-                    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                    LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
-                    ptr = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr, field_indices, 2, field_name_node->text);
-                    break;
-                }
-
-                // Dynamic array member access: .len -> int, .cap -> int, .data -> ^T
-                if (cur_type->kind == TD_KIND_DYNAMIC_ARRAY)
-                {
-                    LLVMTypeRef struct_type = cur_type->llvm_type;
-                    int field_idx = -1;
-                    if (strcmp(field_name_node->text, "len") == 0)
-                    {
-                        field_idx = 1;
-                        cur_type = get_basic_type_by_name(ctx->type_registry, "int");
-                    }
-                    else if (strcmp(field_name_node->text, "cap") == 0)
-                    {
-                        field_idx = 2;
-                        cur_type = get_basic_type_by_name(ctx->type_registry, "int");
-                    }
-                    else if (strcmp(field_name_node->text, "data") == 0)
-                    {
-                        field_idx = 0;
-                        cur_type = get_or_create_pointer_type(ctx->type_registry, cur_type->element_type);
-                    }
-                    else
-                    {
-                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "dynamic array has no field named");
-                        return NULL;
-                    }
-                    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                    LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
-                    ptr = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr, field_indices, 2, field_name_node->text);
-                    break;
                 }
 
                 // Array .len -> compile-time constant
@@ -4223,6 +4170,86 @@ ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
     }
 }
 
+// --- Aggregate field resolution (string, slice, dynamic_array) ---
+
+static bool
+ir_gen_resolve_aggregate_field(
+    IrGenContext * ctx,
+    TypeDescriptor const * agg_type,
+    char const * field_name,
+    LLVMTypeRef * out_struct_type,
+    int * out_field_idx,
+    TypeDescriptor const ** out_field_type,
+    char const ** out_error_name
+)
+{
+    if (agg_type->kind == TD_KIND_BASIC && agg_type->as.basic.name != NULL
+        && strcmp(agg_type->as.basic.name, "string") == 0)
+    {
+        *out_struct_type = agg_type->llvm_type;
+        if (strcmp(field_name, "len") == 0)
+        {
+            *out_field_idx = 1;
+            *out_field_type = get_basic_type_by_name(ctx->type_registry, "int");
+            return true;
+        }
+        if (strcmp(field_name, "data") == 0)
+        {
+            *out_field_idx = 0;
+            *out_field_type = get_basic_type_by_name(ctx->type_registry, "u8");
+            return true;
+        }
+        if (out_error_name) *out_error_name = "string";
+        return false;
+    }
+
+    if (agg_type->kind == TD_KIND_SLICE)
+    {
+        *out_struct_type = agg_type->llvm_type;
+        if (strcmp(field_name, "len") == 0)
+        {
+            *out_field_idx = 1;
+            *out_field_type = get_basic_type_by_name(ctx->type_registry, "int");
+            return true;
+        }
+        if (strcmp(field_name, "data") == 0)
+        {
+            *out_field_idx = 0;
+            *out_field_type = get_or_create_pointer_type(ctx->type_registry, agg_type->element_type);
+            return true;
+        }
+        if (out_error_name) *out_error_name = "slice";
+        return false;
+    }
+
+    if (agg_type->kind == TD_KIND_DYNAMIC_ARRAY)
+    {
+        *out_struct_type = agg_type->llvm_type;
+        if (strcmp(field_name, "len") == 0)
+        {
+            *out_field_idx = 1;
+            *out_field_type = get_basic_type_by_name(ctx->type_registry, "int");
+            return true;
+        }
+        if (strcmp(field_name, "cap") == 0)
+        {
+            *out_field_idx = 2;
+            *out_field_type = get_basic_type_by_name(ctx->type_registry, "int");
+            return true;
+        }
+        if (strcmp(field_name, "data") == 0)
+        {
+            *out_field_idx = 0;
+            *out_field_type = get_or_create_pointer_type(ctx->type_registry, agg_type->element_type);
+            return true;
+        }
+        if (out_error_name) *out_error_name = "dynamic array";
+        return false;
+    }
+
+    return false;
+}
+
 // --- Bounds checking support ---
 
 static LLVMValueRef
@@ -5478,110 +5505,34 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                     cur_type = pointee;
             }
 
-            // String member access: .len -> int, .data -> ^u8
-            if (cur_type && cur_type->kind == TD_KIND_BASIC && cur_type->as.basic.name != NULL
-                && strcmp(cur_type->as.basic.name, "string") == 0)
+            // Aggregate member access: string, slice, dynamic_array (.len, .data, .cap)
             {
-                LLVMTypeRef struct_type = cur_type->llvm_type;
+                LLVMTypeRef struct_type = NULL;
                 int field_idx = -1;
-                if (strcmp(field_name_node->text, "len") == 0)
+                TypeDescriptor const * resolved_type = NULL;
+                char const * error_name = NULL;
+                if (ir_gen_resolve_aggregate_field(ctx, cur_type, field_name_node->text, &struct_type, &field_idx, &resolved_type, &error_name))
                 {
-                    field_idx = 1;
-                    cur_type = get_basic_type_by_name(ctx->type_registry, "int");
-                }
-                else if (strcmp(field_name_node->text, "data") == 0)
-                {
-                    field_idx = 0;
-                    cur_type = get_or_create_pointer_type(ctx->type_registry,
-                        get_basic_type_by_name(ctx->type_registry, "u8"));
-                }
-                else
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "string has no field named");
+                    LLVMValueRef ptr_val = val;
+                    if (LLVMGetTypeKind(LLVMTypeOf(ptr_val)) != LLVMPointerTypeKind)
+                    {
+                        LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, struct_type, "agg.ptr");
+                        LLVMBuildStore(ctx->builder, ptr_val, tmp);
+                        ptr_val = tmp;
+                    }
+                    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+                    LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
+                    val = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr_val, field_indices, 2, field_name_node->text);
+                    cur_type = resolved_type;
                     break;
                 }
-                LLVMValueRef ptr_val = val;
-                if (LLVMGetTypeKind(LLVMTypeOf(ptr_val)) != LLVMPointerTypeKind)
+                if (error_name)
                 {
-                    LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, struct_type, "str.ptr");
-                    LLVMBuildStore(ctx->builder, ptr_val, tmp);
-                    ptr_val = tmp;
-                }
-                LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
-                val = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr_val, field_indices, 2, field_name_node->text);
-                break;
-            }
-
-            // Slice member access: .len -> int, .data -> ^T
-            if (cur_type && cur_type->kind == TD_KIND_SLICE)
-            {
-                LLVMTypeRef struct_type = cur_type->llvm_type;
-                int field_idx = -1;
-                if (strcmp(field_name_node->text, "len") == 0)
-                {
-                    field_idx = 1;
-                    cur_type = get_basic_type_by_name(ctx->type_registry, "int");
-                }
-                else if (strcmp(field_name_node->text, "data") == 0)
-                {
-                    field_idx = 0;
-                    cur_type = get_or_create_pointer_type(ctx->type_registry, cur_type->element_type);
-                }
-                else
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "slice has no field named");
+                    char err_buf[128];
+                    snprintf(err_buf, sizeof(err_buf), "%s has no field named", error_name);
+                    ir_gen_error_collection_add(&ctx->errors, NULL, op, err_buf);
                     break;
                 }
-                LLVMValueRef ptr_val = val;
-                if (LLVMGetTypeKind(LLVMTypeOf(ptr_val)) != LLVMPointerTypeKind)
-                {
-                    LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, struct_type, "slice.ptr");
-                    LLVMBuildStore(ctx->builder, ptr_val, tmp);
-                    ptr_val = tmp;
-                }
-                LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
-                val = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr_val, field_indices, 2, field_name_node->text);
-                break;
-            }
-
-            // Dynamic array member access: .len -> int, .cap -> int, .data -> ^T
-            if (cur_type && cur_type->kind == TD_KIND_DYNAMIC_ARRAY)
-            {
-                LLVMTypeRef struct_type = cur_type->llvm_type;
-                int field_idx = -1;
-                if (strcmp(field_name_node->text, "len") == 0)
-                {
-                    field_idx = 1;
-                    cur_type = get_basic_type_by_name(ctx->type_registry, "int");
-                }
-                else if (strcmp(field_name_node->text, "cap") == 0)
-                {
-                    field_idx = 2;
-                    cur_type = get_basic_type_by_name(ctx->type_registry, "int");
-                }
-                else if (strcmp(field_name_node->text, "data") == 0)
-                {
-                    field_idx = 0;
-                    cur_type = get_or_create_pointer_type(ctx->type_registry, cur_type->element_type);
-                }
-                else
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "dynamic array has no field named");
-                    break;
-                }
-                LLVMValueRef ptr_val = val;
-                if (LLVMGetTypeKind(LLVMTypeOf(ptr_val)) != LLVMPointerTypeKind)
-                {
-                    LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, struct_type, "da.ptr");
-                    LLVMBuildStore(ctx->builder, ptr_val, tmp);
-                    ptr_val = tmp;
-                }
-                LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
-                val = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr_val, field_indices, 2, field_name_node->text);
-                break;
             }
 
             // Array member access: .len -> int (compile-time constant)
