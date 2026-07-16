@@ -1293,7 +1293,7 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         var_type = type_descriptor_get_int64_type(ctx->type_registry);
     }
 
-    // Multi-return destructuring: a, b := foo()
+    // Multi-return / tuple destructuring: a, b := foo()  or  a, b := tuple_val
     if (id_count > 1 && init_node)
     {
         LLVMValueRef struct_val = ir_gen_node(ctx, init_node);
@@ -1307,17 +1307,22 @@ ir_gen_variable_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 continue;
 
             LLVMValueRef field_val = LLVMBuildExtractValue(ctx->builder, struct_val, (unsigned)i, name_node->text);
+            TypeDescriptor const * field_type = NULL;
             if (var_type->kind == TD_KIND_PROC && var_type->proc_metadata.return_count > (int)i)
             {
-                TypeDescriptor const * field_type = var_type->proc_metadata.returns[i];
-                LLVMTypeRef field_llvm = field_type ? field_type->llvm_type : LLVMTypeOf(field_val);
-                LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, field_llvm, name_node->text);
-                LLVMSetAlignment(alloca, LLVMABIAlignmentOfType(ctx->data_layout, field_llvm));
-                LLVMBuildStore(ctx->builder, LLVMConstNull(field_llvm), alloca);
-                LLVMBuildStore(ctx->builder, field_val, alloca);
-                TypedValue tv = create_typed_value(alloca, field_type, true);
-                generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
+                field_type = var_type->proc_metadata.returns[i];
             }
+            else if (var_type->kind == TD_KIND_TUPLE && var_type->as.tuple.element_count > (int)i)
+            {
+                field_type = var_type->as.tuple.element_types[i];
+            }
+            LLVMTypeRef field_llvm = field_type ? field_type->llvm_type : LLVMTypeOf(field_val);
+            LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, field_llvm, name_node->text);
+            LLVMSetAlignment(alloca, LLVMABIAlignmentOfType(ctx->data_layout, field_llvm));
+            LLVMBuildStore(ctx->builder, LLVMConstNull(field_llvm), alloca);
+            LLVMBuildStore(ctx->builder, field_val, alloca);
+            TypedValue tv = create_typed_value(alloca, field_type, true);
+            generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
         }
         return struct_val;
     }

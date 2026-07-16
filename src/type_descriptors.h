@@ -71,6 +71,7 @@ typedef enum
     TD_KIND_MULTI_POINTER,
     TD_KIND_OVERLOAD_BUNDLE,
     TD_KIND_VECTOR,
+    TD_KIND_TUPLE,
 } td_kind_t;
 
 typedef struct
@@ -162,6 +163,11 @@ typedef struct TypeDescriptor
             TypeDescriptor const * element_type;
             int lane_count;
         } vector;
+        struct
+        {
+            TypeDescriptor const ** element_types;
+            int element_count;
+        } tuple;
     } as;
 } TypeDescriptor;
 
@@ -224,6 +230,9 @@ get_or_create_multi_pointer_type(TypeDescriptors * registry, TypeDescriptor cons
 
 TypeDescriptor const *
 get_or_create_vector_type(TypeDescriptors * registry, TypeDescriptor const * element_type, int lane_count);
+
+TypeDescriptor const *
+get_or_create_tuple_type(TypeDescriptors * registry, TypeDescriptor const ** element_types, int element_count);
 
 TypeDescriptor const *
 get_or_create_overload_bundle_type(

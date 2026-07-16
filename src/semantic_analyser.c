@@ -1567,6 +1567,46 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
         return maybe_type;
     }
 
+    case AST_NODE_TUPLE_TYPE:
+    {
+        // TupleType = LBracket TypePrefix (Comma TypePrefix)+ RBracket
+        // Children: [TypePrefix, TypePrefix, ...]
+        int elem_count = (int)node->list.count;
+        if (elem_count <= 0)
+            return NULL;
+
+        TypeDescriptor const ** elem_types = (TypeDescriptor const **)malloc(
+            (size_t)elem_count * sizeof(TypeDescriptor const *)
+        );
+        int valid_count = 0;
+        for (int i = 0; i < elem_count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL) continue;
+            TypeDescriptor const * et = sem_resolve_type_expr(ctx, child);
+            if (et == NULL)
+            {
+                free(elem_types);
+                return NULL;
+            }
+            elem_types[valid_count++] = et;
+        }
+
+        if (valid_count == 0)
+        {
+            free(elem_types);
+            return NULL;
+        }
+
+        TypeDescriptor const * tuple_type = get_or_create_tuple_type(
+            ctx->type_registry, elem_types, valid_count
+        );
+        free(elem_types);
+        if (tuple_type)
+            node->resolved_type = (TypeDescriptor *)tuple_type;
+        return tuple_type;
+    }
+
     case AST_NODE_VECTOR_TYPE:
     {
         // VectorType = KwSimd LBracket IntegerLiteral RBracket TypePrefix
@@ -4662,6 +4702,20 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             {
                 // Check init type is compatible with declared variable type
                 sem_check_assignment(ctx, node, var_type, init_type, init_node);
+            }
+
+            // Tuple destructuring: a, b := some_tuple
+            if (id_count > 1 && init_type != NULL && init_type->kind == TD_KIND_TUPLE)
+            {
+                for (size_t vi = 0; vi < id_count && vi < (size_t)init_type->as.tuple.element_count; vi++)
+                {
+                    odin_grammar_node_t * name_node = id_list->list.children[vi];
+                    if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
+                        continue;
+                    TypedValue tv = create_typed_value(NULL, init_type->as.tuple.element_types[vi], true);
+                    scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+                }
+                break;
             }
 
             // Multi-return destructuring: a, b := foo()

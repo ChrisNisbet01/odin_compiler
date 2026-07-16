@@ -558,6 +558,22 @@ type_write_canonical_name_internal(TypeDescriptor const * td, char * buf, size_t
         break;
     }
 
+    case TD_KIND_TUPLE:
+    {
+        size_t pos = 0;
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "[");
+        for (int i = 0; i < td->as.tuple.element_count; i++)
+        {
+            if (i > 0)
+                pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, ", ");
+            char inner[256];
+            type_write_canonical_name_internal(td->as.tuple.element_types[i], inner, sizeof(inner), depth + 1);
+            pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "%s", inner);
+        }
+        pos += snprintf(buf + pos, buf_size > pos ? buf_size - pos : 0, "]");
+        break;
+    }
+
     case TD_KIND_OVERLOAD_BUNDLE:
     {
         size_t pos = 0;
@@ -626,6 +642,10 @@ type_descriptors_destroy_registry(TypeDescriptors * registry)
         {
             free(registry->types[i]->as.overload_bundle.candidate_types);
             free(registry->types[i]->as.overload_bundle.candidate_symbols);
+        }
+        else if (registry->types[i]->kind == TD_KIND_TUPLE)
+        {
+            free((void *)registry->types[i]->as.tuple.element_types);
         }
         free(registry->types[i]);
     }
@@ -1433,6 +1453,59 @@ get_or_create_vector_type(TypeDescriptors * registry, TypeDescriptor const * ele
     td->as.vector.element_type = element_type;
     td->as.vector.lane_count = lane_count;
     td->llvm_type = LLVMVectorType(element_type->llvm_type, (unsigned)lane_count);
+    type_compute_hash(td);
+    return td;
+}
+
+TypeDescriptor const *
+get_or_create_tuple_type(TypeDescriptors * registry, TypeDescriptor const ** element_types, int element_count)
+{
+    if (registry == NULL || element_types == NULL || element_count <= 0)
+        return NULL;
+
+    // Deduplicate by comparing element types
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_TUPLE)
+            continue;
+        if (t->as.tuple.element_count != element_count)
+            continue;
+        bool match = true;
+        for (int j = 0; j < element_count; j++)
+        {
+            if (t->as.tuple.element_types[j] != element_types[j])
+            {
+                match = false;
+                break;
+            }
+        }
+        if (match)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_TUPLE;
+    td->as.tuple.element_count = element_count;
+    td->as.tuple.element_types = (TypeDescriptor const **)malloc(
+        (size_t)element_count * sizeof(TypeDescriptor const *)
+    );
+    for (int j = 0; j < element_count; j++)
+    {
+        td->as.tuple.element_types[j] = element_types[j];
+    }
+
+    // LLVM type: anonymous struct with fields matching tuple element types
+    LLVMTypeRef * field_types = malloc((size_t)element_count * sizeof(LLVMTypeRef));
+    for (int j = 0; j < element_count; j++)
+    {
+        field_types[j] = element_types[j] ? element_types[j]->llvm_type : LLVMInt64TypeInContext(registry->context);
+    }
+    td->llvm_type = LLVMStructTypeInContext(registry->context, field_types, (unsigned)element_count, false);
+    free(field_types);
+
     type_compute_hash(td);
     return td;
 }

@@ -348,8 +348,10 @@ MaybeType = KwMaybe LParen TypePrefix RParen @AST_ACTION_MAYBE_TYPE;
 
 VectorType = KwSimd LBracket IntegerLiteral RBracket TypePrefix @AST_ACTION_VECTOR_TYPE;
 
+TupleType = LBracket TypePrefix (Comma TypePrefix)+ RBracket @AST_ACTION_TUPLE_TYPE;
+
 // Base types for TypeName (no left recursion)
-TypePrefix = PointerType | DynamicArrayType | SliceType | MultiPointerType | ArrayType
+TypePrefix = TupleType | PointerType | DynamicArrayType | SliceType | MultiPointerType | ArrayType
            | MapType | VectorType | ProcedureSignature
            | StructType | UnionType | EnumType | BitFieldType | BitSetType
            | DistinctType | BasicType | StructTypeRef | EnumTypeRef

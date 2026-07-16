@@ -28,6 +28,7 @@ is_type_node(odin_grammar_node_t * node)
         case AST_NODE_MULTI_POINTER_TYPE:
         case AST_NODE_MAYBE_TYPE:
         case AST_NODE_VECTOR_TYPE:
+        case AST_NODE_TUPLE_TYPE:
             return true;
         default:
             return false;
