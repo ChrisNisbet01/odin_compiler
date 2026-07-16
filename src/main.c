@@ -541,16 +541,15 @@ main(int argc, char * argv[])
     if (do_codegen && sem_ok)
     {
         IrGenContext * ir_ctx = ir_gen_context_create("main", type_reg, gen_ctx);
-        ir_ctx->imports = sem_ctx.imports;
-        ir_ctx->import_count = sem_ctx.import_count;
-        // IR gen uses node->file_path for errors now, so we can pass NULL
-        ir_ctx->file_path = NULL;
         if (ir_ctx == NULL)
         {
             fprintf(stderr, "Error: Failed to create IR generator context.\n");
-            resources_free(&r);
-            return EXIT_FAILURE;
+            exit_code = EXIT_FAILURE;
+            goto cleanup;
         }
+        ir_ctx->imports = sem_ctx.imports;
+        ir_ctx->import_count = sem_ctx.import_count;
+        ir_ctx->file_path = NULL;
 
         bool ir_ok = ir_generate(ir_ctx, ast_root);
 
@@ -595,7 +594,7 @@ main(int argc, char * argv[])
         ir_gen_context_destroy(ir_ctx);
     }
 
-    exit_code = EXIT_SUCCESS;
+    if (sem_ok) exit_code = EXIT_SUCCESS;
 
 cleanup:
     resources_free(&r);
