@@ -43,6 +43,12 @@ static LLVMValueRef ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef in
 static LLVMValueRef ir_gen_call_calloc(IrGenContext * ctx, LLVMValueRef size);
 static void ir_gen_call_free(IrGenContext * ctx, LLVMValueRef ptr);
 static LLVMValueRef ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr);
+static LLVMValueRef ir_gen_map_subscript(IrGenContext * ctx, LLVMValueRef map_val,
+                                          TypeDescriptor const * map_type,
+                                          LLVMValueRef index_val,
+                                          TypeDescriptor const ** out_val_type,
+                                          bool is_lvalue, char const * prefix);
+
 static bool ir_gen_resolve_aggregate_field(
     IrGenContext * ctx,
     TypeDescriptor const * agg_type,
@@ -555,62 +561,14 @@ ir_gen_rune_literal(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
     char const * content = text + 1;
     size_t content_len = text_len - 2;
-    unsigned long long val = 0;
-    if (content_len == 1)
+    unsigned char val = 0;
+    if (content_len >= 2 && content[0] == '\\')
     {
-        // Simple character: 'a'
-        val = (unsigned char)content[0];
+        size_t consumed = 0;
+        parse_escape_sequence(content, 0, content_len, &val, &consumed);
     }
-    else if (content_len >= 2 && content[0] == '\\')
+    else if (content_len >= 1)
     {
-        // Escape sequence
-        switch (content[1])
-        {
-        case 'a':  val = 0x07; break;
-        case 'b':  val = 0x08; break;
-        case 'e':  val = 0x1B; break;
-        case 'f':  val = 0x0C; break;
-        case 'n':  val = 0x0A; break;
-        case 'r':  val = 0x0D; break;
-        case 't':  val = 0x09; break;
-        case 'v':  val = 0x0B; break;
-        case '\\': val = 0x5C; break;
-        case '\'': val = 0x27; break;
-        case '"':  val = 0x22; break;
-        case '0':  val = 0x00; break;
-        case 'x':
-            if (content_len >= 4)
-            {
-                unsigned long long d = 0;
-                for (size_t i = 2; i < content_len; i++)
-                {
-                    char c = content[i];
-                    unsigned long long n;
-                    if (c >= '0' && c <= '9')
-                        n = (unsigned long long)(c - '0');
-                    else if (c >= 'a' && c <= 'f')
-                        n = (unsigned long long)(c - 'a' + 10);
-                    else if (c >= 'A' && c <= 'F')
-                        n = (unsigned long long)(c - 'A' + 10);
-                    else
-                        break;
-                    d = d * 16 + n;
-                }
-                val = d;
-            }
-            else
-            {
-                val = (unsigned char)content[1];
-            }
-            break;
-        default:
-            val = (unsigned char)content[1];
-            break;
-        }
-    }
-    else
-    {
-        // Multi-char or unknown
         val = (unsigned char)content[0];
     }
     return LLVMConstInt(LLVMInt32TypeInContext(ctx->context), val, false);
@@ -1583,6 +1541,218 @@ slice_get_bounds_info(odin_grammar_node_t * op)
     return info;
 }
 
+static LLVMBasicBlockRef
+ir_gen_map_append_block(IrGenContext * ctx, char const * prefix, char const * suffix)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s%s", prefix, suffix);
+    return LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), buf);
+}
+
+static LLVMValueRef
+ir_gen_map_subscript(IrGenContext * ctx, LLVMValueRef map_val,
+                     TypeDescriptor const * map_type,
+                     LLVMValueRef index_val,
+                     TypeDescriptor const ** out_val_type,
+                     bool is_lvalue, char const * prefix)
+{
+    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i8t = LLVMInt8TypeInContext(ctx->context);
+    LLVMValueRef zero64 = LLVMConstInt(i64t, 0, false);
+    LLVMValueRef one64 = LLVMConstInt(i64t, 1, false);
+    LLVMValueRef zero32 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+
+    TypeDescriptor const * key_td = map_type->as.map.key_type;
+    TypeDescriptor const * val_td = map_type->as.map.value_type;
+
+    if (out_val_type)
+        *out_val_type = val_td;
+
+    LLVMValueRef data_ptr = NULL;
+    if (is_lvalue || LLVMGetTypeKind(LLVMTypeOf(map_val)) == LLVMPointerTypeKind)
+    {
+        LLVMValueRef didx[] = {zero32, zero32};
+        LLVMValueRef data_gep = LLVMBuildInBoundsGEP2(
+            ctx->builder, map_type->llvm_type, map_val, didx, 2, "");
+        data_ptr = LLVMBuildLoad2(ctx->builder, LLVMPointerType(i8t, 0), data_gep, "");
+    }
+    else
+    {
+        data_ptr = LLVMBuildExtractValue(ctx->builder, map_val, 0, "");
+    }
+    if (data_ptr == NULL)
+        return NULL;
+
+    LLVMValueRef cap_off = LLVMConstInt(i64t, 8, false);
+    LLVMValueRef cap_ptr = LLVMBuildPointerCast(ctx->builder,
+        LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &cap_off, 1, ""),
+        LLVMPointerType(i64t, 0), "");
+    LLVMValueRef cap_val = LLVMBuildLoad2(ctx->builder, i64t, cap_ptr, "");
+
+    LLVMValueRef ks_off = LLVMConstInt(i64t, 16, false);
+    LLVMValueRef ks_ptr = LLVMBuildPointerCast(ctx->builder,
+        LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &ks_off, 1, ""),
+        LLVMPointerType(i64t, 0), "");
+    LLVMValueRef key_sz = LLVMBuildLoad2(ctx->builder, i64t, ks_ptr, "");
+
+    LLVMValueRef vs_off = LLVMConstInt(i64t, 24, false);
+    LLVMValueRef vs_ptr = LLVMBuildPointerCast(ctx->builder,
+        LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &vs_off, 1, ""),
+        LLVMPointerType(i64t, 0), "");
+    LLVMValueRef val_sz = LLVMBuildLoad2(ctx->builder, i64t, vs_ptr, "");
+
+    LLVMValueRef hdr32 = LLVMConstInt(i64t, 32, false);
+    LLVMValueRef entries_base = LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &hdr32, 1, "");
+
+    LLVMValueRef stride = LLVMBuildAdd(ctx->builder, one64,
+        LLVMBuildAdd(ctx->builder, key_sz, val_sz, ""), "");
+    LLVMValueRef ks_plus_one = LLVMBuildAdd(ctx->builder, key_sz, one64, "");
+
+    LLVMValueRef key_to_compare = LLVMBuildIntCast(ctx->builder, index_val, key_td->llvm_type, "");
+
+    LLVMValueRef res_alloca = NULL;
+    LLVMValueRef fe_alloca = NULL;
+    LLVMValueRef cnt_ptr = NULL;
+    if (is_lvalue)
+    {
+        LLVMValueRef target_ptr_type = LLVMPointerType(val_td->llvm_type, 0);
+        res_alloca = LLVMBuildAlloca(ctx->builder, target_ptr_type, "");
+        LLVMBuildStore(ctx->builder, LLVMConstNull(target_ptr_type), res_alloca);
+
+        fe_alloca = LLVMBuildAlloca(ctx->builder, i64t, "");
+        LLVMBuildStore(ctx->builder, cap_val, fe_alloca);
+
+        LLVMValueRef cnt_off = LLVMConstInt(i64t, 0, false);
+        cnt_ptr = LLVMBuildPointerCast(ctx->builder,
+            LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &cnt_off, 1, ""),
+            LLVMPointerType(i64t, 0), "");
+    }
+
+    LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(ctx->builder);
+    LLVMBasicBlockRef loop_bb = ir_gen_map_append_block(ctx, prefix, "loop");
+    LLVMBasicBlockRef body_bb = ir_gen_map_append_block(ctx, prefix, "body");
+    LLVMBasicBlockRef kchk_bb = ir_gen_map_append_block(ctx, prefix, "kchk");
+    LLVMBasicBlockRef found_bb = ir_gen_map_append_block(ctx, prefix, "found");
+    LLVMBasicBlockRef next_bb = ir_gen_map_append_block(ctx, prefix, "next");
+
+    LLVMBasicBlockRef empty_bb = NULL;
+    LLVMBasicBlockRef after_bb = NULL;
+    LLVMBasicBlockRef claim_bb = NULL;
+    LLVMBasicBlockRef notfound_bb = NULL;
+
+    if (is_lvalue)
+    {
+        empty_bb = ir_gen_map_append_block(ctx, prefix, "empty");
+        after_bb = ir_gen_map_append_block(ctx, prefix, "after");
+        claim_bb = ir_gen_map_append_block(ctx, prefix, "claim");
+    }
+    else
+    {
+        notfound_bb = ir_gen_map_append_block(ctx, prefix, "notfound");
+    }
+    LLVMBasicBlockRef merge_bb = ir_gen_map_append_block(ctx, prefix, "merge");
+
+    LLVMBuildBr(ctx->builder, loop_bb);
+    LLVMPositionBuilderAtEnd(ctx->builder, loop_bb);
+    LLVMValueRef i_phi = LLVMBuildPhi(ctx->builder, i64t, "");
+    LLVMValueRef loop_cmp = LLVMBuildICmp(ctx->builder, LLVMIntULT, i_phi, cap_val, "");
+    LLVMBuildCondBr(ctx->builder, loop_cmp, body_bb, is_lvalue ? after_bb : notfound_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
+    LLVMValueRef ioff = LLVMBuildMul(ctx->builder, i_phi, stride, "");
+    LLVMValueRef entry_ptr = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entries_base, &ioff, 1, "");
+    LLVMValueRef occupied = LLVMBuildLoad2(ctx->builder, i8t, entry_ptr, "");
+    LLVMValueRef occ_cmp = LLVMBuildICmp(ctx->builder, LLVMIntNE, occupied, LLVMConstNull(i8t), "");
+    LLVMBuildCondBr(ctx->builder, occ_cmp, kchk_bb, is_lvalue ? empty_bb : next_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, kchk_bb);
+    LLVMValueRef key_ptr = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entry_ptr, &one64, 1, "");
+    LLVMValueRef kp_typed = LLVMBuildPointerCast(ctx->builder, key_ptr, LLVMPointerType(key_td->llvm_type, 0), "");
+    LLVMValueRef loaded_key = LLVMBuildLoad2(ctx->builder, key_td->llvm_type, kp_typed, "");
+    LLVMValueRef key_eq = LLVMBuildICmp(ctx->builder, LLVMIntEQ, key_to_compare, loaded_key, "");
+    LLVMBuildCondBr(ctx->builder, key_eq, found_bb, next_bb);
+
+    LLVMPositionBuilderAtEnd(ctx->builder, found_bb);
+    LLVMValueRef val_ptr2 = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entry_ptr, &ks_plus_one, 1, "");
+    LLVMValueRef vp_typed = LLVMBuildPointerCast(ctx->builder, val_ptr2, LLVMPointerType(val_td->llvm_type, 0), "");
+    LLVMValueRef loaded_val = NULL;
+    if (is_lvalue)
+    {
+        LLVMBuildStore(ctx->builder, vp_typed, res_alloca);
+        LLVMBuildBr(ctx->builder, merge_bb);
+    }
+    else
+    {
+        loaded_val = LLVMBuildLoad2(ctx->builder, val_td->llvm_type, vp_typed, "");
+        LLVMBuildBr(ctx->builder, merge_bb);
+    }
+
+    LLVMPositionBuilderAtEnd(ctx->builder, next_bb);
+    LLVMValueRef next_i = LLVMBuildAdd(ctx->builder, i_phi, one64, "");
+    LLVMBuildBr(ctx->builder, loop_bb);
+
+    LLVMValueRef i_incoming[] = {zero64, next_i};
+    LLVMBasicBlockRef i_blocks[] = {saved_bb, next_bb};
+    LLVMAddIncoming(i_phi, i_incoming, i_blocks, 2);
+
+    if (is_lvalue)
+    {
+        LLVMPositionBuilderAtEnd(ctx->builder, empty_bb);
+        LLVMValueRef cur_fe = LLVMBuildLoad2(ctx->builder, i64t, fe_alloca, "");
+        LLVMValueRef fe_is_default = LLVMBuildICmp(ctx->builder, LLVMIntEQ, cur_fe, cap_val, "");
+        LLVMValueRef new_fe = LLVMBuildSelect(ctx->builder, fe_is_default, i_phi, cur_fe, "");
+        LLVMBuildStore(ctx->builder, new_fe, fe_alloca);
+        LLVMBuildBr(ctx->builder, next_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, after_bb);
+        LLVMValueRef fo_res = LLVMBuildLoad2(
+            ctx->builder, LLVMPointerType(val_td->llvm_type, 0), res_alloca, "");
+        LLVMValueRef fo_isnull = LLVMBuildICmp(ctx->builder, LLVMIntEQ, fo_res,
+            LLVMConstNull(LLVMPointerType(val_td->llvm_type, 0)), "");
+        LLVMValueRef fe_val = LLVMBuildLoad2(ctx->builder, i64t, fe_alloca, "");
+        LLVMValueRef has_empty = LLVMBuildICmp(ctx->builder, LLVMIntULT, fe_val, cap_val, "");
+        LLVMValueRef need_claim = LLVMBuildAnd(ctx->builder, fo_isnull, has_empty, "");
+        LLVMBuildCondBr(ctx->builder, need_claim, claim_bb, merge_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, claim_bb);
+        LLVMValueRef c_ioff = LLVMBuildMul(ctx->builder, fe_val, stride, "");
+        LLVMValueRef c_entry = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entries_base, &c_ioff, 1, "");
+        LLVMBuildStore(ctx->builder, LLVMConstInt(i8t, 1, false), c_entry);
+        LLVMValueRef c_kp = LLVMBuildInBoundsGEP2(ctx->builder, i8t, c_entry, &one64, 1, "");
+        LLVMValueRef c_kpt = LLVMBuildPointerCast(ctx->builder, c_kp, LLVMPointerType(key_td->llvm_type, 0), "");
+        LLVMBuildStore(ctx->builder, key_to_compare, c_kpt);
+        LLVMValueRef old_cnt = LLVMBuildLoad2(ctx->builder, i64t, cnt_ptr, "");
+        LLVMBuildStore(ctx->builder, LLVMBuildAdd(ctx->builder, old_cnt, one64, ""), cnt_ptr);
+        LLVMValueRef c_vp = LLVMBuildInBoundsGEP2(ctx->builder, i8t, c_entry, &ks_plus_one, 1, "");
+        LLVMValueRef c_vpt = LLVMBuildPointerCast(ctx->builder, c_vp, LLVMPointerType(val_td->llvm_type, 0), "");
+        LLVMBuildStore(ctx->builder, c_vpt, res_alloca);
+        LLVMBuildBr(ctx->builder, merge_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
+        LLVMValueRef result_ptr = LLVMBuildLoad2(
+            ctx->builder, LLVMPointerType(val_td->llvm_type, 0), res_alloca, "");
+        if (result_ptr == NULL)
+            return NULL;
+        LLVMValueRef tmp_alloca = LLVMBuildAlloca(ctx->builder, val_td->llvm_type, "");
+        LLVMValueRef ptr_null = LLVMBuildICmp(ctx->builder, LLVMIntEQ, result_ptr,
+            LLVMConstNull(LLVMPointerType(val_td->llvm_type, 0)), "");
+        return LLVMBuildSelect(ctx->builder, ptr_null, tmp_alloca, result_ptr, "");
+    }
+    else
+    {
+        LLVMPositionBuilderAtEnd(ctx->builder, notfound_bb);
+        LLVMValueRef zero_val = LLVMConstNull(val_td->llvm_type);
+        LLVMBuildBr(ctx->builder, merge_bb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
+        LLVMValueRef result_phi = LLVMBuildPhi(ctx->builder, val_td->llvm_type, "");
+        LLVMValueRef phi_vals[] = {loaded_val, zero_val};
+        LLVMBasicBlockRef phi_blocks[] = {found_bb, notfound_bb};
+        LLVMAddIncoming(result_phi, phi_vals, phi_blocks, 2);
+        return result_phi;
+    }
+}
+
 // Evaluate a node as an lvalue (return a pointer to the storage location).
 static LLVMValueRef
 ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
@@ -1782,182 +1952,9 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
                 else if (cur_type->kind == TD_KIND_MAP)
                 {
-                    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
-                    LLVMTypeRef i8t = LLVMInt8TypeInContext(ctx->context);
-                    LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->context);
-                    LLVMValueRef zero64 = LLVMConstInt(i64t, 0, false);
-                    LLVMValueRef one64 = LLVMConstInt(i64t, 1, false);
-                    LLVMValueRef zero32 = LLVMConstInt(i32t, 0, false);
-
-                    TypeDescriptor const * key_td = cur_type->as.map.key_type;
-                    TypeDescriptor const * val_td = cur_type->as.map.value_type;
-
-                    LLVMValueRef didx[] = {zero32, zero32};
-                    LLVMValueRef data_gep
-                        = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, ptr, didx, 2, "map.dgep");
-                    LLVMValueRef data_ptr = LLVMBuildLoad2(ctx->builder, LLVMPointerType(i8t, 0), data_gep, "map.data");
-
-                    LLVMValueRef cap_off = LLVMConstInt(i64t, 8, false);
-                    LLVMValueRef cap_ptr = LLVMBuildPointerCast(
-                        ctx->builder,
-                        LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &cap_off, 1, "map.cap.gep"),
-                        LLVMPointerType(i64t, 0),
-                        ""
-                    );
-                    LLVMValueRef cap_val = LLVMBuildLoad2(ctx->builder, i64t, cap_ptr, "map.cap");
-
-                    LLVMValueRef ks_off = LLVMConstInt(i64t, 16, false);
-                    LLVMValueRef ks_ptr = LLVMBuildPointerCast(
-                        ctx->builder,
-                        LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &ks_off, 1, "map.ks.gep"),
-                        LLVMPointerType(i64t, 0),
-                        ""
-                    );
-                    LLVMValueRef key_sz = LLVMBuildLoad2(ctx->builder, i64t, ks_ptr, "map.ks");
-
-                    LLVMValueRef vs_off = LLVMConstInt(i64t, 24, false);
-                    LLVMValueRef vs_ptr = LLVMBuildPointerCast(
-                        ctx->builder,
-                        LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &vs_off, 1, "map.vs.gep"),
-                        LLVMPointerType(i64t, 0),
-                        ""
-                    );
-                    LLVMValueRef val_sz = LLVMBuildLoad2(ctx->builder, i64t, vs_ptr, "map.vs");
-
-                    LLVMValueRef hdr32 = LLVMConstInt(i64t, 32, false);
-                    LLVMValueRef entries_base
-                        = LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &hdr32, 1, "map.ents");
-
-                    LLVMValueRef stride = LLVMBuildAdd(
-                        ctx->builder, one64, LLVMBuildAdd(ctx->builder, key_sz, val_sz, "kvsz"), "map.stride"
-                    );
-                    LLVMValueRef ks_plus_one = LLVMBuildAdd(ctx->builder, key_sz, one64, "map.ksp1");
-
-                    LLVMValueRef key_to_compare
-                        = LLVMBuildIntCast(ctx->builder, index_val, key_td->llvm_type, "map.key.cast");
-
-                    LLVMValueRef res_alloca
-                        = LLVMBuildAlloca(ctx->builder, LLVMPointerType(val_td->llvm_type, 0), "m.res.alloca");
-                    LLVMBuildStore(ctx->builder, LLVMConstNull(LLVMPointerType(val_td->llvm_type, 0)), res_alloca);
-
-                    LLVMValueRef fe_alloca = LLVMBuildAlloca(ctx->builder, i64t, "m.fe.alloca");
-                    LLVMBuildStore(ctx->builder, cap_val, fe_alloca);
-
-                    LLVMValueRef cnt_off = LLVMConstInt(i64t, 0, false);
-                    LLVMValueRef cnt_ptr = LLVMBuildPointerCast(
-                        ctx->builder,
-                        LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &cnt_off, 1, "map.cnt.gep"),
-                        LLVMPointerType(i64t, 0),
-                        ""
-                    );
-
-                    LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(ctx->builder);
-                    LLVMBasicBlockRef loop_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.loop");
-                    LLVMBasicBlockRef body_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.body");
-                    LLVMBasicBlockRef kchk_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.kchk");
-                    LLVMBasicBlockRef found_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.found");
-                    LLVMBasicBlockRef next_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.next");
-                    LLVMBasicBlockRef empty_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.empty");
-                    LLVMBasicBlockRef after_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.after");
-                    LLVMBasicBlockRef claim_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.claim");
-                    LLVMBasicBlockRef merge_bb
-                        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "m.merge");
-
-                    LLVMBuildBr(ctx->builder, loop_bb);
-                    LLVMPositionBuilderAtEnd(ctx->builder, loop_bb);
-                    LLVMValueRef i_phi = LLVMBuildPhi(ctx->builder, i64t, "m.i");
-                    LLVMValueRef loop_cmp = LLVMBuildICmp(ctx->builder, LLVMIntULT, i_phi, cap_val, "m.lcmp");
-                    LLVMBuildCondBr(ctx->builder, loop_cmp, body_bb, after_bb);
-
-                    LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
-                    LLVMValueRef ioff = LLVMBuildMul(ctx->builder, i_phi, stride, "m.ioff");
-                    LLVMValueRef entry_ptr = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entries_base, &ioff, 1, "m.ep");
-                    LLVMValueRef occupied = LLVMBuildLoad2(ctx->builder, i8t, entry_ptr, "m.occ");
-                    LLVMValueRef occ_cmp
-                        = LLVMBuildICmp(ctx->builder, LLVMIntNE, occupied, LLVMConstNull(i8t), "m.occmp");
-                    LLVMBuildCondBr(ctx->builder, occ_cmp, kchk_bb, empty_bb);
-
-                    LLVMPositionBuilderAtEnd(ctx->builder, kchk_bb);
-                    LLVMValueRef key_ptr = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entry_ptr, &one64, 1, "m.kp");
-                    LLVMValueRef kp_typed
-                        = LLVMBuildPointerCast(ctx->builder, key_ptr, LLVMPointerType(key_td->llvm_type, 0), "");
-                    LLVMValueRef loaded_key = LLVMBuildLoad2(ctx->builder, key_td->llvm_type, kp_typed, "m.lk");
-                    LLVMValueRef key_eq = LLVMBuildICmp(ctx->builder, LLVMIntEQ, key_to_compare, loaded_key, "m.keq");
-                    LLVMBuildCondBr(ctx->builder, key_eq, found_bb, next_bb);
-
-                    LLVMPositionBuilderAtEnd(ctx->builder, found_bb);
-                    LLVMValueRef val_ptr = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entry_ptr, &ks_plus_one, 1, "m.vp");
-                    LLVMValueRef val_ptr_typed
-                        = LLVMBuildPointerCast(ctx->builder, val_ptr, LLVMPointerType(val_td->llvm_type, 0), "");
-                    LLVMBuildStore(ctx->builder, val_ptr_typed, res_alloca);
-                    LLVMBuildBr(ctx->builder, merge_bb);
-
-                    LLVMPositionBuilderAtEnd(ctx->builder, empty_bb);
-                    LLVMValueRef cur_fe = LLVMBuildLoad2(ctx->builder, i64t, fe_alloca, "m.curfe");
-                    LLVMValueRef fe_is_default = LLVMBuildICmp(ctx->builder, LLVMIntEQ, cur_fe, cap_val, "m.feisdef");
-                    LLVMValueRef new_fe = LLVMBuildSelect(ctx->builder, fe_is_default, i_phi, cur_fe, "m.newfe");
-                    LLVMBuildStore(ctx->builder, new_fe, fe_alloca);
-                    LLVMBuildBr(ctx->builder, next_bb);
-
-                    LLVMPositionBuilderAtEnd(ctx->builder, next_bb);
-                    LLVMValueRef next_i = LLVMBuildAdd(ctx->builder, i_phi, one64, "m.ni");
-                    LLVMBuildBr(ctx->builder, loop_bb);
-
-                    LLVMValueRef i_incoming[] = {zero64, next_i};
-                    LLVMBasicBlockRef i_blocks[] = {saved_bb, next_bb};
-                    LLVMAddIncoming(i_phi, i_incoming, i_blocks, 2);
-
-                    LLVMPositionBuilderAtEnd(ctx->builder, after_bb);
-                    LLVMValueRef fo_res
-                        = LLVMBuildLoad2(ctx->builder, LLVMPointerType(val_td->llvm_type, 0), res_alloca, "m.fo");
-                    LLVMValueRef fo_isnull = LLVMBuildICmp(
-                        ctx->builder,
-                        LLVMIntEQ,
-                        fo_res,
-                        LLVMConstNull(LLVMPointerType(val_td->llvm_type, 0)),
-                        "m.fonull"
-                    );
-                    LLVMValueRef fe_val = LLVMBuildLoad2(ctx->builder, i64t, fe_alloca, "m.fe");
-                    LLVMValueRef has_empty = LLVMBuildICmp(ctx->builder, LLVMIntULT, fe_val, cap_val, "m.hasempty");
-                    LLVMValueRef need_claim = LLVMBuildAnd(ctx->builder, fo_isnull, has_empty, "m.needclaim");
-                    LLVMBuildCondBr(ctx->builder, need_claim, claim_bb, merge_bb);
-
-                    LLVMPositionBuilderAtEnd(ctx->builder, claim_bb);
-                    LLVMValueRef c_ioff = LLVMBuildMul(ctx->builder, fe_val, stride, "m.ioff2");
-                    LLVMValueRef c_entry = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entries_base, &c_ioff, 1, "m.ce");
-                    LLVMBuildStore(ctx->builder, LLVMConstInt(i8t, 1, false), c_entry);
-                    LLVMValueRef c_kp = LLVMBuildInBoundsGEP2(ctx->builder, i8t, c_entry, &one64, 1, "m.ckp");
-                    LLVMValueRef c_kpt
-                        = LLVMBuildPointerCast(ctx->builder, c_kp, LLVMPointerType(key_td->llvm_type, 0), "");
-                    LLVMBuildStore(ctx->builder, key_to_compare, c_kpt);
-                    LLVMValueRef old_cnt = LLVMBuildLoad2(ctx->builder, i64t, cnt_ptr, "m.oldcnt");
-                    LLVMBuildStore(ctx->builder, LLVMBuildAdd(ctx->builder, old_cnt, one64, "m.newcnt"), cnt_ptr);
-                    LLVMValueRef c_vp = LLVMBuildInBoundsGEP2(ctx->builder, i8t, c_entry, &ks_plus_one, 1, "m.cvp");
-                    LLVMValueRef c_vpt
-                        = LLVMBuildPointerCast(ctx->builder, c_vp, LLVMPointerType(val_td->llvm_type, 0), "");
-                    LLVMBuildStore(ctx->builder, c_vpt, res_alloca);
-                    LLVMBuildBr(ctx->builder, merge_bb);
-
-                    LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
-                    ptr = LLVMBuildLoad2(ctx->builder, LLVMPointerType(val_td->llvm_type, 0), res_alloca, "m.ptr");
+                    ptr = ir_gen_map_subscript(ctx, ptr, cur_type, index_val, &cur_type, true, "m.");
                     if (ptr == NULL)
                         return NULL;
-                    LLVMValueRef tmp_alloca = LLVMBuildAlloca(ctx->builder, val_td->llvm_type, "map.tmp");
-                    LLVMValueRef ptr_null = LLVMBuildICmp(
-                        ctx->builder, LLVMIntEQ, ptr, LLVMConstNull(LLVMPointerType(val_td->llvm_type, 0)), "m.ptrnull"
-                    );
-                    ptr = LLVMBuildSelect(ctx->builder, ptr_null, tmp_alloca, ptr, "m.finalptr");
-
-                    if (val_td)
-                        cur_type = val_td;
                 }
                 else
                 {
@@ -5242,135 +5239,9 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             }
             else if (cur_type->kind == TD_KIND_MAP)
             {
-                LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
-                LLVMTypeRef i8t = LLVMInt8TypeInContext(ctx->context);
-                LLVMValueRef zero64 = LLVMConstInt(i64t, 0, false);
-                LLVMValueRef one64 = LLVMConstInt(i64t, 1, false);
-
-                TypeDescriptor const * key_td = cur_type->as.map.key_type;
-                TypeDescriptor const * val_td = cur_type->as.map.value_type;
-
-                LLVMValueRef data_ptr = NULL;
-                LLVMTypeRef val_llvm_type = LLVMTypeOf(val);
-                if (LLVMGetTypeKind(val_llvm_type) == LLVMPointerTypeKind)
-                {
-                    LLVMValueRef didx[]
-                        = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                           LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-                    LLVMValueRef dgep
-                        = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, val, didx, 2, "map.r.dgep");
-                    data_ptr = LLVMBuildLoad2(ctx->builder, LLVMPointerType(i8t, 0), dgep, "map.r.data");
-                }
-                else
-                {
-                    data_ptr = LLVMBuildExtractValue(ctx->builder, val, 0, "map.r.data");
-                }
-                if (data_ptr == NULL)
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "map subscript: data pointer extraction failed");
+                val = ir_gen_map_subscript(ctx, val, cur_type, index_val, NULL, false, "mr.");
+                if (val == NULL)
                     break;
-                }
-
-                LLVMValueRef cap_off = LLVMConstInt(i64t, 8, false);
-                LLVMValueRef cap_ptr = LLVMBuildPointerCast(
-                    ctx->builder,
-                    LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &cap_off, 1, ""),
-                    LLVMPointerType(i64t, 0),
-                    ""
-                );
-                LLVMValueRef cap_val = LLVMBuildLoad2(ctx->builder, i64t, cap_ptr, "map.r.cap");
-
-                LLVMValueRef ks_off = LLVMConstInt(i64t, 16, false);
-                LLVMValueRef ks_ptr = LLVMBuildPointerCast(
-                    ctx->builder,
-                    LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &ks_off, 1, ""),
-                    LLVMPointerType(i64t, 0),
-                    ""
-                );
-                LLVMValueRef key_sz = LLVMBuildLoad2(ctx->builder, i64t, ks_ptr, "map.r.ks");
-
-                LLVMValueRef vs_off = LLVMConstInt(i64t, 24, false);
-                LLVMValueRef vs_ptr = LLVMBuildPointerCast(
-                    ctx->builder,
-                    LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &vs_off, 1, ""),
-                    LLVMPointerType(i64t, 0),
-                    ""
-                );
-                LLVMValueRef val_sz = LLVMBuildLoad2(ctx->builder, i64t, vs_ptr, "map.r.vs");
-
-                LLVMValueRef hdr32 = LLVMConstInt(i64t, 32, false);
-                LLVMValueRef entries_base = LLVMBuildInBoundsGEP2(ctx->builder, i8t, data_ptr, &hdr32, 1, "map.r.ents");
-
-                LLVMValueRef stride = LLVMBuildAdd(
-                    ctx->builder, one64, LLVMBuildAdd(ctx->builder, key_sz, val_sz, "rkvsz"), "map.r.stride"
-                );
-                LLVMValueRef ks_plus_one = LLVMBuildAdd(ctx->builder, key_sz, one64, "map.r.ksp1");
-
-                LLVMValueRef key_to_compare
-                    = LLVMBuildIntCast(ctx->builder, index_val, key_td->llvm_type, "map.r.key.cast");
-
-                LLVMBasicBlockRef saved_bb = LLVMGetInsertBlock(ctx->builder);
-                LLVMBasicBlockRef loop_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.loop");
-                LLVMBasicBlockRef body_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.body");
-                LLVMBasicBlockRef kchk_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.kchk");
-                LLVMBasicBlockRef found_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.found");
-                LLVMBasicBlockRef next_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.next");
-                LLVMBasicBlockRef notfound_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.notfound");
-                LLVMBasicBlockRef merge_bb
-                    = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "mr.merge");
-
-                LLVMBuildBr(ctx->builder, loop_bb);
-                LLVMPositionBuilderAtEnd(ctx->builder, loop_bb);
-                LLVMValueRef i_phi = LLVMBuildPhi(ctx->builder, i64t, "mr.i");
-                LLVMValueRef loop_cmp = LLVMBuildICmp(ctx->builder, LLVMIntULT, i_phi, cap_val, "mr.lcmp");
-                LLVMBuildCondBr(ctx->builder, loop_cmp, body_bb, notfound_bb);
-
-                LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
-                LLVMValueRef ioff = LLVMBuildMul(ctx->builder, i_phi, stride, "mr.ioff");
-                LLVMValueRef entry_ptr = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entries_base, &ioff, 1, "mr.ep");
-                LLVMValueRef occupied = LLVMBuildLoad2(ctx->builder, i8t, entry_ptr, "mr.occ");
-                LLVMValueRef occ_cmp = LLVMBuildICmp(ctx->builder, LLVMIntNE, occupied, LLVMConstNull(i8t), "mr.occmp");
-                LLVMBuildCondBr(ctx->builder, occ_cmp, kchk_bb, next_bb);
-
-                LLVMPositionBuilderAtEnd(ctx->builder, kchk_bb);
-                LLVMValueRef key_ptr = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entry_ptr, &one64, 1, "mr.kp");
-                LLVMValueRef kp_typed
-                    = LLVMBuildPointerCast(ctx->builder, key_ptr, LLVMPointerType(key_td->llvm_type, 0), "");
-                LLVMValueRef loaded_key = LLVMBuildLoad2(ctx->builder, key_td->llvm_type, kp_typed, "mr.lk");
-                LLVMValueRef key_eq = LLVMBuildICmp(ctx->builder, LLVMIntEQ, key_to_compare, loaded_key, "mr.keq");
-                LLVMBuildCondBr(ctx->builder, key_eq, found_bb, next_bb);
-
-                LLVMPositionBuilderAtEnd(ctx->builder, found_bb);
-                LLVMValueRef val_ptr = LLVMBuildInBoundsGEP2(ctx->builder, i8t, entry_ptr, &ks_plus_one, 1, "mr.vp");
-                LLVMValueRef vp_typed
-                    = LLVMBuildPointerCast(ctx->builder, val_ptr, LLVMPointerType(val_td->llvm_type, 0), "");
-                LLVMValueRef loaded_val = LLVMBuildLoad2(ctx->builder, val_td->llvm_type, vp_typed, "mr.val");
-                LLVMBuildBr(ctx->builder, merge_bb);
-
-                LLVMPositionBuilderAtEnd(ctx->builder, next_bb);
-                LLVMValueRef next_i = LLVMBuildAdd(ctx->builder, i_phi, one64, "mr.ni");
-                LLVMBuildBr(ctx->builder, loop_bb);
-
-                LLVMValueRef i_incoming[] = {zero64, next_i};
-                LLVMBasicBlockRef i_blocks[] = {saved_bb, next_bb};
-                LLVMAddIncoming(i_phi, i_incoming, i_blocks, 2);
-
-                LLVMPositionBuilderAtEnd(ctx->builder, notfound_bb);
-                LLVMValueRef zero_val = LLVMConstNull(val_td->llvm_type);
-                LLVMBuildBr(ctx->builder, merge_bb);
-
-                LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
-                LLVMValueRef result_phi = LLVMBuildPhi(ctx->builder, val_td->llvm_type, "mr.res");
-                LLVMValueRef phi_vals[] = {loaded_val, zero_val};
-                LLVMBasicBlockRef phi_blocks[] = {found_bb, notfound_bb};
-                LLVMAddIncoming(result_phi, phi_vals, phi_blocks, 2);
-                val = result_phi;
             }
             else
             {

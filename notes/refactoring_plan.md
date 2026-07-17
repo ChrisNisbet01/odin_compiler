@@ -8,7 +8,7 @@ Based on comprehensive analysis of the codebase (July 2026). The compiler has gr
 
 These extractions eliminate repeated code patterns without changing architecture.
 
-### 1.1 Expression chain unwrapping helper
+### 1.1 Expression chain unwrapping helper ✅ DONE (already exists in ast_utils.c:54)
 
 The pattern `while (node->list.count >= 1 && node->list.children[0]) node = node->list.children[0]` (or similar) appears **7+ times** across the codebase:
 
@@ -22,19 +22,19 @@ The pattern `while (node->list.count >= 1 && node->list.children[0]) node = node
 
 **Action**: Create `expression_chain_unwrap(odin_grammar_node_t * node)` in `ast_utils.c`. Replace all 7+ instances.
 
-### 1.2 `is_type_node` → lookup table
+### 1.2 `is_type_node` → lookup table ✅ DONE (already using lookup table)
 
 `is_type_node()` in `ast_utils.c` (21-case switch) must be updated every time a new type node is added. The AST enum currently has ~155 values, ~22 of which are type nodes.
 
 **Action**: Replace the switch with a static boolean lookup table indexed by `odin_grammar_node_type_t`, initialized at startup or with C99 designated initializers. Alternatively, add a `NODE_CATEGORY_TYPE` flag to the enum definition metadata.
 
-### 1.3 Escape sequence processing helper
+### 1.3 Escape sequence processing helper ✅ DONE (already extracted)
 
 `ir_gen_string_literal` (line ~363, ~183 lines) duplicates escape sequence parsing between its count-pass and fill-pass. The `\xNN` hex parsing (~25 lines) is duplicated.
 
-**Action**: Extract `process_escape_sequence(const char **p, unsigned char *out_byte)` helper. Returns the number of consumed input bytes and the decoded byte value. Use in both passes.
+**Action**: Extract `process_escape_sequence(const char **p, unsigned char *out_byte)` helper. Returns the number of consumed input bytes and the decoded byte value. Use in both passes. **Also applied to `ir_gen_rune_literal`** which had its own inline duplicate.
 
-### 1.4 Cleanup path in `main()`
+### 1.4 Cleanup path in `main()` ✅ DONE
 
 `main()` has 4 near-identical cleanup paths (lines ~303, ~330, ~508, ~568) each frees `type_registry`, `sem_ctx`, `ir_ctx`, `gen_ctx`.
 
@@ -46,7 +46,7 @@ The pattern `while (node->list.count >= 1 && node->list.children[0]) node = node
 
 These changes merge repeated case handlers within a file.
 
-### 2.1 String/slice/dynamic_array member access — unify 3 copies
+### 2.1 String/slice/dynamic_array member access — unify 3 copies ✅ DONE
 
 The string `.len`/`.data`, slice `.len`/`.data`, dynamic_array `.len`/`.cap`/`.data`, array `.len` access pattern appears in **3 locations**:
 - `ir_gen_lvalue` POSTFIX_MEMBER (lines ~2061–2162)
@@ -57,7 +57,7 @@ Each handles the same 4 type kinds (`TD_KIND_BASIC "string"`, `TD_KIND_SLICE`, `
 
 **Action**: Extract `ir_gen_load_field_of_aggregate(ctx, LLVMValueRef val, TypeDescriptor *type, const char *field_name, bool is_lvalue)` that returns a pointer or value for the named field. All three call sites use this single helper.
 
-### 2.2 Map linear-scan subscript — unify 2 copies
+### 2.2 Map linear-scan subscript — unify 2 copies ✅ DONE
 
 The map linear-scan loop (load entry → check key → found/not-found/next → merge) in:
 - `ir_gen_lvalue` POSTFIX_SUBSCRIPT (lines ~1783–1961, ~178 lines)
@@ -65,9 +65,9 @@ The map linear-scan loop (load entry → check key → found/not-found/next → 
 
 These differ only in SSA naming prefixes and one being lvalue vs rvalue.
 
-**Action**: Extract `ir_gen_map_subscript(ctx, map_val, key_val, key_type, result_type, const char *prefix)`. Returns a phi-selected value for rvalue or a pointer for lvalue.
+**Action**: Extract `ir_gen_map_subscript(ctx, map_val, map_type, index_val, out_val_type, bool is_lvalue, const char *prefix)`. Returns a pointer for lvalue or a phi-selected value for rvalue. Implemented with an `ir_gen_map_append_block()` helper for block creation.
 
-### 2.3 `ir_gen_assign_expression` / `ir_gen_assign_statement` — unify 2 copies
+### 2.3 `ir_gen_assign_expression` / `ir_gen_assign_statement` — unify 2 copies ✅ DONE
 
 These functions (~60 lines each) are ~90% identical. Both check: vector → bit_field → bit_set → lvalue_ptr → any packing → compound assign → store. The only difference is child-count indexing (`< 3` vs `< 2`).
 
@@ -82,13 +82,13 @@ Pointer auto-deref before member access appears in:
 
 **Action**: Document as intentional (the different semantics are correct), but add a shared helper `ir_gen_auto_deref_pointer(ctx, val, type)` that returns `(new_val, new_type)` so at least the type-checking logic is shared.
 
-### 2.5 `DEFINE_ACTION` / `DEFINE_TERMINAL_ACTION` — unify
+### 2.5 `DEFINE_ACTION` / `DEFINE_TERMINAL_ACTION` — unify ✅ DONE
 
 These two macros in `odin_grammar_ast_actions.c` differ only by the `capture_text` boolean passed to `make_node()`.
 
 **Action**: Merge into a single `DEFINE_ACTION(name, type, capture_text)` with `DEFINE_TERMINAL_ACTION` as a convenience wrapper.
 
-### 2.6 `sem_error.c` / `ir_gen_error.c` — unify
+### 2.6 `sem_error.c` / `ir_gen_error.c` — unify ✅ DONE
 
 These are **structurally identical** files (57 lines each, same struct layout, same function signatures, same `print_location` helper). The only differences: prefix names (`SemError` vs `IrGenError`, `sem_error_` vs `ir_gen_error_`).
 
@@ -214,7 +214,7 @@ Add a compile-time static assertion that the table size matches the action enum 
 
 `sem_error.c` and `ir_gen_error.c` are near-identical. After unifying (Phase 2.6), consider adding error severity (warning/error) and error codes for better testability.
 
-### 5.3 Import path resolution helper
+### 5.3 Import path resolution helper ✅ DONE
 
 In `package_resolver.c`, the 7 copy-paste `malloc → snprintf → file_exists → free` blocks for path resolution should be replaced with a single `try_resolve_path(base_dir, const char *fmt, ...)` that returns an allocated path or NULL.
 
@@ -237,16 +237,16 @@ There is at least one case where a buffer passed to snprintf() may be too small.
 
 | Phase | Effort | Risk | Files Affected | Suggested Order |
 |-------|--------|------|----------------|-----------------|
-| 1.1 Expression unwrap | Low | Low | ast_utils.c + 7 call sites | 1st |
-| 1.2 is_type_node table | Low | Low | ast_utils.c | 2nd |
-| 1.3 Escape helper | Low | Low | llvm_ir_generator.c | 3rd |
-| 1.4 Cleanup goto | Low | Low | main.c | 4th |
-| 2.1 Aggregate field access | Medium | Medium | llvm_ir_generator.c | 5th |
-| 2.2 Map subscript | Medium | Medium | llvm_ir_generator.c | 6th |
-| 2.3 Assign unify | Medium | Low | llvm_ir_generator.c | 7th |
-| 2.5 Action macro unify | Low | Low | odin_grammar_ast_actions.c | 8th |
-| 2.6 Error list unify | Low | Low | sem_error.c, ir_gen_error.c | 9th |
-| 5.3 Import path helper | Low | Low | package_resolver.c | 10th |
+| 1.1 Expression unwrap ✅ DONE | Low | Low | ast_utils.c + 7 call sites | 1st |
+| 1.2 is_type_node table ✅ DONE | Low | Low | ast_utils.c | 2nd |
+| 1.3 Escape helper ✅ DONE | Low | Low | llvm_ir_generator.c | 3rd |
+| 1.4 Cleanup goto ✅ DONE | Low | Low | main.c | 4th |
+| 2.1 Aggregate field access ✅ DONE | Medium | Medium | llvm_ir_generator.c | 5th |
+| 2.2 Map subscript ✅ DONE | Medium | Medium | llvm_ir_generator.c | 6th |
+| 2.3 Assign unify ✅ DONE | Medium | Low | llvm_ir_generator.c | 7th |
+| 2.5 Action macro unify ✅ DONE | Low | Low | odin_grammar_ast_actions.c | 8th |
+| 2.6 Error list unify ✅ DONE | Low | Low | sem_error.c, ir_gen_error.c | 9th |
+| 5.3 Import path helper ✅ DONE | Low | Low | package_resolver.c | 10th |
 | 3.1 Split sem_evaluate_expr | High | High | semantic_analyser.c → multiple | 11th |
 | 3.2 Split sem_resolve_type_expr | High | High | semantic_analyser.c → multiple | 12th |
 | 3.3 Split ir_gen_postfix_expression | Medium | Medium | llvm_ir_generator.c → multiple | 13th |
