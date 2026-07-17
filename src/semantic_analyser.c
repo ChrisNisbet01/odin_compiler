@@ -488,6 +488,7 @@ static TypeDescriptor const * sem_resolve_map_type(SemContext * ctx, odin_gramma
 static TypeDescriptor const * sem_resolve_maybe_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_multi_pointer_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_pointer_type(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_slice_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_soa_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node);
@@ -509,6 +510,7 @@ static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *
     [AST_NODE_MAYBE_TYPE] = sem_resolve_maybe_type,
     [AST_NODE_MULTI_POINTER_TYPE] = sem_resolve_multi_pointer_type,
     [AST_NODE_POINTER_TYPE] = sem_resolve_pointer_type,
+    [AST_NODE_PROCEDURE_SIGNATURE] = sem_resolve_proc_sig_type,
     [AST_NODE_SLICE_TYPE] = sem_resolve_slice_type,
     [AST_NODE_SOA_TYPE] = sem_resolve_soa_type,
     [AST_NODE_STRUCT_TYPE] = sem_resolve_struct_type,
@@ -529,6 +531,182 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
 }
 
 // --- Extracted case functions ---
+
+static TypeDescriptor const *
+sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
+{
+
+    TypeDescriptor const * return_type = NULL;
+    TypeDescriptor const ** return_types = NULL;
+    int return_count = 0;
+    int param_count = 0;
+    TypeDescriptor const ** params = NULL;
+    size_t param_cap = 0;
+    bool is_variadic = false;
+    calling_convention_t cc = CALLING_CONV_ODIN;
+
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child == NULL)
+            continue;
+        if (child->type == AST_NODE_CALLING_CONVENTION && child->list.count > 0)
+        {
+            odin_grammar_node_t * str_child = child->list.children[0];
+            if (str_child && str_child->text)
+                cc = parse_calling_convention(str_child->text);
+        }
+        else if (child->type == AST_NODE_RETURNS && child->list.count > 0)
+        {
+            odin_grammar_node_t * ret_child = child->list.children[0];
+            if (ret_child->type == AST_NODE_RETURN_TYPE_LIST)
+            {
+                return_count = 0;
+                return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+                for (size_t ri = 0; ri < ret_child->list.count; ri++)
+                {
+                    odin_grammar_node_t * type_node = ret_child->list.children[ri];
+                    if (type_node == NULL)
+                        continue;
+                    TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+                    type_node->resolved_type = (TypeDescriptor *)td;
+                    if (td)
+                        return_types[return_count++] = td;
+                }
+            }
+            else if (ret_child->type == AST_NODE_RETURN_LIST)
+            {
+                return_count = 0;
+                return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+                for (size_t ri = 0; ri < ret_child->list.count; ri++)
+                {
+                    odin_grammar_node_t * named = ret_child->list.children[ri];
+                    if (named == NULL || named->type != AST_NODE_NAMED_RETURN)
+                        continue;
+                    odin_grammar_node_t * type_node = NULL;
+                    for (size_t ci = 0; ci < named->list.count; ci++)
+                    {
+                        if (named->list.children[ci] != NULL)
+                            type_node = named->list.children[ci];
+                    }
+                    if (type_node == NULL)
+                        continue;
+                    TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+                    type_node->resolved_type = (TypeDescriptor *)td;
+                    if (td)
+                        return_types[return_count++] = td;
+                }
+            }
+            else
+            {
+                return_type = sem_resolve_type_expr(ctx, ret_child);
+                if (return_type)
+                {
+                    return_types = malloc(sizeof(TypeDescriptor const *));
+                    return_types[0] = return_type;
+                    return_count = 1;
+                }
+            }
+        }
+        else if (child->type == AST_NODE_PARAMETER_LIST)
+        {
+            // ParameterList = LParen Parameters? RParen
+            for (size_t j = 0; j < child->list.count; j++)
+            {
+                odin_grammar_node_t * param_group = child->list.children[j];
+                if (param_group == NULL || param_group->type != AST_NODE_PARAMETERS)
+                    continue;
+
+                // Parameters = delimited(Parameter, Comma) (Comma Ellipsis)?
+                for (size_t k = 0; k < param_group->list.count; k++)
+                {
+                    odin_grammar_node_t * param = param_group->list.children[k];
+                    if (param == NULL)
+                        continue;
+
+                    if (param->type == AST_NODE_ELLIPSIS)
+                    {
+                        is_variadic = true;
+                        continue;
+                    }
+                    if (param->type != AST_NODE_PARAMETER)
+                        continue;
+
+                    // Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon VariadicMarker? TypePrefix
+                    // Check for VariadicMarker child (AST_NODE_ELLIPSIS from ..)
+                    bool is_variadic_param = false;
+                    for (size_t ci = 0; ci < param->list.count; ci++)
+                    {
+                        if (param->list.children[ci] != NULL
+                            && param->list.children[ci]->type == AST_NODE_ELLIPSIS)
+                        {
+                            is_variadic_param = true;
+                            is_variadic = true;
+                            break;
+                        }
+                    }
+
+                    // Find the TypePrefix child (last non-NULL child)
+                    odin_grammar_node_t * type_node = NULL;
+                    for (size_t ci = 0; ci < param->list.count; ci++)
+                    {
+                        odin_grammar_node_t * pc = param->list.children[ci];
+                        if (pc != NULL && pc->type != AST_NODE_ELLIPSIS)
+                            type_node = pc;
+                    }
+
+                    if (type_node == NULL)
+                        continue;
+
+                    TypeDescriptor const * pt = sem_resolve_type_expr(ctx, type_node);
+                    if (pt == NULL)
+                        continue;
+
+                    // If this is a variadic .. parameter, wrap the type in a slice
+                    // e.g. ..any → []any
+                    if (is_variadic_param)
+                    {
+                        pt = get_or_create_slice_type(ctx->type_registry, pt);
+                        if (pt == NULL)
+                            continue;
+                        type_node->resolved_type = (TypeDescriptor *)pt;
+                    }
+
+                    // Grow params array
+                    if (param_count >= (int)param_cap)
+                    {
+                        size_t new_cap = param_cap == 0 ? 4 : param_cap * 2;
+                        TypeDescriptor const ** tmp = (TypeDescriptor const **)realloc(
+                            (void *)params, new_cap * sizeof(TypeDescriptor const *)
+                        );
+                        if (tmp == NULL)
+                        {
+                            free((void *)params);
+                            return NULL;
+                        }
+                        params = tmp;
+                        param_cap = new_cap;
+                    }
+                    params[param_count++] = pt;
+                }
+            }
+        }
+    }
+
+    if (return_count == 0)
+    {
+        return_types = NULL;
+    }
+    TypeDescriptor const * proc_type = get_or_create_proc_type(
+        ctx->type_registry, return_type, params, param_count, return_types, return_count, is_variadic, cc
+    );
+    free((void *)params);
+    free((void *)return_types);
+    if (proc_type)
+        node->resolved_type = (TypeDescriptor *)proc_type;
+    return proc_type;
+
+}
 
 static TypeDescriptor const *
 sem_resolve_basic_or_type_name(SemContext * ctx, odin_grammar_node_t * node)
