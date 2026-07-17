@@ -1746,160 +1746,75 @@ sem_resolve_type_expr(SemContext * ctx, odin_grammar_node_t * node)
 
 // --- Expression evaluation ---
 
+static TypeDescriptor const * (* const sem_evaluate_dispatch[])(SemContext *, odin_grammar_node_t *) = {
+    [AST_NODE_INTEGER_VALUE] = sem_evaluate_integer_value,
+    [AST_NODE_FLOAT_VALUE] = sem_evaluate_float_value,
+    [AST_NODE_STRING_LITERAL] = sem_evaluate_string_literal,
+    [AST_NODE_RAW_STRING_LITERAL] = sem_evaluate_string_literal,
+    [AST_NODE_RUNE_LITERAL] = sem_evaluate_rune_literal,
+    [AST_NODE_BOOL_TRUE] = sem_evaluate_bool_value,
+    [AST_NODE_BOOL_FALSE] = sem_evaluate_bool_value,
+    [AST_NODE_AUTO_CAST_EXPR] = sem_evaluate_auto_cast_expr,
+    [AST_NODE_CAST_EXPR] = sem_evaluate_cast_expr,
+    [AST_NODE_TRANSMUTE_EXPR] = sem_evaluate_cast_expr,
+    [AST_NODE_LEN_EXPR] = sem_evaluate_len_cap_expr,
+    [AST_NODE_CAP_EXPR] = sem_evaluate_len_cap_expr,
+    [AST_NODE_MAKE_EXPR] = sem_evaluate_make_expr,
+    [AST_NODE_NEW_EXPR] = sem_evaluate_new_expr,
+    [AST_NODE_DELETE_EXPR] = sem_evaluate_delete_expr,
+    [AST_NODE_EXPAND_VALUES_EXPR] = sem_evaluate_expand_values_expr,
+    [AST_NODE_COMPRESS_VALUES_EXPR] = sem_evaluate_compress_values_expr,
+    [AST_NODE_SOA_ZIP_EXPR] = sem_evaluate_soa_zip_expr,
+    [AST_NODE_SOA_UNZIP_EXPR] = sem_evaluate_soa_unzip_expr,
+    [AST_NODE_INCL_EXPR] = sem_evaluate_incl_excl_expr,
+    [AST_NODE_EXCL_EXPR] = sem_evaluate_incl_excl_expr,
+    [AST_NODE_COMPLEX_EXPR] = sem_evaluate_complex_quaternion_expr,
+    [AST_NODE_QUATERNION_EXPR] = sem_evaluate_complex_quaternion_expr,
+    [AST_NODE_SIZE_OF_EXPR] = sem_evaluate_size_align_of_expr,
+    [AST_NODE_ALIGN_OF_EXPR] = sem_evaluate_size_align_of_expr,
+    [AST_NODE_OFFSET_OF_EXPR] = sem_evaluate_offset_of_expr,
+    [AST_NODE_RAW_DATA_EXPR] = sem_evaluate_raw_data_expr,
+    [AST_NODE_TYPE_OF_EXPR] = sem_evaluate_type_of_expr,
+    [AST_NODE_TYPEID_OF_EXPR] = sem_evaluate_typeid_of_expr,
+    [AST_NODE_TYPE_INFO_OF_EXPR] = sem_evaluate_type_info_of_expr,
+    [AST_NODE_MIN_EXPR] = sem_evaluate_min_max_expr,
+    [AST_NODE_MAX_EXPR] = sem_evaluate_min_max_expr,
+    [AST_NODE_DISTINCT_TYPE] = sem_evaluate_distinct_type,
+    [AST_NODE_NIL] = sem_evaluate_nil,
+    [AST_NODE_DIRECTIVE] = sem_evaluate_directive,
+    [AST_NODE_CONTEXT_EXPR] = sem_evaluate_context_expr,
+    [AST_NODE_IDENTIFIER] = sem_evaluate_identifier,
+    [AST_NODE_UNARY_EXPRESSION] = sem_evaluate_unary_expr,
+    [AST_NODE_RANGE_EXPRESSION] = sem_evaluate_range_expr,
+    [AST_NODE_MUL_EXPRESSION] = sem_evaluate_binary_arith_expr,
+    [AST_NODE_ADD_EXPRESSION] = sem_evaluate_binary_arith_expr,
+    [AST_NODE_SHIFT_EXPRESSION] = sem_evaluate_binary_arith_expr,
+    [AST_NODE_BIT_AND_EXPRESSION] = sem_evaluate_binary_arith_expr,
+    [AST_NODE_BIT_XOR_EXPRESSION] = sem_evaluate_binary_arith_expr,
+    [AST_NODE_BIT_OR_EXPRESSION] = sem_evaluate_binary_arith_expr,
+    [AST_NODE_COMP_EXPRESSION] = sem_evaluate_comp_log_expr,
+    [AST_NODE_LOG_AND_EXPRESSION] = sem_evaluate_comp_log_expr,
+    [AST_NODE_LOG_OR_EXPRESSION] = sem_evaluate_comp_log_expr,
+    [AST_NODE_POSTFIX_CALL] = sem_evaluate_postfix_call,
+    [AST_NODE_POSTFIX_MEMBER] = sem_evaluate_postfix_member,
+    [AST_NODE_OR_ELSE] = sem_evaluate_or_else,
+    [AST_NODE_OR_RETURN] = sem_evaluate_or_return,
+    [AST_NODE_TERNARY_EXPRESSION] = sem_evaluate_ternary_expr,
+    [AST_NODE_EXPRESSION] = sem_evaluate_expression_wrapper,
+    [AST_NODE_PRIMARY_EXPRESSION] = sem_evaluate_expression_wrapper,
+    [AST_NODE_ASSIGN_EXPRESSION] = sem_evaluate_assign_expr,
+    [AST_NODE_POSTFIX_EXPRESSION] = sem_evaluate_postfix_expr,
+    [AST_NODE_DIRECTIVE_WITH_ARGS] = sem_evaluate_directive_with_args,
+};
+
 static TypeDescriptor const *
 sem_evaluate_expr(SemContext * ctx, odin_grammar_node_t * node)
 {
     if (node == NULL)
         return NULL;
-
-    switch (node->type)
-    {
-    case AST_NODE_INTEGER_VALUE:
-        return sem_evaluate_integer_value(ctx, node);
-
-    case AST_NODE_FLOAT_VALUE:
-        return sem_evaluate_float_value(ctx, node);
-
-    case AST_NODE_STRING_LITERAL:
-    case AST_NODE_RAW_STRING_LITERAL:
-        return sem_evaluate_string_literal(ctx, node);
-
-    case AST_NODE_RUNE_LITERAL:
-        return sem_evaluate_rune_literal(ctx, node);
-
-    case AST_NODE_BOOL_TRUE:
-    case AST_NODE_BOOL_FALSE:
-        return sem_evaluate_bool_value(ctx, node);
-
-    case AST_NODE_AUTO_CAST_EXPR:
-        return sem_evaluate_auto_cast_expr(ctx, node);
-
-    case AST_NODE_CAST_EXPR:
-    case AST_NODE_TRANSMUTE_EXPR:
-        return sem_evaluate_cast_expr(ctx, node);
-
-    case AST_NODE_LEN_EXPR:
-    case AST_NODE_CAP_EXPR:
-        return sem_evaluate_len_cap_expr(ctx, node);
-
-    case AST_NODE_MAKE_EXPR:
-        return sem_evaluate_make_expr(ctx, node);
-
-    case AST_NODE_NEW_EXPR:
-        return sem_evaluate_new_expr(ctx, node);
-
-    case AST_NODE_DELETE_EXPR:
-        return sem_evaluate_delete_expr(ctx, node);
-
-    case AST_NODE_EXPAND_VALUES_EXPR:
-        return sem_evaluate_expand_values_expr(ctx, node);
-
-    case AST_NODE_COMPRESS_VALUES_EXPR:
-        return sem_evaluate_compress_values_expr(ctx, node);
-
-    case AST_NODE_SOA_ZIP_EXPR:
-        return sem_evaluate_soa_zip_expr(ctx, node);
-
-    case AST_NODE_SOA_UNZIP_EXPR:
-        return sem_evaluate_soa_unzip_expr(ctx, node);
-
-    case AST_NODE_INCL_EXPR:
-    case AST_NODE_EXCL_EXPR:
-        return sem_evaluate_incl_excl_expr(ctx, node);
-
-    case AST_NODE_COMPLEX_EXPR:
-    case AST_NODE_QUATERNION_EXPR:
-        return sem_evaluate_complex_quaternion_expr(ctx, node);
-
-    case AST_NODE_SIZE_OF_EXPR:
-    case AST_NODE_ALIGN_OF_EXPR:
-        return sem_evaluate_size_align_of_expr(ctx, node);
-
-    case AST_NODE_OFFSET_OF_EXPR:
-        return sem_evaluate_offset_of_expr(ctx, node);
-
-    case AST_NODE_RAW_DATA_EXPR:
-        return sem_evaluate_raw_data_expr(ctx, node);
-
-    case AST_NODE_TYPE_OF_EXPR:
-        return sem_evaluate_type_of_expr(ctx, node);
-
-    case AST_NODE_TYPEID_OF_EXPR:
-        return sem_evaluate_typeid_of_expr(ctx, node);
-
-    case AST_NODE_TYPE_INFO_OF_EXPR:
-        return sem_evaluate_type_info_of_expr(ctx, node);
-
-    case AST_NODE_MIN_EXPR:
-    case AST_NODE_MAX_EXPR:
-        return sem_evaluate_min_max_expr(ctx, node);
-
-    case AST_NODE_DISTINCT_TYPE:
-        return sem_evaluate_distinct_type(ctx, node);
-
-    case AST_NODE_NIL:
-        return sem_evaluate_nil(ctx, node);
-
-    case AST_NODE_DIRECTIVE:
-        return sem_evaluate_directive(ctx, node);
-
-    case AST_NODE_CONTEXT_EXPR:
-        return sem_evaluate_context_expr(ctx, node);
-
-    case AST_NODE_IDENTIFIER:
-        return sem_evaluate_identifier(ctx, node);
-
-    case AST_NODE_UNARY_EXPRESSION:
-        return sem_evaluate_unary_expr(ctx, node);
-
-    case AST_NODE_RANGE_EXPRESSION:
-        return sem_evaluate_range_expr(ctx, node);
-
-    case AST_NODE_MUL_EXPRESSION:
-    case AST_NODE_ADD_EXPRESSION:
-    case AST_NODE_SHIFT_EXPRESSION:
-    case AST_NODE_BIT_AND_EXPRESSION:
-    case AST_NODE_BIT_XOR_EXPRESSION:
-    case AST_NODE_BIT_OR_EXPRESSION:
-        return sem_evaluate_binary_arith_expr(ctx, node);
-
-    case AST_NODE_COMP_EXPRESSION:
-    case AST_NODE_LOG_AND_EXPRESSION:
-    case AST_NODE_LOG_OR_EXPRESSION:
-        return sem_evaluate_comp_log_expr(ctx, node);
-
-    case AST_NODE_POSTFIX_CALL:
-        return sem_evaluate_postfix_call(ctx, node);
-
-    case AST_NODE_POSTFIX_MEMBER:
-        return sem_evaluate_postfix_member(ctx, node);
-
-    case AST_NODE_OR_ELSE:
-        return sem_evaluate_or_else(ctx, node);
-
-    case AST_NODE_OR_RETURN:
-        return sem_evaluate_or_return(ctx, node);
-
-    case AST_NODE_TERNARY_EXPRESSION:
-        return sem_evaluate_ternary_expr(ctx, node);
-
-    case AST_NODE_EXPRESSION:
-    case AST_NODE_PRIMARY_EXPRESSION:
-        return sem_evaluate_expression_wrapper(ctx, node);
-
-    case AST_NODE_ASSIGN_EXPRESSION:
-        return sem_evaluate_assign_expr(ctx, node);
-
-    case AST_NODE_POSTFIX_EXPRESSION:
-        return sem_evaluate_postfix_expr(ctx, node);
-
-    case AST_NODE_DIRECTIVE_WITH_ARGS:
-        return sem_evaluate_directive_with_args(ctx, node);
-
-    default:
-        return NULL;
-
-    }
+    if ((size_t)node->type < AST_NODE_COUNT && sem_evaluate_dispatch[node->type])
+        return sem_evaluate_dispatch[node->type](ctx, node);
+    return NULL;
 }
 
 // --- Extracted case functions (Phase 3.1) ---

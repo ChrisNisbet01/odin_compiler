@@ -168,6 +168,7 @@ typedef enum
     AST_NODE_COMPRESS_VALUES_EXPR,
     AST_NODE_SOA_ZIP_EXPR,
     AST_NODE_SOA_UNZIP_EXPR,
+    AST_NODE_COUNT,
 } odin_grammar_node_type_t;
 
 typedef struct
