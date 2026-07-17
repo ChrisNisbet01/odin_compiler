@@ -106,23 +106,25 @@ Contains 43+ case labels handling everything from integer literals to postfix ex
 
 **Done**: Step 1 — each case label group extracted into a named `sem_evaluate_<type>_expr()` function. The switch statement is now ~45 lines of pure dispatch. 42 new functions defined after `sem_evaluate_expr`.
 
-**Next (Step 2)**: Replace the switch with a function pointer lookup table indexed by AST node type. This will eliminate the switch entirely and make adding new expression types O(1).
+**Next**: Phase 3.2 (split `sem_resolve_type_expr`).
 
 **Action**:
 - Step 1 ✅ Each case body extracted to `sem_evaluate_<type>_expr()` function  
-- Step 2 🔲 Replace switch with function pointer lookup table
+- Step 2 ✅ Replace switch with `AST_NODE_COUNT`-sized function pointer lookup table
 
-**Target**: Step 1 complete (42 extracted functions). Step 2 pending — reduce main switch to ~3 lines of table dispatch.
+**Target**: `sem_evaluate_expr` reduced from 1555 to 8 lines of dispatch logic + 42 extracted functions.
 
-### 3.2 `sem_resolve_type_expr` — 1272 lines (line 435)
+### 3.2 ✅ `sem_resolve_type_expr` — 1272 lines (line 435)
 
-22 type cases, each averaging 58 lines. PROC type (~150 lines), STRUCT type (~200 lines), ENUM type (~110 lines).
+19 type cases (BASIC/TYPE_NAME combined, plus `AST_NODE_IDENTIFIER` as a separate case).
+
+**Done**: Step 1 — each case body extracted into a named `sem_resolve_<type>_type()` function (19 case groups → 18 extracted functions + 1 delegated to existing `sem_resolve_procedure_signature`). Step 2 — switch replaced with `AST_NODE_COUNT`-sized function pointer lookup table `sem_resolve_type_dispatch[]`.
 
 **Action**:
-- Each compound type handler becomes `sem_resolve_<type>_type(ctx, node)`
-- The "find child type node" loop (5 copies in ARRAY, DISTINCT, SLICE, MULTI_POINTER, DYNAMIC_ARRAY handlers) becomes `sem_find_first_type_child(node)` helper
+- Step 1 ✅ Each case body extracted to `sem_resolve_<type>_type()` function
+- Step 2 ✅ Replace switch with `AST_NODE_COUNT`-sized function pointer lookup table
 
-**Target**: Split into ~12 sub-functions.
+**Target**: `sem_resolve_type_expr` reduced from 1272 to 10 lines of dispatch logic. **Achieved**.
 
 ### 3.3 `ir_gen_postfix_expression` — 1236 lines (line 4860)
 
@@ -250,7 +252,7 @@ There is at least one case where a buffer passed to snprintf() may be too small.
 | 2.5 Action macro unify ✅ DONE | Low | Low | odin_grammar_ast_actions.c | 8th |
 | 2.6 Error list unify ✅ DONE | Low | Low | sem_error.c, ir_gen_error.c | 9th |
 | 5.3 Import path helper ✅ DONE | Low | Low | package_resolver.c | 10th |
-| 3.1 Split sem_evaluate_expr | High | High | semantic_analyser.c → multiple | 11th |
+| 3.1 Split sem_evaluate_expr ✅ DONE | High | High | semantic_analyser.c → multiple | 11th |
 | 3.2 Split sem_resolve_type_expr | High | High | semantic_analyser.c → multiple | 12th |
 | 3.3 Split ir_gen_postfix_expression | Medium | Medium | llvm_ir_generator.c → multiple | 13th |
 | 3.5 Split ir_gen_lvalue | Medium | Medium | llvm_ir_generator.c | 14th |

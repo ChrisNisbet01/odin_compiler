@@ -1,3 +1,14 @@
+## Accomplishments (session 2026-07-18)
+
+### Phase 3.2: Split `sem_resolve_type_expr` — switch → dispatch table + 18 extracted functions
+- **Step 1**: All 19 case groups (BASIC_TYPE/TYPE_NAME, POINTER_TYPE, ARRAY_TYPE, DISTINCT_TYPE, SLICE_TYPE, MULTI_POINTER_TYPE, DYNAMIC_ARRAY_TYPE, MAP_TYPE, BIT_FIELD_TYPE, BIT_SET_TYPE (with `#PUSH` macro), PROCEDURE_SIGNATURE, ENUM_TYPE, STRUCT_TYPE, UNION_TYPE, SOA_TYPE, MAYBE_TYPE, TUPLE_TYPE, VECTOR_TYPE, IDENTIFIER) extracted into named functions (`sem_resolve_<type>_type()`).
+- **Handled `#PUSH` macro in BIT_SET_TYPE**: The local `#define PUSH`/`#undef PUSH` macro was moved into the extracted `sem_resolve_bit_set_type` function body (file-scope preprocessor directive inside a C function is valid).
+- **Collision fix**: `AST_NODE_PROCEDURE_SIGNATURE` was NOT extracted — the dispatch table points to the existing `sem_resolve_procedure_signature` function (defined elsewhere in the file), avoiding a duplicate name.
+- **Step 2**: Switch replaced with `AST_NODE_COUNT`-sized function pointer lookup table `sem_resolve_type_dispatch[]`. `sem_resolve_type_expr` is now 10 lines of dispatch logic.
+- **Net change**: -78 lines (933 insertions, 1011 deletions).
+- **No regressions**: 2 pre-existing failures (`test_hash_type.odin`, `test_nested_proc.odin` — confirmed failing before extraction too).
+- **Key learning**: The existing `sem_resolve_procedure_signature` at line 968 already handles `PROCEDURE_SIGNATURE` type resolution — the switch case was a duplicate that needed to delegate, not extract.
+
 ## Accomplishments (session 2026-07-17)
 
 ### Fixed tuple type codegen — 6 interconnected bugs resolved
