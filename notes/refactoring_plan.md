@@ -126,24 +126,25 @@ Contains 43+ case labels handling everything from integer literals to postfix ex
 
 **Target**: `sem_resolve_type_expr` reduced from 1272 to 10 lines of dispatch logic. **Achieved**.
 
-### 3.3 `ir_gen_postfix_expression` — 1236 lines (line 4860)
+### 3.3 ✅ `ir_gen_postfix_expression` — 1236 lines (line 4860) — DONE
 
-6 case labels (call, subscript, member, deref, assertion, slice) but each is large. POSTFIX_CALL alone is ~250 lines. POSTFIX_SUBSCRIPT is ~260 lines. POSTFIX_MEMBER is ~320 lines.
+6 case labels (call, subscript, member, deref, assertion, slice) each extracted into named helpers:
+- `ir_gen_postfix_call` (returns `bool` for fatal-error early-exit on "called value is not a procedure")
+- `ir_gen_postfix_subscript`
+- `ir_gen_postfix_member`
+- `ir_gen_postfix_deref`
+- `ir_gen_postfix_assertion`
+- `ir_gen_postfix_slice` (handles both POSTFIX_SLICE and POSTFIX_SLICE_LT)
 
-**Action**:
-- Extract `ir_gen_postfix_call(ctx, op, base_val, cur_type)`
-- Extract `ir_gen_postfix_subscript(ctx, op, base_val, cur_type)`
-- Extract `ir_gen_postfix_member(ctx, op, base_val, cur_type)`
-- Extract `ir_gen_postfix_assertion(ctx, op, base_val, cur_type)`
-- Extract `ir_gen_postfix_slice(ctx, op, base_val, cur_type)`
+Each helper takes `(ctx, op, &val, &cur_type)` and updates state via pointers.
+Main function reduced to ~50 lines of dispatch logic. Net -16 lines.
+All 155 tests pass.
 
-**Target**: Main function becomes ~50 lines of dispatch.
+### 3.4 ✅ `ir_gen_node` — 1069 lines (line 6232) — DONE
 
-### 3.4 `ir_gen_node` — 1069 lines (line 6232)
+11 largest inline cases extracted as named functions (functions were already extracted, case bodies replaced with 1-line calls): `ir_gen_cast_expr`, `ir_gen_len_cap_expr`, `ir_gen_offset_of_expr`, `ir_gen_raw_data_expr`, `ir_gen_make_expr`, `ir_gen_delete_expr`, `ir_gen_incl_excl_expr`, `ir_gen_compress_values_expr`, `ir_gen_soa_zip_expr`, `ir_gen_soa_unzip_expr`, `ir_gen_directive`.
 
-58 case labels. Each expression/statement handler already calls out to separate functions in most cases (the dispatch is clean). The intrinsic body generator (line ~3922) and runtime_intrinsic_body are already separate.
-
-**Action**: Most cases already delegate (e.g., `ir_gen_if_statement`, `ir_gen_for_statement`, `ir_gen_variable_decl`). The remaining inline cases (SOA_ZIP, SOA_UNZIP, COMPRESS_VALUES, EXPAND_VALUES) should be extracted to their own functions for consistency. This is primarily a cleanup pass — less critical than Phase 3.1–3.3.
+All 155 tests pass.
 
 ### 3.5 `ir_gen_lvalue` — 649 lines (line 1588)
 
@@ -253,11 +254,12 @@ There is at least one case where a buffer passed to snprintf() may be too small.
 | 2.6 Error list unify ✅ DONE | Low | Low | sem_error.c, ir_gen_error.c | 9th |
 | 5.3 Import path helper ✅ DONE | Low | Low | package_resolver.c | 10th |
 | 3.1 Split sem_evaluate_expr ✅ DONE | High | High | semantic_analyser.c → multiple | 11th |
-| 3.2 Split sem_resolve_type_expr | High | High | semantic_analyser.c → multiple | 12th |
-| 3.3 Split ir_gen_postfix_expression | Medium | Medium | llvm_ir_generator.c → multiple | 13th |
-| 3.5 Split ir_gen_lvalue | Medium | Medium | llvm_ir_generator.c | 14th |
+| 3.2 Split sem_resolve_type_expr ✅ DONE | High | High | semantic_analyser.c → multiple | 12th |
+| 3.3 Split ir_gen_postfix_expression ✅ DONE | Medium | Medium | llvm_ir_generator.c → multiple | 13th |
+| 3.4 Split ir_gen_node ✅ DONE | Medium | Low | llvm_ir_generator.c | 14th |
+| 3.5 Split ir_gen_lvalue | Medium | Medium | llvm_ir_generator.c | 15th |
 | 4.1–4.4 Split files | High | Medium | Multiple files | After function splits |
-| 5.1 Table-driven actions | Medium | Medium | odin_grammar_ast_actions.c | 15th |
+| 5.1 Table-driven actions | Medium | Medium | odin_grammar_ast_actions.c | 16th |
 | 5.4 Const correctness | Low | Low | All files | Ongoing |
 
 **Can be done independently at any time** (no dependency on other phases):

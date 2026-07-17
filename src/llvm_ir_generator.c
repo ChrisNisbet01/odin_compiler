@@ -1767,6 +1767,314 @@ ir_gen_map_subscript(IrGenContext * ctx, LLVMValueRef map_val,
     }
 }
 
+// Phase 3.5 helpers — extracted cases from ir_gen_lvalue
+
+static bool
+ir_gen_lvalue_postfix_subscript(IrGenContext * ctx, LLVMValueRef * ptr,
+                                TypeDescriptor const ** cur_type, odin_grammar_node_t * op)
+{
+    odin_grammar_node_t * index_expr = NULL;
+    for (size_t ci = 0; ci < op->list.count; ci++)
+    {
+        if (op->list.children[ci] != NULL)
+        {
+            index_expr = op->list.children[ci];
+            break;
+        }
+    }
+    if (index_expr == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "subscript index expression is NULL");
+        return false;
+    }
+
+    LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
+    if (index_val == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "failed to evaluate subscript index");
+        return false;
+    }
+
+    if (*cur_type == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "subscript target has unknown type");
+        return false;
+    }
+
+    if ((*cur_type)->kind == TD_KIND_ARRAY)
+    {
+        if (ctx->bounds_checking_enabled)
+        {
+            LLVMValueRef len_val = LLVMConstInt(
+                LLVMInt64TypeInContext(ctx->context), (long long)(*cur_type)->as.array.count, false
+            );
+            index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+        }
+        LLVMTypeRef arr_type = (*cur_type)->llvm_type;
+        LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false), index_val};
+        *ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, *ptr, indices, 2, "subs");
+
+        if ((*cur_type)->element_type)
+            *cur_type = (*cur_type)->element_type;
+    }
+    else if ((*cur_type)->kind == TD_KIND_SLICE || (*cur_type)->kind == TD_KIND_DYNAMIC_ARRAY)
+    {
+        if (ctx->bounds_checking_enabled)
+        {
+            LLVMValueRef len_indices[]
+                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+            LLVMValueRef len_ptr = LLVMBuildInBoundsGEP2(
+                ctx->builder, (*cur_type)->llvm_type, *ptr, len_indices, 2, "slice.len.ptr"
+            );
+            LLVMValueRef len_val = LLVMBuildLoad2(
+                ctx->builder, LLVMInt64TypeInContext(ctx->context), len_ptr, "slice.len"
+            );
+            index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+        }
+        LLVMValueRef data_indices[]
+            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+        LLVMValueRef data_field = LLVMBuildInBoundsGEP2(
+            ctx->builder, (*cur_type)->llvm_type, *ptr, data_indices, 2, "slice.data.ptr"
+        );
+        LLVMValueRef data = LLVMBuildLoad2(
+            ctx->builder, LLVMPointerType((*cur_type)->element_type->llvm_type, 0), data_field, "slice.data"
+        );
+
+        *ptr = LLVMBuildInBoundsGEP2(
+            ctx->builder, (*cur_type)->element_type->llvm_type, data, &index_val, 1, "slice.subs"
+        );
+
+        if ((*cur_type)->element_type)
+            *cur_type = (*cur_type)->element_type;
+    }
+    else if ((*cur_type)->kind == TD_KIND_BASIC && (*cur_type)->as.basic.name != NULL
+             && strcmp((*cur_type)->as.basic.name, "string") == 0)
+    {
+        if (ctx->bounds_checking_enabled)
+        {
+            LLVMValueRef len_indices[]
+                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+            LLVMValueRef len_ptr = LLVMBuildInBoundsGEP2(
+                ctx->builder, (*cur_type)->llvm_type, *ptr, len_indices, 2, "str.len.ptr"
+            );
+            LLVMValueRef len_val = LLVMBuildLoad2(
+                ctx->builder, LLVMInt64TypeInContext(ctx->context), len_ptr, "str.len"
+            );
+            index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+        }
+        LLVMValueRef data_indices[]
+            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+        LLVMValueRef data_field = LLVMBuildInBoundsGEP2(
+            ctx->builder, (*cur_type)->llvm_type, *ptr, data_indices, 2, "str.data.ptr"
+        );
+        LLVMValueRef data = LLVMBuildLoad2(
+            ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_field, "str.data"
+        );
+        *ptr = LLVMBuildInBoundsGEP2(
+            ctx->builder, LLVMInt8TypeInContext(ctx->context), data, &index_val, 1, "str.subs"
+        );
+        *cur_type = get_basic_type_by_name(ctx->type_registry, "u8");
+    }
+    else if ((*cur_type)->kind == TD_KIND_VECTOR)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op,
+            "vector element assignment not supported");
+        return false;
+    }
+    else if ((*cur_type)->kind == TD_KIND_MULTI_POINTER)
+    {
+        LLVMValueRef data_ptr = LLVMBuildLoad2(ctx->builder, (*cur_type)->llvm_type, *ptr, "mp.data");
+        *ptr = LLVMBuildInBoundsGEP2(
+            ctx->builder, (*cur_type)->element_type->llvm_type, data_ptr, &index_val, 1, "mp.subs"
+        );
+        if ((*cur_type)->element_type)
+            *cur_type = (*cur_type)->element_type;
+    }
+    else if ((*cur_type)->kind == TD_KIND_MAP)
+    {
+        *ptr = ir_gen_map_subscript(ctx, *ptr, *cur_type, index_val, cur_type, true, "m.");
+        if (*ptr == NULL)
+            return false;
+    }
+    else
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "map subscript: failed to extract data pointer");
+        return false;
+    }
+    return true;
+}
+
+static bool
+ir_gen_lvalue_postfix_member(IrGenContext * ctx, LLVMValueRef * ptr,
+                             TypeDescriptor const ** cur_type, odin_grammar_node_t * op)
+{
+    odin_grammar_node_t * field_name_node = NULL;
+    for (size_t ci = 0; ci < op->list.count; ci++)
+    {
+        odin_grammar_node_t * child = op->list.children[ci];
+        if (child != NULL && child->type == AST_NODE_IDENTIFIER)
+        {
+            field_name_node = child;
+            break;
+        }
+    }
+    if (field_name_node == NULL || field_name_node->text == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access: missing field name");
+        return false;
+    }
+
+    if (*cur_type == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access: current type is unknown");
+        return false;
+    }
+
+    // Pointer auto-dereference: p.field -> load p, then access member on pointee
+    if (ir_gen_is_dereferenceable(*cur_type))
+    {
+        TypeDescriptor const * pointee = (*cur_type)->pointee;
+        if (pointee == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access through pointer with unknown pointee");
+            return false;
+        }
+        *ptr = LLVMBuildLoad2(ctx->builder, (*cur_type)->llvm_type, *ptr, "auto.deref");
+        *cur_type = pointee;
+    }
+
+    if ((*cur_type)->kind == TD_KIND_UNION)
+    {
+        int field_idx = type_descriptor_find_union_field_index(*cur_type, field_name_node->text);
+        if (field_idx < 0)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, op, "union has no field named");
+            return false;
+        }
+        struct_field_t const * field = type_descriptor_get_union_field(*cur_type, field_idx);
+        if (field == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, op, "union field lookup returned NULL");
+            return false;
+        }
+
+        LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+        LLVMValueRef tag_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+        LLVMValueRef tag_ptr = LLVMBuildInBoundsGEP2(
+            ctx->builder, (*cur_type)->llvm_type, *ptr, tag_indices, 2, "union.tag.gep"
+        );
+        LLVMValueRef tag_val
+            = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)field_idx, false);
+        LLVMBuildStore(ctx->builder, tag_val, tag_ptr);
+
+        LLVMValueRef payload_indices[2]
+            = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+        LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(
+            ctx->builder, (*cur_type)->llvm_type, *ptr, payload_indices, 2, "union.payload.gep"
+        );
+        *ptr = LLVMBuildPointerCast(
+            ctx->builder,
+            payload_ptr,
+            LLVMPointerType(field->type_desc->llvm_type, 0),
+            field_name_node->text
+        );
+        *cur_type = field->type_desc;
+        return true;
+    }
+
+    if ((*cur_type)->kind == TD_KIND_MAYBE)
+    {
+        LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+        LLVMValueRef payload_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+        LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(ctx->builder, (*cur_type)->llvm_type, *ptr, payload_indices, 2, "maybe.val.gep");
+        *ptr = LLVMBuildBitCast(ctx->builder, payload_ptr, LLVMPointerType((*cur_type)->as.maybe.inner_type->llvm_type, 0), field_name_node->text);
+        *cur_type = (*cur_type)->as.maybe.inner_type;
+        return true;
+    }
+
+    // Aggregate member access: string, slice, dynamic_array (.len, .data, .cap)
+    {
+        LLVMTypeRef struct_type = NULL;
+        int field_idx = -1;
+        TypeDescriptor const * resolved_type = NULL;
+        char const * error_name = NULL;
+        if (ir_gen_resolve_aggregate_field(ctx, *cur_type, field_name_node->text, &struct_type, &field_idx, &resolved_type, &error_name))
+        {
+            LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+            LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
+            *ptr = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, *ptr, field_indices, 2, field_name_node->text);
+            *cur_type = resolved_type;
+            return true;
+        }
+        if (error_name)
+        {
+            char err_buf[128];
+            snprintf(err_buf, sizeof(err_buf), "%s has no field named", error_name);
+            ir_gen_error_collection_add(&ctx->errors, NULL, op, err_buf);
+            return false;
+        }
+    }
+
+    // Array .len -> compile-time constant
+    if ((*cur_type)->kind == TD_KIND_ARRAY)
+    {
+        if (strcmp(field_name_node->text, "len") == 0)
+        {
+            *cur_type = get_basic_type_by_name(ctx->type_registry, "int");
+            LLVMValueRef const_val = LLVMConstInt((*cur_type)->llvm_type,
+                (unsigned long long)(*cur_type)->as.array.count, false);
+            LLVMValueRef alloca_tmp = LLVMBuildAlloca(ctx->builder, (*cur_type)->llvm_type, "arr.len");
+            LLVMBuildStore(ctx->builder, const_val, alloca_tmp);
+            *ptr = alloca_tmp;
+            return true;
+        }
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "array has no field named");
+        return false;
+    }
+
+    if ((*cur_type)->kind != TD_KIND_STRUCT && (*cur_type)->kind != TD_KIND_SOA)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access: type is not a struct");
+        return false;
+    }
+
+    field_access_path_t path;
+    if (!type_descriptor_find_struct_field_path(*cur_type, field_name_node->text, &path))
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "struct has no field named");
+        return false;
+    }
+
+    int n_indices = path.count + 1;
+    LLVMValueRef indices[MAX_FIELD_ACCESS_DEPTH + 1];
+    indices[0] = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    for (int pi = 0; pi < path.count; pi++)
+    {
+        indices[pi + 1]
+            = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (unsigned)path.indices[pi], false);
+    }
+    *ptr = LLVMBuildInBoundsGEP2(
+        ctx->builder, (*cur_type)->llvm_type, *ptr, indices, (unsigned)n_indices, field_name_node->text
+    );
+
+    TypeDescriptor const * tmp_type = *cur_type;
+    for (int pi = 0; pi < path.count; pi++)
+    {
+        struct_field_t const * f = type_descriptor_get_struct_field(tmp_type, path.indices[pi]);
+        if (f == NULL)
+            break;
+        if (pi == path.count - 1)
+            *cur_type = f->type_desc;
+        else
+            tmp_type = f->type_desc;
+    }
+    return true;
+}
+
 // Evaluate a node as an lvalue (return a pointer to the storage location).
 static LLVMValueRef
 ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
@@ -1839,316 +2147,14 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
             switch (op->type)
             {
             case AST_NODE_POSTFIX_SUBSCRIPT:
-            {
-                odin_grammar_node_t * index_expr = NULL;
-                for (size_t ci = 0; ci < op->list.count; ci++)
-                {
-                    if (op->list.children[ci] != NULL)
-                    {
-                        index_expr = op->list.children[ci];
-                        break;
-                    }
-                }
-                if (index_expr == NULL)
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "subscript index expression is NULL");
+                if (!ir_gen_lvalue_postfix_subscript(ctx, &ptr, &cur_type, op))
                     return NULL;
-                }
-
-                LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
-                if (index_val == NULL)
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "failed to evaluate subscript index");
-                    return NULL;
-                }
-
-                if (cur_type == NULL)
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "subscript target has unknown type");
-                    return NULL;
-                }
-
-                if (cur_type->kind == TD_KIND_ARRAY)
-                {
-                    if (ctx->bounds_checking_enabled)
-                    {
-                        LLVMValueRef len_val = LLVMConstInt(
-                            LLVMInt64TypeInContext(ctx->context), (long long)cur_type->as.array.count, false
-                        );
-                        index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
-                    }
-                    LLVMTypeRef arr_type = cur_type->llvm_type;
-                    LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false), index_val};
-                    ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, ptr, indices, 2, "subs");
-
-                    if (cur_type->element_type)
-                        cur_type = cur_type->element_type;
-                }
-                else if (cur_type->kind == TD_KIND_SLICE || cur_type->kind == TD_KIND_DYNAMIC_ARRAY)
-                {
-                    if (ctx->bounds_checking_enabled)
-                    {
-                        // Load .len field (field index 1) from the slice struct
-                        LLVMValueRef len_indices[]
-                            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
-                        LLVMValueRef len_ptr = LLVMBuildInBoundsGEP2(
-                            ctx->builder, cur_type->llvm_type, ptr, len_indices, 2, "slice.len.ptr"
-                        );
-                        LLVMValueRef len_val = LLVMBuildLoad2(
-                            ctx->builder, LLVMInt64TypeInContext(ctx->context), len_ptr, "slice.len"
-                        );
-                        index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
-                    }
-                    LLVMValueRef data_indices[]
-                        = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                           LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-                    LLVMValueRef data_field = LLVMBuildInBoundsGEP2(
-                        ctx->builder, cur_type->llvm_type, ptr, data_indices, 2, "slice.data.ptr"
-                    );
-                    LLVMValueRef data = LLVMBuildLoad2(
-                        ctx->builder, LLVMPointerType(cur_type->element_type->llvm_type, 0), data_field, "slice.data"
-                    );
-
-                    ptr = LLVMBuildInBoundsGEP2(
-                        ctx->builder, cur_type->element_type->llvm_type, data, &index_val, 1, "slice.subs"
-                    );
-
-                    if (cur_type->element_type)
-                        cur_type = cur_type->element_type;
-                }
-                else if (cur_type->kind == TD_KIND_BASIC && cur_type->as.basic.name != NULL
-                         && strcmp(cur_type->as.basic.name, "string") == 0)
-                {
-                    if (ctx->bounds_checking_enabled)
-                    {
-                        // Load .len field (field index 1) from the string struct
-                        LLVMValueRef len_indices[]
-                            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
-                        LLVMValueRef len_ptr = LLVMBuildInBoundsGEP2(
-                            ctx->builder, cur_type->llvm_type, ptr, len_indices, 2, "str.len.ptr"
-                        );
-                        LLVMValueRef len_val = LLVMBuildLoad2(
-                            ctx->builder, LLVMInt64TypeInContext(ctx->context), len_ptr, "str.len"
-                        );
-                        index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
-                    }
-                    // String subscript: extract data ptr from {ptr, i64} struct, GEP, store ptr for load
-                    LLVMValueRef data_indices[]
-                        = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                           LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-                    LLVMValueRef data_field = LLVMBuildInBoundsGEP2(
-                        ctx->builder, cur_type->llvm_type, ptr, data_indices, 2, "str.data.ptr"
-                    );
-                    LLVMValueRef data = LLVMBuildLoad2(
-                        ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_field, "str.data"
-                    );
-                    ptr = LLVMBuildInBoundsGEP2(
-                        ctx->builder, LLVMInt8TypeInContext(ctx->context), data, &index_val, 1, "str.subs"
-                    );
-                    cur_type = get_basic_type_by_name(ctx->type_registry, "u8");
-                }
-                else if (cur_type->kind == TD_KIND_VECTOR)
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op,
-                        "vector element assignment not supported");
-                    return NULL;
-                }
-                else if (cur_type->kind == TD_KIND_MULTI_POINTER)
-                {
-                    LLVMValueRef data_ptr = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, ptr, "mp.data");
-                    ptr = LLVMBuildInBoundsGEP2(
-                        ctx->builder, cur_type->element_type->llvm_type, data_ptr, &index_val, 1, "mp.subs"
-                    );
-                    if (cur_type->element_type)
-                        cur_type = cur_type->element_type;
-                }
-                else if (cur_type->kind == TD_KIND_MAP)
-                {
-                    ptr = ir_gen_map_subscript(ctx, ptr, cur_type, index_val, &cur_type, true, "m.");
-                    if (ptr == NULL)
-                        return NULL;
-                }
-                else
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "map subscript: failed to extract data pointer");
-                    return NULL;
-                }
                 break;
-            }
 
             case AST_NODE_POSTFIX_MEMBER:
-            {
-                odin_grammar_node_t * field_name_node = NULL;
-                for (size_t ci = 0; ci < op->list.count; ci++)
-                {
-                    odin_grammar_node_t * child = op->list.children[ci];
-                    if (child != NULL && child->type == AST_NODE_IDENTIFIER)
-                    {
-                        field_name_node = child;
-                        break;
-                    }
-                }
-                if (field_name_node == NULL || field_name_node->text == NULL)
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access: missing field name");
+                if (!ir_gen_lvalue_postfix_member(ctx, &ptr, &cur_type, op))
                     return NULL;
-                }
-
-                if (cur_type == NULL)
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access: current type is unknown");
-                    return NULL;
-                }
-
-                // Pointer auto-dereference: p.field -> load p, then access member on pointee
-                if (ir_gen_is_dereferenceable(cur_type))
-                {
-                    TypeDescriptor const * pointee = cur_type->pointee;
-                    if (pointee == NULL)
-                    {
-                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access through pointer with unknown pointee");
-                        return NULL;
-                    }
-                    // Load the pointer value
-                    ptr = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, ptr, "auto.deref");
-                    cur_type = pointee;
-                    // Fall through to member access on the pointee type
-                }
-
-                if (cur_type->kind == TD_KIND_UNION)
-                {
-                    int field_idx = type_descriptor_find_union_field_index(cur_type, field_name_node->text);
-                    if (field_idx < 0)
-                    {
-                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "union has no field named");
-                        return NULL;
-                    }
-                    struct_field_t const * field = type_descriptor_get_union_field(cur_type, field_idx);
-                    if (field == NULL)
-                    {
-                        ir_gen_error_collection_add(&ctx->errors, NULL, op, "union field lookup returned NULL");
-                        return NULL;
-                    }
-
-                    // Set tag field
-                    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                    LLVMValueRef tag_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-                    LLVMValueRef tag_ptr = LLVMBuildInBoundsGEP2(
-                        ctx->builder, cur_type->llvm_type, ptr, tag_indices, 2, "union.tag.gep"
-                    );
-                    LLVMValueRef tag_val
-                        = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)field_idx, false);
-                    LLVMBuildStore(ctx->builder, tag_val, tag_ptr);
-
-                    // Bitcast payload pointer to field type
-                    LLVMValueRef payload_indices[2]
-                        = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
-                    LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(
-                        ctx->builder, cur_type->llvm_type, ptr, payload_indices, 2, "union.payload.gep"
-                    );
-                    ptr = LLVMBuildPointerCast(
-                        ctx->builder,
-                        payload_ptr,
-                        LLVMPointerType(field->type_desc->llvm_type, 0),
-                        field_name_node->text
-                    );
-                    cur_type = field->type_desc;
-                    break;
-                }
-
-                if (cur_type->kind == TD_KIND_MAYBE)
-                {
-                    // Maybe(T).value — access payload field 1, bitcast to inner type
-                    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                    LLVMValueRef payload_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
-                    LLVMValueRef payload_ptr = LLVMBuildInBoundsGEP2(ctx->builder, cur_type->llvm_type, ptr, payload_indices, 2, "maybe.val.gep");
-                    ptr = LLVMBuildBitCast(ctx->builder, payload_ptr, LLVMPointerType(cur_type->as.maybe.inner_type->llvm_type, 0), field_name_node->text);
-                    cur_type = cur_type->as.maybe.inner_type;
-                    break;
-                }
-
-                // Aggregate member access: string, slice, dynamic_array (.len, .data, .cap)
-                {
-                    LLVMTypeRef struct_type = NULL;
-                    int field_idx = -1;
-                    TypeDescriptor const * resolved_type = NULL;
-                    char const * error_name = NULL;
-                    if (ir_gen_resolve_aggregate_field(ctx, cur_type, field_name_node->text, &struct_type, &field_idx, &resolved_type, &error_name))
-                    {
-                        LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                        LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
-                        ptr = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr, field_indices, 2, field_name_node->text);
-                        cur_type = resolved_type;
-                        break;
-                    }
-                    if (error_name)
-                    {
-                        char err_buf[128];
-                        snprintf(err_buf, sizeof(err_buf), "%s has no field named", error_name);
-                        ir_gen_error_collection_add(&ctx->errors, NULL, op, err_buf);
-                        return NULL;
-                    }
-                }
-
-                // Array .len -> compile-time constant
-                if (cur_type->kind == TD_KIND_ARRAY)
-                {
-                    if (strcmp(field_name_node->text, "len") == 0)
-                    {
-                        cur_type = get_basic_type_by_name(ctx->type_registry, "int");
-                        // Return a pointer to a stack-allocated int constant
-                        LLVMValueRef const_val = LLVMConstInt(cur_type->llvm_type,
-                            (unsigned long long)cur_type->as.array.count, false);
-                        LLVMValueRef alloca_tmp = LLVMBuildAlloca(ctx->builder, cur_type->llvm_type, "arr.len");
-                        LLVMBuildStore(ctx->builder, const_val, alloca_tmp);
-                        ptr = alloca_tmp;
-                        break;
-                    }
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "array has no field named");
-                    return NULL;
-                }
-
-                if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA)
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "member access: type is not a struct");
-                    return NULL;
-                }
-
-                field_access_path_t path;
-                if (!type_descriptor_find_struct_field_path(cur_type, field_name_node->text, &path))
-                {
-                    ir_gen_error_collection_add(&ctx->errors, NULL, op, "struct has no field named");
-                    return NULL;
-                }
-
-                int n_indices = path.count + 1;
-                LLVMValueRef indices[MAX_FIELD_ACCESS_DEPTH + 1];
-                indices[0] = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-                for (int pi = 0; pi < path.count; pi++)
-                {
-                    indices[pi + 1]
-                        = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (unsigned)path.indices[pi], false);
-                }
-                ptr = LLVMBuildInBoundsGEP2(
-                    ctx->builder, cur_type->llvm_type, ptr, indices, (unsigned)n_indices, field_name_node->text
-                );
-
-                // Update cur_type to the final field type
-                TypeDescriptor const * tmp_type = cur_type;
-                for (int pi = 0; pi < path.count; pi++)
-                {
-                    struct_field_t const * f = type_descriptor_get_struct_field(tmp_type, path.indices[pi]);
-                    if (f == NULL)
-                        break;
-                    if (pi == path.count - 1)
-                        cur_type = f->type_desc;
-                    else
-                        tmp_type = f->type_desc;
-                }
                 break;
-            }
 
             case AST_NODE_POSTFIX_DEREF:
             {
@@ -5993,6 +5999,665 @@ ir_gen_get_or_create_type_info_global(IrGenContext * ctx, TypeDescriptor const *
     return global;
 }
 
+// Phase 3.4 helpers — extracted inline cases from ir_gen_node
+
+static LLVMValueRef
+ir_gen_cast_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2)
+        return NULL;
+    odin_grammar_node_t * expr_node = node->list.children[1];
+    LLVMValueRef src_val = ir_gen_node(ctx, expr_node);
+    if (src_val == NULL)
+        return NULL;
+
+    TypeDescriptor const * dest_type = node->resolved_type;
+    if (dest_type == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "cast expression has no resolved target type");
+        return NULL;
+    }
+
+    LLVMTypeRef dest_llvm_type = dest_type->llvm_type;
+    LLVMTypeRef src_llvm_type = LLVMTypeOf(src_val);
+    LLVMTypeKind src_kind = LLVMGetTypeKind(src_llvm_type);
+    LLVMTypeKind dest_kind = LLVMGetTypeKind(dest_llvm_type);
+
+    if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMIntegerTypeKind)
+    {
+        unsigned src_w = LLVMGetIntTypeWidth(src_llvm_type);
+        unsigned dst_w = LLVMGetIntTypeWidth(dest_llvm_type);
+        if (dst_w > src_w)
+            return LLVMBuildIntCast2(ctx->builder, src_val, dest_llvm_type, false, "zext");
+        else
+            return LLVMBuildIntCast2(ctx->builder, src_val, dest_llvm_type, false, "trunc");
+    }
+    else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
+             && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
+    {
+        return LLVMBuildFPCast(ctx->builder, src_val, dest_llvm_type, "fpcast");
+    }
+    else if ((src_kind == LLVMIntegerTypeKind)
+             && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
+    {
+        return LLVMBuildSIToFP(ctx->builder, src_val, dest_llvm_type, "sitofp");
+    }
+    else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind) && dest_kind == LLVMIntegerTypeKind)
+    {
+        return LLVMBuildFPToSI(ctx->builder, src_val, dest_llvm_type, "fptosi");
+    }
+    else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMPointerTypeKind)
+    {
+        return LLVMBuildPointerCast(ctx->builder, src_val, dest_llvm_type, "ptrcast");
+    }
+    else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMIntegerTypeKind)
+    {
+        return LLVMBuildPtrToInt(ctx->builder, src_val, dest_llvm_type, "ptrint");
+    }
+    else if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMPointerTypeKind)
+    {
+        return LLVMBuildIntToPtr(ctx->builder, src_val, dest_llvm_type, "intptr");
+    }
+    return LLVMBuildBitCast(ctx->builder, src_val, dest_llvm_type, "cast");
+}
+
+static LLVMValueRef
+ir_gen_len_cap_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1)
+        return NULL;
+    odin_grammar_node_t * operand = node->list.children[0];
+    LLVMValueRef operand_val = ir_gen_node(ctx, operand);
+    if (operand_val == NULL)
+        return NULL;
+
+    TypeDescriptor const * operand_type = operand->resolved_type;
+    if (operand_type == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap operand has no type");
+        return NULL;
+    }
+
+    if (operand_type->kind == TD_KIND_ARRAY)
+    {
+        return LLVMConstInt(
+            LLVMInt64TypeInContext(ctx->context), (unsigned long long)operand_type->as.array.count, false
+        );
+    }
+
+    if (operand_type->kind == TD_KIND_MAP)
+    {
+        bool is_cap_map = (node->type == AST_NODE_CAP_EXPR);
+        LLVMValueRef data_ptr_map = NULL;
+        LLVMTypeRef val_type_map = LLVMTypeOf(operand_val);
+        if (LLVMGetTypeKind(val_type_map) == LLVMPointerTypeKind)
+        {
+            LLVMValueRef zz[]
+                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+            data_ptr_map = LLVMBuildLoad2(
+                ctx->builder,
+                LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0),
+                LLVMBuildInBoundsGEP2(ctx->builder, operand_type->llvm_type, operand_val, zz, 2, "map.ptr.gep"),
+                ""
+            );
+        }
+        else
+        {
+            data_ptr_map = LLVMBuildExtractValue(ctx->builder, operand_val, 0, "map.ptr");
+        }
+        if (data_ptr_map == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap: failed to extract map data pointer");
+            return NULL;
+        }
+        LLVMValueRef off_map = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), is_cap_map ? 8 : 0, false);
+        LLVMValueRef cnt_ptr_map = LLVMBuildPointerCast(
+            ctx->builder,
+            LLVMBuildInBoundsGEP2(
+                ctx->builder, LLVMInt8TypeInContext(ctx->context), data_ptr_map, &off_map, 1, "map.cnt.gep"
+            ),
+            LLVMPointerType(LLVMInt64TypeInContext(ctx->context), 0),
+            ""
+        );
+        LLVMValueRef len_val_map = LLVMBuildLoad2(
+            ctx->builder, LLVMInt64TypeInContext(ctx->context), cnt_ptr_map, is_cap_map ? "map.cap" : "map.len"
+        );
+        if (len_val_map == NULL)
+            return NULL;
+        return len_val_map;
+    }
+
+    bool is_cap = (node->type == AST_NODE_CAP_EXPR);
+    int field_index = (is_cap && operand_type->kind == TD_KIND_DYNAMIC_ARRAY) ? 2 : 1;
+    char const * field_name = (field_index == 2) ? "cap" : "len";
+
+    LLVMTypeRef val_type = LLVMTypeOf(operand_val);
+    LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
+    LLVMValueRef len_val = NULL;
+
+    if (val_kind == LLVMPointerTypeKind)
+    {
+        LLVMTypeRef struct_type = operand_type->llvm_type;
+        LLVMValueRef indices[]
+            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_index, false)};
+        LLVMValueRef field_ptr
+            = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, operand_val, indices, 2, "len.ptr");
+        len_val = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), field_ptr, field_name);
+    }
+    else
+    {
+        len_val = LLVMBuildExtractValue(ctx->builder, operand_val, (unsigned)field_index, field_name);
+    }
+
+    if (len_val == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap: failed to extract field from slice/dynamic array");
+        return NULL;
+    }
+    return len_val;
+}
+
+static LLVMValueRef
+ir_gen_offset_of_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2)
+        return NULL;
+    odin_grammar_node_t * type_node = node->list.children[0];
+    odin_grammar_node_t * field_node = node->list.children[1];
+    TypeDescriptor const * td = type_node->resolved_type;
+    if (td == NULL || td->llvm_type == NULL)
+        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+    if (td->kind != TD_KIND_STRUCT && td->kind != TD_KIND_SOA && td->kind != TD_KIND_UNION
+        && td->kind != TD_KIND_BIT_FIELD)
+        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+    char const * field_name = field_node ? field_node->text : NULL;
+    if (field_name == NULL)
+        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+    field_access_path_t path;
+    if (type_descriptor_find_struct_field_path(td, field_name, &path))
+    {
+        uint64_t offset = 0;
+        TypeDescriptor const * walk = td;
+        for (int pi = 0; pi < path.count; pi++)
+        {
+            struct_field_t const * f = type_descriptor_get_struct_field(walk, path.indices[pi]);
+            if (f == NULL)
+                break;
+            if (LLVMGetTypeKind(walk->llvm_type) == LLVMStructTypeKind)
+                offset += LLVMOffsetOfElement(ctx->data_layout, walk->llvm_type, (unsigned)path.indices[pi]);
+            walk = f->type_desc;
+        }
+        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), offset, false);
+    }
+    return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+}
+
+static LLVMValueRef
+ir_gen_raw_data_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1)
+        return NULL;
+    odin_grammar_node_t * operand = node->list.children[0];
+    LLVMValueRef operand_val = ir_gen_node(ctx, operand);
+    if (operand_val == NULL)
+        return NULL;
+    TypeDescriptor const * operand_type = operand->resolved_type;
+    if (operand_type == NULL)
+        return LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+    TypeDescriptor const * elem_type = operand_type->element_type;
+    LLVMTypeRef elem_ptr = elem_type ? LLVMPointerType(elem_type->llvm_type, 0)
+                                     : LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    if (operand_type->kind == TD_KIND_ARRAY)
+    {
+        if (LLVMGetTypeKind(LLVMTypeOf(operand_val)) == LLVMPointerTypeKind)
+            return LLVMBuildPointerCast(ctx->builder, operand_val, elem_ptr, "raw_data");
+        LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, LLVMTypeOf(operand_val), "raw_data.arr");
+        LLVMBuildStore(ctx->builder, operand_val, alloca);
+        return LLVMBuildPointerCast(ctx->builder, alloca, elem_ptr, "raw_data");
+    }
+    LLVMTypeRef val_type = LLVMTypeOf(operand_val);
+    LLVMValueRef data_ptr = NULL;
+    if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
+    {
+        LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                                  LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+        data_ptr = LLVMBuildLoad2(
+            ctx->builder,
+            LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0),
+            LLVMBuildInBoundsGEP2(ctx->builder, operand_type->llvm_type, operand_val, indices, 2, "rd.gep"),
+            "raw_data"
+        );
+    }
+    else
+    {
+        data_ptr = LLVMBuildExtractValue(ctx->builder, operand_val, 0, "raw_data");
+    }
+    if (elem_ptr)
+        return LLVMBuildPointerCast(ctx->builder, data_ptr, elem_ptr, "raw_data");
+    return data_ptr;
+}
+
+static LLVMValueRef
+ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2)
+        return NULL;
+    odin_grammar_node_t * len_node = node->list.children[1];
+
+    TypeDescriptor const * result_type = node->resolved_type;
+    if (result_type == NULL
+        || (result_type->kind != TD_KIND_SLICE && result_type->kind != TD_KIND_DYNAMIC_ARRAY
+            && result_type->kind != TD_KIND_MAP))
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "make: target type is not a slice, dynamic array, or map");
+        return NULL;
+    }
+
+    LLVMValueRef len_val = ir_gen_node(ctx, len_node);
+    if (len_val == NULL)
+        return NULL;
+    len_val = LLVMBuildIntCast(ctx->builder, len_val, LLVMInt64TypeInContext(ctx->context), "len.i64");
+
+    LLVMValueRef make_ptr = LLVMBuildAlloca(ctx->builder, result_type->llvm_type, "make.result");
+
+    if (result_type->kind == TD_KIND_MAP)
+    {
+        TypeDescriptor const * key_type = result_type->as.map.key_type;
+        TypeDescriptor const * val_type = result_type->as.map.value_type;
+        if (key_type == NULL || val_type == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "make(map): key or value type is NULL");
+            return NULL;
+        }
+
+        LLVMValueRef key_size = LLVMSizeOf(key_type->llvm_type);
+        LLVMValueRef val_size = LLVMSizeOf(val_type->llvm_type);
+
+        LLVMValueRef one_i64 = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 1, false);
+        LLVMValueRef entry_size = LLVMBuildAdd(
+            ctx->builder, one_i64, LLVMBuildAdd(ctx->builder, key_size, val_size, "kv.size"), "entry.size"
+        );
+
+        LLVMValueRef entries_size = LLVMBuildMul(ctx->builder, len_val, entry_size, "entries.size");
+        LLVMValueRef hdr32 = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 32, false);
+        LLVMValueRef total_size = LLVMBuildAdd(ctx->builder, hdr32, entries_size, "map.total.size");
+
+        LLVMValueRef map_data = ir_gen_call_calloc(ctx, total_size);
+        if (map_data == NULL)
+            return NULL;
+
+        LLVMTypeRef i8t = LLVMInt8TypeInContext(ctx->context);
+
+        LLVMValueRef cidx = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 8, false);
+        LLVMValueRef cptr = LLVMBuildPointerCast(
+            ctx->builder,
+            LLVMBuildInBoundsGEP2(ctx->builder, i8t, map_data, &cidx, 1, ""),
+            LLVMPointerType(LLVMInt64TypeInContext(ctx->context), 0),
+            ""
+        );
+        LLVMBuildStore(ctx->builder, len_val, cptr);
+
+        LLVMValueRef ksid = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 16, false);
+        LLVMValueRef ksptr = LLVMBuildPointerCast(
+            ctx->builder,
+            LLVMBuildInBoundsGEP2(ctx->builder, i8t, map_data, &ksid, 1, ""),
+            LLVMPointerType(LLVMInt64TypeInContext(ctx->context), 0),
+            ""
+        );
+        LLVMBuildStore(ctx->builder, key_size, ksptr);
+
+        LLVMValueRef vsid = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 24, false);
+        LLVMValueRef vsptr = LLVMBuildPointerCast(
+            ctx->builder,
+            LLVMBuildInBoundsGEP2(ctx->builder, i8t, map_data, &vsid, 1, ""),
+            LLVMPointerType(LLVMInt64TypeInContext(ctx->context), 0),
+            ""
+        );
+        LLVMBuildStore(ctx->builder, val_size, vsptr);
+
+        LLVMValueRef didx[]
+            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+        LLVMBuildStore(
+            ctx->builder,
+            map_data,
+            LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, didx, 2, "make.map.data.gep")
+        );
+    }
+    else
+    {
+        TypeDescriptor const * elem_type = result_type->element_type;
+        if (elem_type == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "make(slice): element type is NULL");
+            return NULL;
+        }
+
+        bool is_da = (result_type->kind == TD_KIND_DYNAMIC_ARRAY);
+
+        LLVMValueRef elem_size = LLVMSizeOf(elem_type->llvm_type);
+        LLVMValueRef total_size = LLVMBuildMul(ctx->builder, elem_size, len_val, "makemem.size");
+
+        LLVMValueRef raw_mem = ir_gen_call_malloc(ctx, total_size);
+        if (raw_mem == NULL)
+            return NULL;
+        LLVMTypeRef elem_ptr_type = LLVMPointerType(elem_type->llvm_type, 0);
+        LLVMValueRef data_ptr = LLVMBuildPointerCast(ctx->builder, raw_mem, elem_ptr_type, "make.data");
+
+        LLVMValueRef didx[]
+            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+        LLVMBuildStore(
+            ctx->builder,
+            data_ptr,
+            LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, didx, 2, "make.data.gep")
+        );
+
+        LLVMValueRef lidx[]
+            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
+        LLVMBuildStore(
+            ctx->builder,
+            len_val,
+            LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, lidx, 2, "make.len.gep")
+        );
+
+        if (is_da)
+        {
+            LLVMValueRef cidx[]
+                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 2, false)};
+            LLVMBuildStore(
+                ctx->builder,
+                len_val,
+                LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, cidx, 2, "make.cap.gep")
+            );
+        }
+    }
+
+    return LLVMBuildLoad2(ctx->builder, result_type->llvm_type, make_ptr, "make.result");
+}
+
+static LLVMValueRef
+ir_gen_delete_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1)
+        return NULL;
+    odin_grammar_node_t * target = node->list.children[0];
+    LLVMValueRef ptr_val = ir_gen_node(ctx, target);
+    if (ptr_val == NULL)
+        return NULL;
+
+    TypeDescriptor const * target_type = target->resolved_type;
+    if (target_type
+        && (target_type->kind == TD_KIND_SLICE || target_type->kind == TD_KIND_DYNAMIC_ARRAY
+            || target_type->kind == TD_KIND_MAP))
+    {
+        LLVMTypeRef struct_type = target_type->llvm_type;
+        LLVMTypeRef val_type = LLVMTypeOf(ptr_val);
+        LLVMValueRef data_ptr = NULL;
+        if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
+        {
+            LLVMValueRef indices[]
+                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+            LLVMValueRef data_gep
+                = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr_val, indices, 2, "del.data.gep");
+            data_ptr = LLVMBuildLoad2(
+                ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_gep, "del.data"
+            );
+        }
+        else
+        {
+            LLVMValueRef extracted = LLVMBuildExtractValue(ctx->builder, ptr_val, 0, "del.data");
+            data_ptr = LLVMBuildPointerCast(
+                ctx->builder, extracted, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), ""
+            );
+        }
+        ir_gen_call_free(ctx, data_ptr);
+    }
+    else
+    {
+        LLVMValueRef lvalue = ir_gen_lvalue_ptr(ctx, target);
+        if (lvalue != NULL)
+        {
+            LLVMTypeRef load_type
+                = target_type ? target_type->llvm_type : LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+            LLVMValueRef ptr = LLVMBuildLoad2(ctx->builder, load_type, lvalue, "del.ptr");
+            ir_gen_call_free(ctx, ptr);
+        }
+    }
+    return NULL;
+}
+
+static LLVMValueRef
+ir_gen_incl_excl_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2)
+        return NULL;
+    bool is_incl = (node->type == AST_NODE_INCL_EXPR);
+    LLVMValueRef bs_ptr = ir_gen_node(ctx, node->list.children[0]);
+    LLVMValueRef elem_val = ir_gen_node(ctx, node->list.children[1]);
+    if (bs_ptr == NULL || elem_val == NULL)
+        return NULL;
+    TypeDescriptor const * ptr_type = node->list.children[0]->resolved_type;
+    if (ptr_type == NULL || ptr_type->kind != TD_KIND_POINTER)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "incl/excl: operand is not a pointer");
+        return NULL;
+    }
+    TypeDescriptor const * bs_type = ptr_type->pointee;
+    if (bs_type == NULL || bs_type->kind != TD_KIND_BIT_SET)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "incl/excl: pointee is not a bit_set");
+        return NULL;
+    }
+    LLVMTypeRef backing_type = bs_type->llvm_type;
+    LLVMValueRef backing = LLVMBuildLoad2(ctx->builder, backing_type, bs_ptr, "bs.backing");
+    LLVMValueRef elem_cast = LLVMBuildIntCast(ctx->builder, elem_val, backing_type, "bs.elem");
+    LLVMValueRef one = LLVMConstInt(backing_type, 1, false);
+    LLVMValueRef mask = LLVMBuildShl(ctx->builder, one, elem_cast, "bs.mask");
+    LLVMValueRef result;
+    if (is_incl)
+        result = LLVMBuildOr(ctx->builder, backing, mask, "bs.incl");
+    else
+        result = LLVMBuildAnd(ctx->builder, backing, LLVMBuildNot(ctx->builder, mask, "bs.nmask"), "bs.excl");
+    LLVMBuildStore(ctx->builder, result, bs_ptr);
+    return NULL;
+}
+
+static LLVMValueRef
+ir_gen_compress_values_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2 || node->resolved_type == NULL)
+        return NULL;
+    TypeDescriptor const * target_type = node->resolved_type;
+    LLVMTypeRef llvm_type = target_type->llvm_type;
+    LLVMValueRef result = LLVMGetUndef(llvm_type);
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        LLVMValueRef val = ir_gen_node(ctx, node->list.children[i]);
+        if (val == NULL)
+            return NULL;
+        unsigned field_idx = (unsigned)(i - 1);
+        if (target_type->kind == TD_KIND_STRUCT)
+        {
+            struct_field_t const * field = type_descriptor_get_struct_field(target_type, (int)field_idx);
+            if (field && field->type_desc && field->type_desc->llvm_type
+                && LLVMTypeOf(val) != field->type_desc->llvm_type)
+            {
+                val = coerce_value_to_type(ctx, val, field->type_desc->llvm_type,
+                    false, "compress.field");
+            }
+        }
+        else if (target_type->kind == TD_KIND_ARRAY && target_type->element_type
+                 && target_type->element_type->llvm_type
+                 && LLVMTypeOf(val) != target_type->element_type->llvm_type)
+        {
+            val = coerce_value_to_type(ctx, val, target_type->element_type->llvm_type,
+                false, "compress.elem");
+        }
+        result = LLVMBuildInsertValue(ctx->builder, result, val, field_idx, "compress.field");
+    }
+    return result;
+}
+
+static LLVMValueRef
+ir_gen_soa_zip_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1 || node->resolved_type == NULL)
+        return NULL;
+    odin_grammar_node_t * arg_list = node->list.children[0];
+    odin_grammar_node_t * arg_expr = (arg_list && arg_list->list.count >= 1) ? arg_list->list.children[0] : NULL;
+    if (arg_expr == NULL)
+        return NULL;
+
+    odin_grammar_node_t * ir_args[128];
+    int ir_arg_count = 0;
+    ir_gen_collect_comma_chain_args(arg_expr, ir_args, 128, &ir_arg_count);
+    if (ir_arg_count < 1)
+        return NULL;
+
+    TypeDescriptor const * result_type = node->resolved_type;
+    LLVMTypeRef llvm_type = result_type->llvm_type;
+
+    LLVMValueRef * data_ptrs = malloc((size_t)ir_arg_count * sizeof(LLVMValueRef));
+    LLVMValueRef * len_vals = malloc((size_t)ir_arg_count * sizeof(LLVMValueRef));
+    if (data_ptrs == NULL || len_vals == NULL)
+    {
+        free(data_ptrs);
+        free(len_vals);
+        return NULL;
+    }
+
+    LLVMValueRef min_len = NULL;
+    for (int i = 0; i < ir_arg_count; i++)
+    {
+        LLVMValueRef slice_val = ir_gen_node(ctx, ir_args[i]);
+        if (slice_val == NULL)
+        {
+            free(data_ptrs);
+            free(len_vals);
+            return NULL;
+        }
+        TypeDescriptor const * arg_type = ir_args[i]->resolved_type;
+        if (LLVMGetTypeKind(LLVMTypeOf(slice_val)) == LLVMPointerTypeKind
+            && arg_type != NULL && arg_type->llvm_type != NULL)
+        {
+            slice_val = LLVMBuildLoad2(ctx->builder, arg_type->llvm_type, slice_val, "sz.load");
+        }
+        data_ptrs[i] = LLVMBuildExtractValue(ctx->builder, slice_val, 0, "sz.data");
+        len_vals[i] = LLVMBuildExtractValue(ctx->builder, slice_val, 1, "sz.len");
+
+        if (i == 0)
+            min_len = len_vals[i];
+        else
+        {
+            LLVMValueRef cmp = LLVMBuildICmp(ctx->builder, LLVMIntULT, len_vals[i], min_len, "sz.cmp");
+            min_len = LLVMBuildSelect(ctx->builder, cmp, len_vals[i], min_len, "sz.min");
+        }
+    }
+
+    LLVMValueRef result = LLVMGetUndef(llvm_type);
+    for (int i = 0; i < ir_arg_count; i++)
+    {
+        TypeDescriptor const * arg_type = ir_args[i]->resolved_type;
+        LLVMValueRef new_slice = LLVMGetUndef(arg_type->llvm_type);
+        new_slice = LLVMBuildInsertValue(ctx->builder, new_slice, data_ptrs[i], 0, "sz.slice.data");
+        new_slice = LLVMBuildInsertValue(ctx->builder, new_slice, min_len, 1, "sz.slice.len");
+        result = LLVMBuildInsertValue(ctx->builder, result, new_slice, (unsigned)i, "sz.field");
+    }
+
+    free(data_ptrs);
+    free(len_vals);
+    return result;
+}
+
+static LLVMValueRef
+ir_gen_soa_unzip_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1 || node->resolved_type == NULL)
+        return NULL;
+    LLVMValueRef soa_val = ir_gen_node(ctx, node->list.children[0]);
+    if (soa_val == NULL)
+        return NULL;
+    TypeDescriptor const * arg_type = node->list.children[0]->resolved_type;
+    if (LLVMGetTypeKind(LLVMTypeOf(soa_val)) == LLVMPointerTypeKind
+        && arg_type != NULL && arg_type->llvm_type != NULL)
+    {
+        soa_val = LLVMBuildLoad2(ctx->builder, arg_type->llvm_type, soa_val, "suz.load");
+    }
+    TypeDescriptor const * result_type = node->resolved_type;
+    int field_count = arg_type->struct_metadata.members.count;
+    LLVMValueRef result = LLVMGetUndef(result_type->llvm_type);
+    for (int i = 0; i < field_count; i++)
+    {
+        LLVMValueRef field_val = LLVMBuildExtractValue(ctx->builder, soa_val, (unsigned)i, "suz.field");
+        result = LLVMBuildInsertValue(ctx->builder, result, field_val, (unsigned)i, "suz.tuple");
+    }
+    return result;
+}
+
+static LLVMValueRef
+ir_gen_directive(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->text != NULL && strstr(node->text, "#no_bounds_check") != NULL)
+    {
+        ctx->bounds_checking_enabled = false;
+        return NULL;
+    }
+
+    if (node->text != NULL && strstr(node->text, "#caller_location") != NULL)
+    {
+        TypeDescriptor const * sl_type = node->resolved_type;
+        if (sl_type == NULL || sl_type->kind != TD_KIND_STRUCT)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "#caller_location: unresolved type");
+            return NULL;
+        }
+
+        char const * file = node->file_path ? node->file_path : "<unknown>";
+        size_t line = node->source_data.view.line_number;
+        size_t col = node->source_data.view.column_number;
+
+        LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
+        size_t file_len = strlen(file);
+        size_t arr_len = file_len + 1;
+        LLVMValueRef * elements = malloc(arr_len * sizeof(LLVMValueRef));
+        for (size_t i = 0; i < file_len; i++)
+            elements[i] = LLVMConstInt(i8_type, (unsigned char)file[i], false);
+        elements[file_len] = LLVMConstInt(i8_type, 0, false);
+        LLVMTypeRef arr_type = LLVMArrayType(i8_type, arr_len);
+        LLVMValueRef arr_const = LLVMConstArray(i8_type, elements, arr_len);
+        free(elements);
+
+        LLVMValueRef global = LLVMAddGlobal(ctx->module, arr_type, ".loc_file");
+        LLVMSetInitializer(global, arr_const);
+        LLVMSetLinkage(global, LLVMPrivateLinkage);
+        LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
+        LLVMSetGlobalConstant(global, true);
+
+        LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+        LLVMValueRef indices[] = {zero, zero};
+        LLVMValueRef ptr = LLVMConstInBoundsGEP2(arr_type, global, indices, 2);
+
+        TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
+        LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : LLVMStructType(NULL, 0, false);
+        LLVMValueRef len_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)file_len, false);
+        LLVMValueRef file_with_len[] = {ptr, len_val};
+        LLVMValueRef file_val = LLVMConstNamedStruct(str_type, file_with_len, 2);
+
+        LLVMValueRef line_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)line, false);
+        LLVMValueRef col_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)col, false);
+
+        LLVMValueRef struct_vals[] = {file_val, line_val, col_val};
+        return LLVMConstNamedStruct(sl_type->llvm_type, struct_vals, 3);
+    }
+    return NULL;
+}
+
 // --- Main node dispatcher ---
 
 static LLVMValueRef
@@ -6040,64 +6705,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 
     case AST_NODE_CAST_EXPR:
-    {
-        if (node->list.count < 2)
-            return NULL;
-        odin_grammar_node_t * expr_node = node->list.children[1];
-        LLVMValueRef src_val = ir_gen_node(ctx, expr_node);
-        if (src_val == NULL)
-            return NULL;
-
-        TypeDescriptor const * dest_type = node->resolved_type;
-        if (dest_type == NULL)
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "cast expression has no resolved target type");
-            return NULL;
-        }
-
-        LLVMTypeRef dest_llvm_type = dest_type->llvm_type;
-        LLVMTypeRef src_llvm_type = LLVMTypeOf(src_val);
-        LLVMTypeKind src_kind = LLVMGetTypeKind(src_llvm_type);
-        LLVMTypeKind dest_kind = LLVMGetTypeKind(dest_llvm_type);
-
-        if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMIntegerTypeKind)
-        {
-            unsigned src_w = LLVMGetIntTypeWidth(src_llvm_type);
-            unsigned dst_w = LLVMGetIntTypeWidth(dest_llvm_type);
-            if (dst_w > src_w)
-                return LLVMBuildIntCast2(ctx->builder, src_val, dest_llvm_type, false, "zext");
-            else
-                return LLVMBuildIntCast2(ctx->builder, src_val, dest_llvm_type, false, "trunc");
-        }
-        else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
-                 && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
-        {
-            return LLVMBuildFPCast(ctx->builder, src_val, dest_llvm_type, "fpcast");
-        }
-        else if ((src_kind == LLVMIntegerTypeKind)
-                 && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
-        {
-            return LLVMBuildSIToFP(ctx->builder, src_val, dest_llvm_type, "sitofp");
-        }
-        else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind) && dest_kind == LLVMIntegerTypeKind)
-        {
-            return LLVMBuildFPToSI(ctx->builder, src_val, dest_llvm_type, "fptosi");
-        }
-        else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMPointerTypeKind)
-        {
-            return LLVMBuildPointerCast(ctx->builder, src_val, dest_llvm_type, "ptrcast");
-        }
-        else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMIntegerTypeKind)
-        {
-            return LLVMBuildPtrToInt(ctx->builder, src_val, dest_llvm_type, "ptrint");
-        }
-        else if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMPointerTypeKind)
-        {
-            return LLVMBuildIntToPtr(ctx->builder, src_val, dest_llvm_type, "intptr");
-        }
-        // Fallback for same-size casts
-        return LLVMBuildBitCast(ctx->builder, src_val, dest_llvm_type, "cast");
-    }
+        return ir_gen_cast_expr(ctx, node);
 
     case AST_NODE_TRANSMUTE_EXPR:
     {
@@ -6121,105 +6729,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_LEN_EXPR:
     case AST_NODE_CAP_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * operand = node->list.children[0];
-        LLVMValueRef operand_val = ir_gen_node(ctx, operand);
-        if (operand_val == NULL)
-            return NULL;
-
-        TypeDescriptor const * operand_type = operand->resolved_type;
-        if (operand_type == NULL)
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap operand has no type");
-            return NULL;
-        }
-
-        // Array: compile-time constant from type descriptor
-        if (operand_type->kind == TD_KIND_ARRAY)
-        {
-            return LLVMConstInt(
-                LLVMInt64TypeInContext(ctx->context), (unsigned long long)operand_type->as.array.count, false
-            );
-        }
-
-        // Map: extract data pointer, load count (offset 0) or capacity (offset 8)
-        if (operand_type->kind == TD_KIND_MAP)
-        {
-            bool is_cap_map = (node->type == AST_NODE_CAP_EXPR);
-            LLVMValueRef data_ptr_map = NULL;
-            LLVMTypeRef val_type_map = LLVMTypeOf(operand_val);
-            if (LLVMGetTypeKind(val_type_map) == LLVMPointerTypeKind)
-            {
-                LLVMValueRef zz[]
-                    = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                       LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-                data_ptr_map = LLVMBuildLoad2(
-                    ctx->builder,
-                    LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0),
-                    LLVMBuildInBoundsGEP2(ctx->builder, operand_type->llvm_type, operand_val, zz, 2, "map.ptr.gep"),
-                    ""
-                );
-            }
-            else
-            {
-                data_ptr_map = LLVMBuildExtractValue(ctx->builder, operand_val, 0, "map.ptr");
-            }
-            if (data_ptr_map == NULL)
-            {
-                ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap: failed to extract map data pointer");
-                return NULL;
-            }
-            LLVMValueRef off_map = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), is_cap_map ? 8 : 0, false);
-            LLVMValueRef cnt_ptr_map = LLVMBuildPointerCast(
-                ctx->builder,
-                LLVMBuildInBoundsGEP2(
-                    ctx->builder, LLVMInt8TypeInContext(ctx->context), data_ptr_map, &off_map, 1, "map.cnt.gep"
-                ),
-                LLVMPointerType(LLVMInt64TypeInContext(ctx->context), 0),
-                ""
-            );
-            LLVMValueRef len_val_map = LLVMBuildLoad2(
-                ctx->builder, LLVMInt64TypeInContext(ctx->context), cnt_ptr_map, is_cap_map ? "map.cap" : "map.len"
-            );
-            if (len_val_map == NULL)
-                return NULL;
-            return len_val_map;
-        }
-
-        // For dynamic arrays: len = field 1, cap = field 2
-        // For slices/strings: both len and cap use field 1
-        bool is_cap = (node->type == AST_NODE_CAP_EXPR);
-        int field_index = (is_cap && operand_type->kind == TD_KIND_DYNAMIC_ARRAY) ? 2 : 1;
-        char const * field_name = (field_index == 2) ? "cap" : "len";
-
-        LLVMTypeRef val_type = LLVMTypeOf(operand_val);
-        LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
-        LLVMValueRef len_val = NULL;
-
-        if (val_kind == LLVMPointerTypeKind)
-        {
-            LLVMTypeRef struct_type = operand_type->llvm_type;
-            LLVMValueRef indices[]
-                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_index, false)};
-            LLVMValueRef field_ptr
-                = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, operand_val, indices, 2, "len.ptr");
-            len_val = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), field_ptr, field_name);
-        }
-        else
-        {
-            len_val = LLVMBuildExtractValue(ctx->builder, operand_val, (unsigned)field_index, field_name);
-        }
-
-        if (len_val == NULL)
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap: failed to extract field from slice/dynamic array");
-            return NULL;
-        }
-        return len_val;
-    }
+        return ir_gen_len_cap_expr(ctx, node);
 
     case AST_NODE_TYPE_OF_EXPR:
     {
@@ -6297,85 +6807,10 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 
     case AST_NODE_OFFSET_OF_EXPR:
-    {
-        if (node->list.count < 2)
-            return NULL;
-        odin_grammar_node_t * type_node = node->list.children[0];
-        odin_grammar_node_t * field_node = node->list.children[1];
-        TypeDescriptor const * td = type_node->resolved_type;
-        if (td == NULL || td->llvm_type == NULL)
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-        if (td->kind != TD_KIND_STRUCT && td->kind != TD_KIND_SOA && td->kind != TD_KIND_UNION
-            && td->kind != TD_KIND_BIT_FIELD)
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-        char const * field_name = field_node ? field_node->text : NULL;
-        if (field_name == NULL)
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-        field_access_path_t path;
-        if (type_descriptor_find_struct_field_path(td, field_name, &path))
-        {
-            // Walk path to find the final field; compute cumulative offset using LLVM
-            uint64_t offset = 0;
-            TypeDescriptor const * walk = td;
-            for (int pi = 0; pi < path.count; pi++)
-            {
-                struct_field_t const * f = type_descriptor_get_struct_field(walk, path.indices[pi]);
-                if (f == NULL)
-                    break;
-                if (LLVMGetTypeKind(walk->llvm_type) == LLVMStructTypeKind)
-                    offset += LLVMOffsetOfElement(ctx->data_layout, walk->llvm_type, (unsigned)path.indices[pi]);
-                walk = f->type_desc;
-            }
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), offset, false);
-        }
-        // For union offset_of always returns 0
-        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-    }
+        return ir_gen_offset_of_expr(ctx, node);
 
     case AST_NODE_RAW_DATA_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * operand = node->list.children[0];
-        LLVMValueRef operand_val = ir_gen_node(ctx, operand);
-        if (operand_val == NULL)
-            return NULL;
-        TypeDescriptor const * operand_type = operand->resolved_type;
-        if (operand_type == NULL)
-            return LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
-        TypeDescriptor const * elem_type = operand_type->element_type;
-        LLVMTypeRef elem_ptr = elem_type ? LLVMPointerType(elem_type->llvm_type, 0)
-                                         : LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
-        if (operand_type->kind == TD_KIND_ARRAY)
-        {
-            if (LLVMGetTypeKind(LLVMTypeOf(operand_val)) == LLVMPointerTypeKind)
-                return LLVMBuildPointerCast(ctx->builder, operand_val, elem_ptr, "raw_data");
-            LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, LLVMTypeOf(operand_val), "raw_data.arr");
-            LLVMBuildStore(ctx->builder, operand_val, alloca);
-            return LLVMBuildPointerCast(ctx->builder, alloca, elem_ptr, "raw_data");
-        }
-        // Slice or dynamic array: extract data pointer (field 0)
-        LLVMTypeRef val_type = LLVMTypeOf(operand_val);
-        LLVMValueRef data_ptr = NULL;
-        if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
-        {
-            LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                                      LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-            data_ptr = LLVMBuildLoad2(
-                ctx->builder,
-                LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0),
-                LLVMBuildInBoundsGEP2(ctx->builder, operand_type->llvm_type, operand_val, indices, 2, "rd.gep"),
-                "raw_data"
-            );
-        }
-        else
-        {
-            data_ptr = LLVMBuildExtractValue(ctx->builder, operand_val, 0, "raw_data");
-        }
-        if (elem_ptr)
-            return LLVMBuildPointerCast(ctx->builder, data_ptr, elem_ptr, "raw_data");
-        return data_ptr;
-    }
+        return ir_gen_raw_data_expr(ctx, node);
 
     case AST_NODE_MIN_EXPR:
     case AST_NODE_MAX_EXPR:
@@ -6406,151 +6841,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 
     case AST_NODE_MAKE_EXPR:
-    {
-        if (node->list.count < 2)
-            return NULL;
-        odin_grammar_node_t * len_node = node->list.children[1];
-
-        TypeDescriptor const * result_type = node->resolved_type;
-        if (result_type == NULL
-            || (result_type->kind != TD_KIND_SLICE && result_type->kind != TD_KIND_DYNAMIC_ARRAY
-                && result_type->kind != TD_KIND_MAP))
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "make: target type is not a slice, dynamic array, or map");
-            return NULL;
-        }
-
-        LLVMValueRef len_val = ir_gen_node(ctx, len_node);
-        if (len_val == NULL)
-            return NULL;
-        len_val = LLVMBuildIntCast(ctx->builder, len_val, LLVMInt64TypeInContext(ctx->context), "len.i64");
-
-        LLVMValueRef make_ptr = LLVMBuildAlloca(ctx->builder, result_type->llvm_type, "make.result");
-
-        if (result_type->kind == TD_KIND_MAP)
-        {
-            TypeDescriptor const * key_type = result_type->as.map.key_type;
-            TypeDescriptor const * val_type = result_type->as.map.value_type;
-            if (key_type == NULL || val_type == NULL)
-            {
-                ir_gen_error_collection_add(&ctx->errors, NULL, node, "make(map): key or value type is NULL");
-                return NULL;
-            }
-
-            LLVMValueRef key_size = LLVMSizeOf(key_type->llvm_type);
-            LLVMValueRef val_size = LLVMSizeOf(val_type->llvm_type);
-
-            LLVMValueRef one_i64 = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 1, false);
-            LLVMValueRef entry_size = LLVMBuildAdd(
-                ctx->builder, one_i64, LLVMBuildAdd(ctx->builder, key_size, val_size, "kv.size"), "entry.size"
-            );
-
-            LLVMValueRef entries_size = LLVMBuildMul(ctx->builder, len_val, entry_size, "entries.size");
-            LLVMValueRef hdr32 = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 32, false);
-            LLVMValueRef total_size = LLVMBuildAdd(ctx->builder, hdr32, entries_size, "map.total.size");
-
-            LLVMValueRef map_data = ir_gen_call_calloc(ctx, total_size);
-            if (map_data == NULL)
-                return NULL;
-
-            LLVMTypeRef i8t = LLVMInt8TypeInContext(ctx->context);
-
-            // Store capacity at offset 8
-            LLVMValueRef cidx = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 8, false);
-            LLVMValueRef cptr = LLVMBuildPointerCast(
-                ctx->builder,
-                LLVMBuildInBoundsGEP2(ctx->builder, i8t, map_data, &cidx, 1, ""),
-                LLVMPointerType(LLVMInt64TypeInContext(ctx->context), 0),
-                ""
-            );
-            LLVMBuildStore(ctx->builder, len_val, cptr);
-
-            // Store key_size at offset 16
-            LLVMValueRef ksid = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 16, false);
-            LLVMValueRef ksptr = LLVMBuildPointerCast(
-                ctx->builder,
-                LLVMBuildInBoundsGEP2(ctx->builder, i8t, map_data, &ksid, 1, ""),
-                LLVMPointerType(LLVMInt64TypeInContext(ctx->context), 0),
-                ""
-            );
-            LLVMBuildStore(ctx->builder, key_size, ksptr);
-
-            // Store value_size at offset 24
-            LLVMValueRef vsid = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 24, false);
-            LLVMValueRef vsptr = LLVMBuildPointerCast(
-                ctx->builder,
-                LLVMBuildInBoundsGEP2(ctx->builder, i8t, map_data, &vsid, 1, ""),
-                LLVMPointerType(LLVMInt64TypeInContext(ctx->context), 0),
-                ""
-            );
-            LLVMBuildStore(ctx->builder, val_size, vsptr);
-
-            // Store map_data pointer into field 0 of result struct
-            LLVMValueRef didx[]
-                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-            LLVMBuildStore(
-                ctx->builder,
-                map_data,
-                LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, didx, 2, "make.map.data.gep")
-            );
-        }
-        else
-        {
-            TypeDescriptor const * elem_type = result_type->element_type;
-            if (elem_type == NULL)
-            {
-                ir_gen_error_collection_add(&ctx->errors, NULL, node, "make(slice): element type is NULL");
-                return NULL;
-            }
-
-            bool is_da = (result_type->kind == TD_KIND_DYNAMIC_ARRAY);
-
-            LLVMValueRef elem_size = LLVMSizeOf(elem_type->llvm_type);
-            LLVMValueRef total_size = LLVMBuildMul(ctx->builder, elem_size, len_val, "makemem.size");
-
-            LLVMValueRef raw_mem = ir_gen_call_malloc(ctx, total_size);
-            if (raw_mem == NULL)
-                return NULL;
-            LLVMTypeRef elem_ptr_type = LLVMPointerType(elem_type->llvm_type, 0);
-            LLVMValueRef data_ptr = LLVMBuildPointerCast(ctx->builder, raw_mem, elem_ptr_type, "make.data");
-
-            // Store data pointer (field 0)
-            LLVMValueRef didx[]
-                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-            LLVMBuildStore(
-                ctx->builder,
-                data_ptr,
-                LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, didx, 2, "make.data.gep")
-            );
-
-            // Store len (field 1)
-            LLVMValueRef lidx[]
-                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false)};
-            LLVMBuildStore(
-                ctx->builder,
-                len_val,
-                LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, lidx, 2, "make.len.gep")
-            );
-
-            // For dynamic arrays, also store capacity = len (field 2)
-            if (is_da)
-            {
-                LLVMValueRef cidx[]
-                    = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                       LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 2, false)};
-                LLVMBuildStore(
-                    ctx->builder,
-                    len_val,
-                    LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, cidx, 2, "make.cap.gep")
-                );
-            }
-        }
-
-        return LLVMBuildLoad2(ctx->builder, result_type->llvm_type, make_ptr, "make.result");
-    }
+        return ir_gen_make_expr(ctx, node);
 
     case AST_NODE_NEW_EXPR:
     {
@@ -6578,94 +6869,11 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 
     case AST_NODE_DELETE_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * target = node->list.children[0];
-        LLVMValueRef ptr_val = ir_gen_node(ctx, target);
-        if (ptr_val == NULL)
-            return NULL;
-
-        TypeDescriptor const * target_type = target->resolved_type;
-        if (target_type
-            && (target_type->kind == TD_KIND_SLICE || target_type->kind == TD_KIND_DYNAMIC_ARRAY
-                || target_type->kind == TD_KIND_MAP))
-        {
-            LLVMTypeRef struct_type = target_type->llvm_type;
-            LLVMTypeRef val_type = LLVMTypeOf(ptr_val);
-            LLVMValueRef data_ptr = NULL;
-            if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
-            {
-                LLVMValueRef indices[]
-                    = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                       LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
-                LLVMValueRef data_gep
-                    = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr_val, indices, 2, "del.data.gep");
-                data_ptr = LLVMBuildLoad2(
-                    ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_gep, "del.data"
-                );
-            }
-            else
-            {
-                LLVMValueRef extracted = LLVMBuildExtractValue(ctx->builder, ptr_val, 0, "del.data");
-                data_ptr = LLVMBuildPointerCast(
-                    ctx->builder, extracted, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), ""
-                );
-            }
-            ir_gen_call_free(ctx, data_ptr);
-        }
-        else
-        {
-            // ir_gen_node auto-derefs pointers, giving the pointed-to value.
-            // For delete, we need the raw POINTER VALUE to free.
-            // Use lvalue to get the alloca, then load to get the pointer.
-            LLVMValueRef lvalue = ir_gen_lvalue_ptr(ctx, target);
-            if (lvalue != NULL)
-            {
-                LLVMTypeRef load_type
-                    = target_type ? target_type->llvm_type : LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
-                LLVMValueRef ptr = LLVMBuildLoad2(ctx->builder, load_type, lvalue, "del.ptr");
-                ir_gen_call_free(ctx, ptr);
-            }
-        }
-        return NULL;
-    }
+        return ir_gen_delete_expr(ctx, node);
 
     case AST_NODE_INCL_EXPR:
     case AST_NODE_EXCL_EXPR:
-    {
-        if (node->list.count < 2)
-            return NULL;
-        bool is_incl = (node->type == AST_NODE_INCL_EXPR);
-        LLVMValueRef bs_ptr = ir_gen_node(ctx, node->list.children[0]);
-        LLVMValueRef elem_val = ir_gen_node(ctx, node->list.children[1]);
-        if (bs_ptr == NULL || elem_val == NULL)
-            return NULL;
-        TypeDescriptor const * ptr_type = node->list.children[0]->resolved_type;
-        if (ptr_type == NULL || ptr_type->kind != TD_KIND_POINTER)
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "incl/excl: operand is not a pointer");
-            return NULL;
-        }
-        TypeDescriptor const * bs_type = ptr_type->pointee;
-        if (bs_type == NULL || bs_type->kind != TD_KIND_BIT_SET)
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "incl/excl: pointee is not a bit_set");
-            return NULL;
-        }
-        LLVMTypeRef backing_type = bs_type->llvm_type;
-        LLVMValueRef backing = LLVMBuildLoad2(ctx->builder, backing_type, bs_ptr, "bs.backing");
-        LLVMValueRef elem_cast = LLVMBuildIntCast(ctx->builder, elem_val, backing_type, "bs.elem");
-        LLVMValueRef one = LLVMConstInt(backing_type, 1, false);
-        LLVMValueRef mask = LLVMBuildShl(ctx->builder, one, elem_cast, "bs.mask");
-        LLVMValueRef result;
-        if (is_incl)
-            result = LLVMBuildOr(ctx->builder, backing, mask, "bs.incl");
-        else
-            result = LLVMBuildAnd(ctx->builder, backing, LLVMBuildNot(ctx->builder, mask, "bs.nmask"), "bs.excl");
-        LLVMBuildStore(ctx->builder, result, bs_ptr);
-        return NULL;
-    }
+        return ir_gen_incl_excl_expr(ctx, node);
 
     case AST_NODE_COMPLEX_EXPR:
     case AST_NODE_QUATERNION_EXPR:
@@ -6694,139 +6902,13 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 
     case AST_NODE_COMPRESS_VALUES_EXPR:
-    {
-        // compress_values(T, val1, val2, ...) -> T
-        // children[0] = type node, children[1..N] = values
-        if (node->list.count < 2 || node->resolved_type == NULL)
-            return NULL;
-        TypeDescriptor const * target_type = node->resolved_type;
-        LLVMTypeRef llvm_type = target_type->llvm_type;
-        LLVMValueRef result = LLVMGetUndef(llvm_type);
-        for (size_t i = 1; i < node->list.count; i++)
-        {
-            LLVMValueRef val = ir_gen_node(ctx, node->list.children[i]);
-            if (val == NULL)
-                return NULL;
-            unsigned field_idx = (unsigned)(i - 1);
-            // Coerce value to target field type
-            if (target_type->kind == TD_KIND_STRUCT)
-            {
-                struct_field_t const * field = type_descriptor_get_struct_field(target_type, (int)field_idx);
-                if (field && field->type_desc && field->type_desc->llvm_type
-                    && LLVMTypeOf(val) != field->type_desc->llvm_type)
-                {
-                    val = coerce_value_to_type(ctx, val, field->type_desc->llvm_type,
-                        false, "compress.field");
-                }
-            }
-            else if (target_type->kind == TD_KIND_ARRAY && target_type->element_type
-                     && target_type->element_type->llvm_type
-                     && LLVMTypeOf(val) != target_type->element_type->llvm_type)
-            {
-                val = coerce_value_to_type(ctx, val, target_type->element_type->llvm_type,
-                    false, "compress.elem");
-            }
-            result = LLVMBuildInsertValue(ctx->builder, result, val, field_idx, "compress.field");
-        }
-        return result;
-    }
+        return ir_gen_compress_values_expr(ctx, node);
 
     case AST_NODE_SOA_ZIP_EXPR:
-    {
-        if (node->list.count < 1 || node->resolved_type == NULL)
-            return NULL;
-        // Extract args from ArgumentList → comma-chain Expression
-        odin_grammar_node_t * arg_list = node->list.children[0];
-        odin_grammar_node_t * arg_expr = (arg_list && arg_list->list.count >= 1) ? arg_list->list.children[0] : NULL;
-        if (arg_expr == NULL)
-            return NULL;
-
-        odin_grammar_node_t * ir_args[128];
-        int ir_arg_count = 0;
-        ir_gen_collect_comma_chain_args(arg_expr, ir_args, 128, &ir_arg_count);
-        if (ir_arg_count < 1)
-            return NULL;
-
-        TypeDescriptor const * result_type = node->resolved_type;
-        LLVMTypeRef llvm_type = result_type->llvm_type;
-
-        LLVMValueRef * data_ptrs = malloc((size_t)ir_arg_count * sizeof(LLVMValueRef));
-        LLVMValueRef * len_vals = malloc((size_t)ir_arg_count * sizeof(LLVMValueRef));
-        if (data_ptrs == NULL || len_vals == NULL)
-        {
-            free(data_ptrs);
-            free(len_vals);
-            return NULL;
-        }
-
-        LLVMValueRef min_len = NULL;
-        for (int i = 0; i < ir_arg_count; i++)
-        {
-            LLVMValueRef slice_val = ir_gen_node(ctx, ir_args[i]);
-            if (slice_val == NULL)
-            {
-                free(data_ptrs);
-                free(len_vals);
-                return NULL;
-            }
-            TypeDescriptor const * arg_type = ir_args[i]->resolved_type;
-            if (LLVMGetTypeKind(LLVMTypeOf(slice_val)) == LLVMPointerTypeKind
-                && arg_type != NULL && arg_type->llvm_type != NULL)
-            {
-                slice_val = LLVMBuildLoad2(ctx->builder, arg_type->llvm_type, slice_val, "sz.load");
-            }
-            data_ptrs[i] = LLVMBuildExtractValue(ctx->builder, slice_val, 0, "sz.data");
-            len_vals[i] = LLVMBuildExtractValue(ctx->builder, slice_val, 1, "sz.len");
-
-            if (i == 0)
-            {
-                min_len = len_vals[i];
-            }
-            else
-            {
-                LLVMValueRef cmp = LLVMBuildICmp(ctx->builder, LLVMIntULT, len_vals[i], min_len, "sz.cmp");
-                min_len = LLVMBuildSelect(ctx->builder, cmp, len_vals[i], min_len, "sz.min");
-            }
-        }
-
-        LLVMValueRef result = LLVMGetUndef(llvm_type);
-        for (int i = 0; i < ir_arg_count; i++)
-        {
-            TypeDescriptor const * arg_type = ir_args[i]->resolved_type;
-            LLVMValueRef new_slice = LLVMGetUndef(arg_type->llvm_type);
-            new_slice = LLVMBuildInsertValue(ctx->builder, new_slice, data_ptrs[i], 0, "sz.slice.data");
-            new_slice = LLVMBuildInsertValue(ctx->builder, new_slice, min_len, 1, "sz.slice.len");
-            result = LLVMBuildInsertValue(ctx->builder, result, new_slice, (unsigned)i, "sz.field");
-        }
-
-        free(data_ptrs);
-        free(len_vals);
-        return result;
-    }
+        return ir_gen_soa_zip_expr(ctx, node);
 
     case AST_NODE_SOA_UNZIP_EXPR:
-    {
-        if (node->list.count < 1 || node->resolved_type == NULL)
-            return NULL;
-        LLVMValueRef soa_val = ir_gen_node(ctx, node->list.children[0]);
-        if (soa_val == NULL)
-            return NULL;
-        TypeDescriptor const * arg_type = node->list.children[0]->resolved_type;
-        if (LLVMGetTypeKind(LLVMTypeOf(soa_val)) == LLVMPointerTypeKind
-            && arg_type != NULL && arg_type->llvm_type != NULL)
-        {
-            soa_val = LLVMBuildLoad2(ctx->builder, arg_type->llvm_type, soa_val, "suz.load");
-        }
-        TypeDescriptor const * result_type = node->resolved_type;
-        int field_count = arg_type->struct_metadata.members.count;
-        LLVMValueRef result = LLVMGetUndef(result_type->llvm_type);
-        for (int i = 0; i < field_count; i++)
-        {
-            LLVMValueRef field_val = LLVMBuildExtractValue(ctx->builder, soa_val, (unsigned)i, "suz.field");
-            result = LLVMBuildInsertValue(ctx->builder, result, field_val, (unsigned)i, "suz.tuple");
-        }
-        return result;
-    }
+        return ir_gen_soa_unzip_expr(ctx, node);
 
     case AST_NODE_NIL:
     case AST_NODE_NONE:
@@ -6959,62 +7041,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_DIRECTIVE_WITH_ARGS:
     case AST_NODE_DIRECTIVE:
-        // #no_bounds_check — disable bounds checking for subsequent code
-        if (node->text != NULL && strstr(node->text, "#no_bounds_check") != NULL)
-        {
-            ctx->bounds_checking_enabled = false;
-            return NULL;
-        }
-
-        // #caller_location — emit Source_Location struct constant
-        if (node->text != NULL && strstr(node->text, "#caller_location") != NULL)
-        {
-            TypeDescriptor const * sl_type = node->resolved_type;
-            if (sl_type == NULL || sl_type->kind != TD_KIND_STRUCT)
-            {
-                ir_gen_error_collection_add(&ctx->errors, NULL, node, "#caller_location: unresolved type");
-                return NULL;
-            }
-
-            char const * file = node->file_path ? node->file_path : "<unknown>";
-            size_t line = node->source_data.view.line_number;
-            size_t col = node->source_data.view.column_number;
-
-            // Build string constant for file path
-            LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
-            size_t file_len = strlen(file);
-            size_t arr_len = file_len + 1;
-            LLVMValueRef * elements = malloc(arr_len * sizeof(LLVMValueRef));
-            for (size_t i = 0; i < file_len; i++)
-                elements[i] = LLVMConstInt(i8_type, (unsigned char)file[i], false);
-            elements[file_len] = LLVMConstInt(i8_type, 0, false);
-            LLVMTypeRef arr_type = LLVMArrayType(i8_type, arr_len);
-            LLVMValueRef arr_const = LLVMConstArray(i8_type, elements, arr_len);
-            free(elements);
-
-            LLVMValueRef global = LLVMAddGlobal(ctx->module, arr_type, ".loc_file");
-            LLVMSetInitializer(global, arr_const);
-            LLVMSetLinkage(global, LLVMPrivateLinkage);
-            LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
-            LLVMSetGlobalConstant(global, true);
-
-            LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-            LLVMValueRef indices[] = {zero, zero};
-            LLVMValueRef ptr = LLVMConstInBoundsGEP2(arr_type, global, indices, 2);
-
-            TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
-            LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : LLVMStructType(NULL, 0, false);
-            LLVMValueRef len_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)file_len, false);
-            LLVMValueRef file_with_len[] = {ptr, len_val};
-            LLVMValueRef file_val = LLVMConstNamedStruct(str_type, file_with_len, 2);
-
-            LLVMValueRef line_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)line, false);
-            LLVMValueRef col_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (unsigned long long)col, false);
-
-            LLVMValueRef struct_vals[] = {file_val, line_val, col_val};
-            return LLVMConstNamedStruct(sl_type->llvm_type, struct_vals, 3);
-        }
-        return NULL;
+        return ir_gen_directive(ctx, node);
 
     case AST_NODE_WHERE_CLAUSE:
         return NULL;

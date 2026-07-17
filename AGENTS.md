@@ -1,5 +1,18 @@
 ## Accomplishments (session 2026-07-18)
 
+### Phase 3.4: Split `ir_gen_node` — 11 inline cases → named function calls
+- **Extracted 11 case groups** from the switch into named functions (already done before this session): `ir_gen_cast_expr`, `ir_gen_len_cap_expr`, `ir_gen_offset_of_expr`, `ir_gen_raw_data_expr`, `ir_gen_make_expr`, `ir_gen_delete_expr`, `ir_gen_incl_excl_expr`, `ir_gen_compress_values_expr`, `ir_gen_soa_zip_expr`, `ir_gen_soa_unzip_expr`, `ir_gen_directive`.
+- **Replaced 11 case bodies** with direct function calls: CAST_EXPR, LEN_EXPR/CAP_EXPR, OFFSET_OF_EXPR, RAW_DATA_EXPR, MAKE_EXPR, DELETE_EXPR, INCL_EXPR/EXCL_EXPR, COMPRESS_VALUES_EXPR, SOA_ZIP_EXPR, SOA_UNZIP_EXPR, DIRECTIVE/DIRECTIVE_WITH_ARGS.
+- **Net change**: 0 lines (functions already extracted; case bodies replaced with 1-line calls).
+- **All 155 tests pass**.
+
+### Phase 3.3: Split `ir_gen_postfix_expression` — 6 extracted helpers + dispatch
+- **Extracted 6 case groups** from the for-loop switch into separate named helpers: `ir_gen_postfix_call` (returns `bool` for fatal-error early-exit on `"called value is not a procedure"`), `ir_gen_postfix_subscript`, `ir_gen_postfix_member`, `ir_gen_postfix_deref`, `ir_gen_postfix_assertion`, `ir_gen_postfix_slice` (handles both `POSTFIX_SLICE` and `POSTFIX_SLICE_LT`).
+- **Dispatch replacement**: The ~960-line switch body replaced with a 10-line switch calling each helper via `(ctx, op, &val, &cur_type)` — each updates state through pointers and the for-loop continues to the next postfix op.
+- **Dead code removal**: `result_vec_type = LLVMVectorType(...)` in the swizzle handler (declared, set, never used) was removed in the extraction.
+- **Net change**: -16 lines (878 insertions, 894 deletions).
+- **All 155 tests pass**.
+
 ### Phase 3.2: Split `sem_resolve_type_expr` — switch → dispatch table + 18 extracted functions
 - **Step 1**: All 19 case groups (BASIC_TYPE/TYPE_NAME, POINTER_TYPE, ARRAY_TYPE, DISTINCT_TYPE, SLICE_TYPE, MULTI_POINTER_TYPE, DYNAMIC_ARRAY_TYPE, MAP_TYPE, BIT_FIELD_TYPE, BIT_SET_TYPE (with `#PUSH` macro), PROCEDURE_SIGNATURE, ENUM_TYPE, STRUCT_TYPE, UNION_TYPE, SOA_TYPE, MAYBE_TYPE, TUPLE_TYPE, VECTOR_TYPE, IDENTIFIER) extracted into named functions (`sem_resolve_<type>_type()`).
 - **Handled `#PUSH` macro in BIT_SET_TYPE**: The local `#define PUSH`/`#undef PUSH` macro was moved into the extracted `sem_resolve_bit_set_type` function body (file-scope preprocessor directive inside a C function is valid).
