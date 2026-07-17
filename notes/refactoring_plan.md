@@ -100,16 +100,19 @@ These are **structurally identical** files (57 lines each, same struct layout, s
 
 These are the largest functions in the codebase. Each should be split into focused sub-functions.
 
-### 3.1 `sem_evaluate_expr` — 1555 lines (line 1707)
+### 3.1 ✅ `sem_evaluate_expr` — 1555 lines (line 1707)
 
-Contains 58+ case labels handling everything from integer literals to postfix expressions. The POSTFIX_EXPRESSION subtree alone (~600 lines, two copies) handles call, member, subscript, slice, deref, assertion.
+Contains 43+ case labels handling everything from integer literals to postfix expressions. The POSTFIX_EXPRESSION subtree alone (~600 lines, two copies) handles call, member, subscript, slice, deref, assertion.
+
+**Done**: Step 1 — each case label group extracted into a named `sem_evaluate_<type>_expr()` function. The switch statement is now ~45 lines of pure dispatch. 42 new functions defined after `sem_evaluate_expr`.
+
+**Next (Step 2)**: Replace the switch with a function pointer lookup table indexed by AST node type. This will eliminate the switch entirely and make adding new expression types O(1).
 
 **Action**:
-- Each distinct expression type with >20 lines of logic becomes a `sem_evaluate_<type>_expr()` function
-- The POSTFIX_EXPRESSION handler (currently duplicated for package-qualified vs. normal) should be a single `sem_evaluate_postfix_expression()` with a loop over a PostfixOp chain
-- Move package-qualified POSTFIX_EXPRESSION resolution into a helper that resolves the base scope first, then dispatches to the same postfix chain handler
+- Step 1 ✅ Each case body extracted to `sem_evaluate_<type>_expr()` function  
+- Step 2 🔲 Replace switch with function pointer lookup table
 
-**Target**: Split into ~15 sub-functions, reduce main switch to ~40 lines of dispatch.
+**Target**: Step 1 complete (42 extracted functions). Step 2 pending — reduce main switch to ~3 lines of table dispatch.
 
 ### 3.2 `sem_resolve_type_expr` — 1272 lines (line 435)
 
