@@ -1549,6 +1549,12 @@ ir_gen_map_append_block(IrGenContext * ctx, char const * prefix, char const * su
     return LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), buf);
 }
 
+static bool
+ir_gen_is_dereferenceable(TypeDescriptor const * td)
+{
+    return td != NULL && (td->kind == TD_KIND_POINTER || td->kind == TD_KIND_MULTI_POINTER);
+}
+
 static LLVMValueRef
 ir_gen_map_subscript(IrGenContext * ctx, LLVMValueRef map_val,
                      TypeDescriptor const * map_type,
@@ -1615,7 +1621,7 @@ ir_gen_map_subscript(IrGenContext * ctx, LLVMValueRef map_val,
     LLVMValueRef cnt_ptr = NULL;
     if (is_lvalue)
     {
-        LLVMValueRef target_ptr_type = LLVMPointerType(val_td->llvm_type, 0);
+        LLVMTypeRef target_ptr_type = LLVMPointerType(val_td->llvm_type, 0);
         res_alloca = LLVMBuildAlloca(ctx->builder, target_ptr_type, "");
         LLVMBuildStore(ctx->builder, LLVMConstNull(target_ptr_type), res_alloca);
 
@@ -1989,7 +1995,7 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
 
                 // Pointer auto-dereference: p.field -> load p, then access member on pointee
-                if (cur_type->kind == TD_KIND_POINTER || cur_type->kind == TD_KIND_MULTI_POINTER)
+                if (ir_gen_is_dereferenceable(cur_type))
                 {
                     TypeDescriptor const * pointee = cur_type->pointee;
                     if (pointee == NULL)
@@ -2138,7 +2144,7 @@ ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node)
 
             case AST_NODE_POSTFIX_DEREF:
             {
-                if (cur_type == NULL || (cur_type->kind != TD_KIND_POINTER && cur_type->kind != TD_KIND_MULTI_POINTER))
+                if (!ir_gen_is_dereferenceable(cur_type))
                 {
                     if (cur_type)
                         ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot dereference non-pointer type in lvalue context");
@@ -5348,7 +5354,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
             // Pointer auto-dereference: p.field -> access member on pointee
             // val is already the pointer value (address of struct); just update cur_type
-            if (cur_type && (cur_type->kind == TD_KIND_POINTER || cur_type->kind == TD_KIND_MULTI_POINTER))
+            if (ir_gen_is_dereferenceable(cur_type))
             {
                 TypeDescriptor const * pointee = cur_type->pointee;
                 if (pointee)
@@ -5500,7 +5506,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
         case AST_NODE_POSTFIX_DEREF:
         {
-            if (cur_type == NULL || (cur_type->kind != TD_KIND_POINTER && cur_type->kind != TD_KIND_MULTI_POINTER))
+            if (!ir_gen_is_dereferenceable(cur_type))
             {
                 if (cur_type)
                     ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot dereference non-pointer type");
@@ -6725,7 +6731,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
                 if (field && field->type_desc && field->type_desc->llvm_type
                     && LLVMTypeOf(val) != field->type_desc->llvm_type)
                 {
-                    val = coerce_value_to_type(ctx, val, field->type_desc,
+                    val = coerce_value_to_type(ctx, val, field->type_desc->llvm_type,
                         false, "compress.field");
                 }
             }
@@ -6733,7 +6739,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
                      && target_type->element_type->llvm_type
                      && LLVMTypeOf(val) != target_type->element_type->llvm_type)
             {
-                val = coerce_value_to_type(ctx, val, target_type->element_type,
+                val = coerce_value_to_type(ctx, val, target_type->element_type->llvm_type,
                     false, "compress.elem");
             }
             result = LLVMBuildInsertValue(ctx->builder, result, val, field_idx, "compress.field");
