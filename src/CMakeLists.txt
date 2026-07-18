@@ -22,6 +22,10 @@ add_executable(${app}
     error_list.c
     ast_utils.c
     package_resolver.c
+    sem_check.c
+    sem_context.c
+    sem_evaluate_expr.c
+    sem_type_resolver.c
     semantic_analyser.c
     ir_utils.c
     llvm_ir_generator.c

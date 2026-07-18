@@ -38,18 +38,10 @@ typedef struct
     int import_stack_capacity;
 } SemContext;
 
-void sem_context_init(
-    SemContext * ctx,
-    odin_grammar_node_t * ast,
-    TypeDescriptors * type_registry,
-    GeneratorContext * gen_ctx,
-    char const * source_file_path,
-    char const * source_dir,
-    char const * odin_root,
-    epc_parser_t * parser,
-    epc_ast_hook_registry_t * hooks
-);
+#include "sem_context.h"
 
-void sem_context_destroy(SemContext * ctx);
+// Compile-time constant evaluation (used across multiple modules)
+long long sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok);
+int sem_evaluate_constant_bool(SemContext * ctx, odin_grammar_node_t * node);
 
 bool sem_analyse(SemContext * ctx);
