@@ -97,3 +97,14 @@ bool ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast);
 int write_llvm_ir_to_file(LLVMModuleRef module, char const * file_path);
 
 int emit_to_file(LLVMModuleRef module, char const * file_path, char const * march, LLVMCodeGenFileType file_type);
+
+// Shared IR gen helpers (used across extracted modules)
+void func_push(IrGenContext * ctx, LLVMValueRef func, TypeDescriptor const * return_type);
+void func_pop(IrGenContext * ctx);
+LLVMValueRef func_current_function(IrGenContext * ctx);
+void ir_gen_implicit_return(IrGenContext * ctx);
+void ir_gen_register_enum_enumerators(IrGenContext * ctx, odin_grammar_node_t * enum_type_node);
+LLVMValueRef ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node);
+bool ir_gen_node_contains_auto_cast(odin_grammar_node_t * node);
+LLVMValueRef coerce_value_to_type(IrGenContext * ctx, LLVMValueRef value, LLVMTypeRef target_type,
+                                   bool src_is_unsigned, char const * name_hint);

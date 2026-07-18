@@ -1,3 +1,16 @@
+## Accomplishments (session 2026-07-18, continued)
+
+### Phase 4.2 Step 3: Extracted statement/control-flow codegen → `ir_gen_statement.c/h`
+- **Extracted 9 functions** (defer helpers, statement, control flow) from `llvm_ir_generator.c` into `ir_gen_statement.c`/`ir_gen_statement.h`:
+  - Defer: `ir_gen_emit_defers_at_depth`, `ir_gen_emit_defers_from_depth`, `ir_gen_emit_all_defers`, `ir_gen_node_contains_auto_cast`
+  - Statement: `ir_gen_return_statement`, `ir_gen_compound_statement`
+  - Control flow: `ir_gen_if_statement`, `ir_gen_for_statement`, `ir_gen_switch_statement`
+- **7 functions made non-static** with declarations in the new header (called from `llvm_ir_generator.c` dispatch in `ir_gen_node`).
+- **Forward declarations removed** from `llvm_ir_generator.c` (the 3 defer forward decls).
+- **`llvm_ir_generator.c`**: shrunk from ~6938 → ~3445 lines (-~3493 lines).
+- **Net change**: ~659 lines moved (actual extraction), ~3493 removed from main file (the defer/statement/control-flow section).
+- **All 155 tests pass**.
+
 ## Accomplishments (session 2026-07-18)
 
 ### Phase 3.4: Split `ir_gen_node` — 11 inline cases → named function calls

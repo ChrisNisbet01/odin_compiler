@@ -28,6 +28,9 @@ add_executable(${app}
     sem_type_resolver.c
     semantic_analyser.c
     ir_utils.c
+    ir_intrinsic.c
+    ir_gen_var_decl.c
+    ir_gen_statement.c
     llvm_ir_generator.c
 )
 

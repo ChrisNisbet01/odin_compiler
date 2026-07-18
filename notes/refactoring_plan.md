@@ -156,30 +156,29 @@ Handles identifier, context, and postfix-expression lvalue resolution. The inner
 
 ## Phase 4: Modularization (Incremental)
 
-### 4.1 Split `semantic_analyser.c` into domain files
+### 4.1 ✅ Split `semantic_analyser.c` into domain files — COMPLETE
 
-Currently 5434 lines with 4 concerns mixed:
-- Expression evaluation (`sem_evaluate_expr`)
-- Type resolution (`sem_resolve_type_expr`)
-- Pass 1 (registration) and Pass 2 (body analysis)
-- Statement analysis
+Previously 5434 lines with 4 concerns mixed. Now split into:
+- `sem_context.c/h` — `SemContext` create/destroy/import helpers
+- `sem_check.c/h` — assignment/type-checking functions
+- `sem_type_resolver.c/h` — `sem_resolve_type_expr` and helpers
+- `sem_evaluate_expr.c/h` — `sem_evaluate_expr` and 44 handler functions
+- `semantic_analyser.c` — reduced to ~2170 lines (pass1 registration, pass2 body analysis, statement analysis)
 
-**Action**:
-- `sem_type_resolver.c` — `sem_resolve_type_expr` and helpers
-- `sem_expr_evaluator.c` — `sem_evaluate_expr` and helpers
-- `sem_statement_analyser.c` — `sem_pass2_node`, return/if/for/switch/compound analysis
-- `sem_declaration.c` — pass1 registration, pass2 body analysis for top-level
-- `sem_context.c` — `SemContext` create/destroy/import helpers
+All 155 tests pass.
 
-### 4.2 Split `llvm_ir_generator.c` into domain files
+### 4.2 🔄 Split `llvm_ir_generator.c` into domain files — IN PROGRESS
 
-Currently 7791 lines. Could be split similarly:
-- `ir_expression.c` — expression-level IR generation (binary, unary, logical, tertiary, etc.)
-- `ir_lvalue.c` — lvalue resolution and assignment
-- `ir_statement.c` — statement IR generation (if, for, switch, return, defer, etc.)
-- `ir_postfix.c` — postfix expression generation (call, subscript, member, slice, deref, assertion)
-- `ir_intrinsic.c` — runtime intrinsic body generation
-- `ir_context.c` — context creation/destruction, and top-level orchestration
+Currently 7585 lines with 67 functions (62 static, 5 non-static). Plan:
+- `ir_intrinsic.c/h` — `ir_gen_runtime_intrinsic_body`, `ir_gen_call_malloc`, `ir_gen_call_free`, `ir_gen_call_calloc`, `ir_gen_call_strlen` (self-contained leaf functions)
+- `ir_postfix.c/h` — the 6 postfix handler functions (already extracted as named functions in Phase 3.3)
+- `ir_expression.c/h` — expression-level IR generation (binary, unary, logical, tertiary, in, etc.)
+- `ir_lvalue.c/h` — lvalue resolution, assignment, bit_field/bit_set/vector write helpers
+- `ir_statement.c/h` — statement IR generation (if, for, switch, return, defer, compound, variable_decl)
+- `ir_context.c/h` — context creation/destruction, `ir_generate`, top-level dispatch, intrinsic detection
+- `llvm_ir_generator.c` — remains as dispatcher (`ir_gen_node`) + `ir_gen_expression` + close-to-node helpers
+
+**Strategy**: Extract one module at a time, starting with the most self-contained (intrinsic), building and testing after each.
 
 ### 4.3 Split `type_descriptors.c` into domain files
 
