@@ -48,19 +48,19 @@ typedef struct
     bool is_runtime;           // true for auto-imported core:runtime prelude
 } ImportedPackage;
 
-// Resolve an import path to a file path.
-// Search order:
-//   1. Relative to source_dir/<import_name>/<import_name>.odin
-//   2. Relative to source_dir/<import_name>.odin
-//   3. <odin_root>/src/<import_name>/<import_name>.odin
-//   4. <odin_root>/src/<import_name>.odin
+// Resolve an import path to a file or directory path.
 // Returns a heap-allocated string to the resolved path, or NULL if not found.
+// The returned path ends in ".odin" for single-file packages, or is a directory
+// path for multi-file packages (caller checks with has_odin_extension() or similar).
 char * resolve_import_path(char const * import_name, char const * source_dir, char const * odin_root);
 
-// Parse a file and return an ImportedPackage.
-// The parser and hook_registry must outlive the returned package's AST usage.
-// Returns NULL on any error (parsing failure, AST build failure, etc.).
+// Parse a single file and return an ImportedPackage.
+// Returns NULL on any error.
 ImportedPackage * parse_imported_file(char const * file_path, epc_parser_t * parser, epc_ast_hook_registry_t * hooks);
+
+// Parse a directory of .odin files as a single package, merging their ASTs.
+// Returns NULL on any error.
+ImportedPackage * parse_imported_directory(char const * dir_path, epc_parser_t * parser, epc_ast_hook_registry_t * hooks);
 
 // Free all resources associated with an ImportedPackage.
 void imported_package_free(ImportedPackage * pkg);

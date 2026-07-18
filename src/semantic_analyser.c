@@ -982,6 +982,25 @@ sem_analyse_attributes(odin_grammar_node_t * decl_node)
     decl_node->metadata = attrs;
 }
 
+static bool
+has_odin_extension(char const * path)
+{
+    if (path == NULL) return false;
+    size_t len = strlen(path);
+    return (len > 5 && strcmp(path + len - 5, ".odin") == 0);
+}
+
+// Parse an imported path, which may be a single .odin file or a directory of .odin files.
+// Dispatches to parse_imported_file or parse_imported_directory as appropriate.
+static ImportedPackage *
+parse_imported_path(char const * path, epc_parser_t * parser, epc_ast_hook_registry_t * hooks)
+{
+    if (has_odin_extension(path))
+        return parse_imported_file(path, parser, hooks);
+    else
+        return parse_imported_directory(path, parser, hooks);
+}
+
 static void
 sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast)
 {
@@ -1004,7 +1023,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
         char * runtime_path = resolve_import_path("core:runtime", ctx->source_dir, ctx->odin_root);
         if (runtime_path)
         {
-            ImportedPackage * rp = parse_imported_file(runtime_path, ctx->parser, ctx->hook_registry);
+            ImportedPackage * rp = parse_imported_path(runtime_path, ctx->parser, ctx->hook_registry);
             if (rp)
             {
                 rp->is_runtime = true; // mark so we don't re-import
@@ -1120,7 +1139,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         continue;
                     }
 
-                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
+                    ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
 
                     // import_push_path strdup'd resolved; stack owns it now
                     if (pkg == NULL)
@@ -1202,7 +1221,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         continue;
                     }
 
-                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
+                    ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
                     if (pkg == NULL)
                     {
                         import_pop_path(ctx);
@@ -1283,7 +1302,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         continue;
                     }
 
-                    ImportedPackage * pkg = parse_imported_file(resolved, ctx->parser, ctx->hook_registry);
+                    ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
                     if (pkg == NULL)
                     {
                         import_pop_path(ctx);

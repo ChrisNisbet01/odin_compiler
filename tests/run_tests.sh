@@ -39,8 +39,9 @@ run_test() {
 
     # 1. Compile and link with odinc
     # Use --keep-temps so the .ll file is available for any debugging
+    # Use --file for single-file mode (prevents compiling sibling .odin files)
     echo "  [ODINC] Building $odin_file"
-    if ! "$COMPILER" build --keep-temps "$odin_file" > "$OUTPUT_DIR/${base_name}.out" 2> "$err_file"; then
+    if ! "$COMPILER" build --keep-temps --file "$odin_file" > "$OUTPUT_DIR/${base_name}.out" 2> "$err_file"; then
         echo "  ERROR: odinc build failed for $odin_file. Check $err_file"
         current_test_failed=true
     fi
@@ -228,14 +229,19 @@ else
         run_test "$odin_file"
     done < <(find "$TEST_DIR" -maxdepth 1 -name "*.odin" -print0)
 
-    # Discover multi-file package tests (directories with .odin_pkg sentinel)
+    # Multi-file package test directories (hardcoded list)
     echo ""
     echo "=== Running Multi-File Package Tests ==="
+    multi_file_dirs=(
+        "multi_file_pkg"
+    )
     dir_count=0
-    while IFS= read -r -d $'\0' odin_dir; do
-        dir_count=$((dir_count + 1))
-        run_dir_test "$odin_dir"
-    done < <(find "$TEST_DIR" -maxdepth 2 -name ".odin_pkg" -printf '%h\0' | sort -z)
+    for odin_dir in "${multi_file_dirs[@]}"; do
+        if [ -d "$TEST_DIR/$odin_dir" ]; then
+            dir_count=$((dir_count + 1))
+            run_dir_test "$TEST_DIR/$odin_dir"
+        fi
+    done
     if [ "$dir_count" -eq 0 ]; then
         echo "(none found)"
     fi

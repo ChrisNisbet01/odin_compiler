@@ -28,7 +28,7 @@ Restructure the test directory layout to eliminate ambiguity without changing co
 ## Step 3: Reorganize Test Folders
 **Options**:
 - **Option 1**: Relocate helpers to `tests/_helpers/` (no marker needed)
-- **Option 2**: Add explicit metadata file (`.test_folder` or `.odin_pkg`)
+- **Option 2**: Add explicit metadata file (`.test_folder`)
 - **Option 3**: Use naming convention (`pkg_*` prefix for package directories)
 
 ---
@@ -37,13 +37,11 @@ Restructure the test directory layout to eliminate ambiguity without changing co
 **Goal**: Scope discovery to validation markers, not leaf directories.
 1. Modify `run_tests.sh` to exclude helper directories
 2. Add exclusion rules for `expected_to_fail/` or use marker-based discovery
-3. Validate changes with `--dry-run`
 
 ---
 
 ## Step 5: Final Verification
-1. Run test runner with `--dry-run`
-2. Confirm no false positives using `grep`/`read` tools
+1. Confirm no false positives using `grep`/`read` tools
 
 ---
 
