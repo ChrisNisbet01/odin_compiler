@@ -36,6 +36,14 @@ typedef struct
     char ** import_stack;
     int import_stack_count;
     int import_stack_capacity;
+
+    // Polymorphic-procedure instantiation guard. Set to true while the
+    // semantic analyser is processing a *specialization* (a cloned AST
+    // whose `$T`/`$N` poly idents have been substituted with concrete
+    // types/values). The flag suppresses the polymorphism early-return
+    // in sem_analyse_procedure_literal so the specialization's body is
+    // analyzed normally.
+    bool currently_instantiating;
 } SemContext;
 
 #include "sem_context.h"

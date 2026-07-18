@@ -100,6 +100,7 @@ sem_context_init(
     ctx->import_stack = NULL;
     ctx->import_stack_count = 0;
     ctx->import_stack_capacity = 0;
+    ctx->currently_instantiating = false;
     register_builtin_context_types(type_registry);
 }
 

@@ -585,6 +585,16 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
     calling_convention_t cc = CALLING_CONV_ODIN;
     bool is_variadic = false;
 
+    // Polymorphic procedures are not analyzed standalone. Their bodies are
+    // instantiated as specializations at each call site (Stage 3+ of the
+    // polymorphism work). Without this early-return, references to $T / $N
+    // in the body would fail to resolve and produce spurious semantic errors.
+    // The `ctx->currently_instantiating` guard allows Stage-3 instantiation
+    // to run normal body analysis on a cloned specialization whose
+    // polymorphism has already been substituted away.
+    if (!ctx->currently_instantiating && poly_signature_is_polymorphic(node))
+        return;
+
     odin_grammar_node_t * comp_stmt_node = NULL;
     for (size_t i = 0; i < node->list.count; i++)
     {
