@@ -172,7 +172,20 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
     {
         symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
         if (sym)
+        {
+            // Stage 2 placeholder: a direct call to a polymorphic procedure
+            // is a Stage 3 concern (specialization instantiation). Until that
+            // lands, complain clearly instead of producing bad code.
+            if (sym->is_polymorphic && op->resolved_symbol == NULL)
+            {
+                ir_gen_error_collection_add(
+                    &ctx->errors, NULL, node,
+                    "call to polymorphic procedure is not yet supported"
+                );
+                return true;
+            }
             proc_type = sym->value.type_info;
+        }
     }
     if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
     {
