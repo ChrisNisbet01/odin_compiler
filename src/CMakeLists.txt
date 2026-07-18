@@ -31,6 +31,7 @@ add_executable(${app}
     ir_intrinsic.c
     ir_gen_var_decl.c
     ir_gen_statement.c
+    ir_gen_operator.c
     llvm_ir_generator.c
 )
 
