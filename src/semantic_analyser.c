@@ -2,6 +2,7 @@
 
 #include "ast_utils.h"
 #include "package_resolver.h"
+#include "polymorphism.h"
 #include "scope.h"
 #include "symbols.h"
 #include "typed_value.h"
@@ -809,6 +810,17 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         TypedValue tv = create_typed_value(NULL, resolved_type, false);
         scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
         sem_set_symbol_private(generator_current_scope(ctx->gen_ctx), name_node->text, is_private);
+
+        // Mark the symbol as polymorphic if its procedure signature uses any
+        // $T / $N poly identifiers. Polymorphic procs are NOT analyzed or
+        // codegen'd standalone; call sites (Stage 3+) instantiate specializations.
+        if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_DEFINITION
+            && poly_signature_is_polymorphic(value_node))
+        {
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            if (sym)
+                sym->is_polymorphic = true;
+        }
 
         // Try to evaluate as a compile-time integer constant
         if (value_node != NULL && value_node->type != AST_NODE_PROCEDURE_DEFINITION && value_node->type != AST_NODE_PROC_OVERLOAD_BUNDLE)

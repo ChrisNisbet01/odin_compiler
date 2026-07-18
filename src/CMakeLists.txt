@@ -22,6 +22,7 @@ add_executable(${app}
     error_list.c
     ast_utils.c
     package_resolver.c
+    polymorphism.c
     sem_check.c
     sem_context.c
     sem_evaluate_expr.c
