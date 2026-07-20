@@ -472,6 +472,53 @@ poly_make_mangled_name(symbol_t * poly_symbol, PolyEnv * env)
 }
 
 // =========================================================================
+// Stage 5: Specialization cache
+// =========================================================================
+
+typedef struct {
+    char * mangled_name;
+    PolySpecialization * spec;
+} PolyCacheEntry;
+
+static PolyCacheEntry * poly_cache = NULL;
+static int poly_cache_count = 0;
+static int poly_cache_capacity = 0;
+
+static PolySpecialization *
+poly_cache_lookup(char const * mangled_name)
+{
+    if (mangled_name == NULL)
+        return NULL;
+    for (int i = 0; i < poly_cache_count; i++)
+    {
+        if (strcmp(poly_cache[i].mangled_name, mangled_name) == 0)
+            return poly_cache[i].spec;
+    }
+    return NULL;
+}
+
+static void
+poly_cache_store(char const * mangled_name, PolySpecialization * spec)
+{
+    if (mangled_name == NULL || spec == NULL)
+        return;
+    // Avoid duplicates
+    if (poly_cache_lookup(mangled_name))
+        return;
+    if (poly_cache_count >= poly_cache_capacity)
+    {
+        int new_cap = poly_cache_capacity == 0 ? 8 : poly_cache_capacity * 2;
+        PolyCacheEntry * tmp = realloc(poly_cache, (size_t)new_cap * sizeof(PolyCacheEntry));
+        if (tmp == NULL) return;
+        poly_cache = tmp;
+        poly_cache_capacity = new_cap;
+    }
+    poly_cache[poly_cache_count].mangled_name = strdup(mangled_name);
+    poly_cache[poly_cache_count].spec = spec;
+    poly_cache_count++;
+}
+
+// =========================================================================
 // poly_resolve_call — the core instantiation logic
 // =========================================================================
 
@@ -525,14 +572,17 @@ poly_resolve_call(
     // Generate mangled name
     char * mangled_name = poly_make_mangled_name(poly_symbol, &env);
 
+    // --- Stage 5: Check specialization cache before analysis ---
+    PolySpecialization * cached = poly_cache_lookup(mangled_name);
+    if (cached)
+    {
+        free(mangled_name);
+        return cached;
+    }
+
     // Push env onto stack
     poly_env_push(ctx, &env);
     ctx->currently_instantiating = true;
-
-    // Reset resolved_type/resolved_symbol on proc definition and its body
-    // so the re-analysis is clean
-    // (We only need to reset the proc_def and its children — the body children
-    //  were never analyzed in Stage 2 thanks to the early-return)
 
     // Run sem_analyse_procedure_literal on the original proc definition
     sem_analyse_procedure_literal(ctx, proc_def, mangled_name);
@@ -551,29 +601,7 @@ poly_resolve_call(
         return NULL;
     }
 
-    // Check if a specialization with this name already exists in the global scope.
-    // We deliberately look ONLY in global scope (not walking the scope chain) because
-    // sem_analyse_procedure_literal's forward-reference code at line ~727 also registers
-    // the mangled name in the parent (current) scope, and that copy is freed when the
-    // scope is popped — using it would create a use-after-free in op->resolved_symbol.
-    symbol_t * existing = scope_symbols_lookup_entry_by_name(
-        &ctx->gen_ctx->global_scope->symbols, mangled_name);
-    if (existing)
-    {
-        // Already specialized (Stage 5 cache hit; for Stage 3 without cache,
-        // this shouldn't normally happen within the same file unless
-        // instantiation was already triggered)
-        PolySpecialization * spec = calloc(1, sizeof(PolySpecialization));
-        if (spec)
-        {
-            spec->symbol = existing;
-            spec->origin_const_decl = const_decl;
-        }
-        free(mangled_name);
-        return spec;
-    }
-
-    // Register a new specialization symbol with the mangled name
+    // Register a new specialization symbol with the mangled name.
     // Use global scope so the symbol survives scope pops during semantic analysis
     // and remains accessible via resolved_symbol pointers during IR generation.
     TypedValue tv = create_typed_value(NULL, concrete_proc_type, false);
@@ -589,7 +617,7 @@ poly_resolve_call(
         return NULL;
     }
 
-    // Add to pending specializations for codegen
+    // Create specialization record
     PolySpecialization * spec = calloc(1, sizeof(PolySpecialization));
     if (spec)
     {
@@ -615,6 +643,9 @@ poly_resolve_call(
             ctx->pending_spec_count++;
         }
     }
+
+    // Store in cache for future calls
+    poly_cache_store(mangled_name, spec);
 
     free(mangled_name);
     return spec;

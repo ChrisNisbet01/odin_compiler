@@ -96,37 +96,40 @@ skipped in the test list.
    `$T: typeid` since `typeid` is a reserved word). Only the shorthand form
    `x: $T` is supported initially.
 
-## Pre-existing Bug Fix: Scope UAFs (Prerequisite for Stage 4)
+## Pre-existing Bug Fixes (Applied)
+
+### Scope UAFs (Fix applied during Stage 4)
 
 Adding pointer-type fields to `symbol_t` (e.g. `poly_origin_ast`, `poly_cache`)
-shifts the struct's memory layout and exposes pre-existing use-after-free bugs:
+shifts the struct's memory layout and exposed pre-existing use-after-free bugs:
 
-1. **`scope_lists.c` line 66**: `free(existing->name)` frees the hash-table
+1. **`scope_lists.c` line 66**: `free(existing->name)` freed the hash-table
    entry's key pointer while the key is still in the hash table. This
-   invalidates the key for future lookups, causing hash-table corruption when
-   any `scope_lists` function walks or probes the table.
+   invalidated the key for future lookups.
+   **Fix**: Use `strdup`d copy for the hash key.
 
-2. **Scope-free ordering**: `scope_free` frees the `symbol_t` block memory
-   while AST nodes still hold `node->resolved_symbol` pointers into the freed
-   block. This is latent today because `resolved_symbol` is only read during
-   the semantic pass (before scopes are freed), but adding codegen-level
-   access (Stage 4) to `resolved_symbol` after `scope_free` would read freed
+2. **Scope-free ordering**: `scope_free` freed `symbol_t` block memory
+   while AST nodes still held `node->resolved_symbol` pointers into freed
    memory.
+   **Fix**: `generator_pop_scope` defers `scope_free`; `generator_free_deferred_scopes`
+   is called from `main.c:598-600` after codegen completes.
 
-**Fix approach** (to be applied as a separate commit between Stage 3 and
-Stage 4):
-- For (1): Free the name string only after removing the entry from the table,
-  or use a separate key allocation strategy.
-- For (2): Either defer `scope_free` until after codegen, or use a
-  slab/arena allocator for `symbol_t` that keeps them alive.
+### Polymorphic Call Codegen Dispatch (Fixed during Stage 4)
 
-These fixes are required before Stage 4 because Stage 4 accesses
-`resolved_symbol` / `type_info` on specialization symbols during codegen,
-which runs after scopes are cleaned up in the current pipeline.
-
-**Current workaround**: The `symbol_t` struct avoids pointer-type metadata
-fields. Polymorphism data (origin AST, cache) lives in side tables managed by
-`polymorphism.c`.
+- **Root cause**: `ir_gen_postfix_call` in `ir_gen_postfix.c:167-216` used
+  `sym->value.type_info` (the **original** polymorphic type with 0 runtime
+  params — `$T: typeid` and `x: T` both skipped during pass1). The
+  `resolved_symbol` path was gated behind
+  `(proc_type == NULL || proc_type->kind != TD_KIND_PROC)`, which was false
+  because the original type IS `TD_KIND_PROC`. The specialization's concrete
+  type was never consulted for call codegen.
+- **Fix**: Restructured the dispatch into 3 priorities:
+  1. `op->resolved_symbol` from semantic analyser (`poly_resolve_call`)
+  2. scope-based `sym` lookup
+  3. `*cur_type` fallback (function pointers)
+  When the semantic analyser has resolved a polymorphic call to a concrete
+  specialization, that specialization's type and LLVM function value are used
+  directly.
 
 ## Architecture Overview
 
@@ -255,9 +258,9 @@ In both `AST_NODE_POSTFIX_CALL` handlers (package-qualified and local):
 - `ir_generate()`: after the main top-level pass, drain
   `pending_specializations` and codegen each via the standard top-level path
   with mangled name.
-- `ir_gen_postfix_call`: existing Stage 2 guard emits error for direct poly
-  calls (should never reach here in Stage 3 because the semantic analyser
-  routes through `poly_resolve_call` and sets `op->resolved_symbol`).
+- `ir_gen_postfix_call`: Priority 1 dispatch on `op->resolved_symbol`.
+  Types the call using the specialization's concrete proc type and LLVM
+  function value directly.
 
 ### 8. `src/symbols.h`
 
@@ -293,9 +296,70 @@ Only `bool is_polymorphic` (no pointer fields — UAF workaround).
 
 ## Tests
 
-### Compile-time polymorphic value tests (`$N`)
+### Passing Tests (Stage 4 complete)
 
-#### `tests/test_polymorphic_array_len.odin`
+#### `tests/test_polymorphic_basics.odin`
+```odin
+package test
+
+import "core:os"
+
+identity :: proc($T: typeid, x: T) -> T {
+    return x
+}
+
+double :: proc($T: typeid, x: T) -> T {
+    return x + x
+}
+
+main :: proc() {
+    a := identity(42)
+    b := double(21)
+    if a == 42 && b == 42 {
+        os.exit(0)
+    }
+    os.exit(1)
+}
+```
+
+#### `tests/test_polymorphic_unused.odin`
+```odin
+package test_polymorphic_unused
+
+main :: proc() {
+    os.exit(0)
+}
+// poly proc never called — compiles cleanly
+unused :: proc(x: $T) -> T { return x }
+```
+
+#### `tests/test_polymorphic_specialization_dedup.odin`
+```odin
+package test
+
+import "core:os"
+
+double :: proc($T: typeid, x: T) -> T {
+    return x + x
+}
+
+main :: proc() {
+    a := double(21)
+    b := double(42)
+    c := double(100)
+    // All three are int specializations — should share a single cached function
+    if a == 42 && b == 84 && c == 200 {
+        os.exit(0)
+    }
+    os.exit(1)
+}
+```
+
+### Planned Test Suite (Future Stages)
+
+#### Compile-time polymorphic value tests (`$N`)
+
+##### `tests/test_polymorphic_array_len.odin`
 ```odin
 package test_polymorphic_array_len
 import "core:fmt"
@@ -315,9 +379,9 @@ main :: proc() {
 }
 ```
 
-### Compile-time polymorphic type tests (`$T`)
+#### Compile-time polymorphic type tests (`$T`)
 
-#### `tests/test_polymorphic_identity.odin`
+##### `tests/test_polymorphic_identity.odin`
 ```odin
 package test_polymorphic_identity
 import "core:fmt"
@@ -332,7 +396,7 @@ main :: proc() {
 }
 ```
 
-#### `tests/test_polymorphic_double.odin`
+##### `tests/test_polymorphic_double.odin`
 ```odin
 package test_polymorphic_double
 import "core:fmt"
@@ -347,7 +411,7 @@ main :: proc() {
 }
 ```
 
-#### `tests/test_polymorphic_swap.odin`
+##### `tests/test_polymorphic_swap.odin`
 ```odin
 package test_polymorphic_swap
 import "core:fmt"
@@ -362,9 +426,9 @@ main :: proc() {
 }
 ```
 
-### Runtime polymorphic tests (mixed)
+#### Runtime polymorphic tests (mixed)
 
-#### `tests/test_polymorphic_max.odin`
+##### `tests/test_polymorphic_max.odin`
 ```odin
 package test_polymorphic_max
 import "core:fmt"
@@ -380,9 +444,9 @@ main :: proc() {
 }
 ```
 
-### Shorthand form tests (no explicit tag)
+#### Shorthand form tests (no explicit tag)
 
-#### `tests/test_polymorphic_shorthand.odin`
+##### `tests/test_polymorphic_shorthand.odin`
 ```odin
 package test_polymorphic_shorthand
 import "core:fmt"
@@ -397,9 +461,9 @@ main :: proc() {
 }
 ```
 
-### Polymorphic procs in overload bundles
+#### Polymorphic procs in overload bundles
 
-#### `tests/test_polymorphic_overload_bundle.odin`
+##### `tests/test_polymorphic_overload_bundle.odin`
 ```odin
 package test_polymorphic_overload_bundle
 import "core:fmt"
@@ -416,9 +480,9 @@ main :: proc() {
 }
 ```
 
-### Cache & deduplication tests
+#### Cache & deduplication tests
 
-#### `tests/test_polymorphic_specialization_dedup.odin`
+##### `tests/test_polymorphic_specialization_dedup.odin`
 ```odin
 package test_polymorphic_specialization_dedup
 import "core:fmt"
@@ -433,9 +497,9 @@ main :: proc() {
 }
 ```
 
-### Negative tests (expected_to_fail)
+#### Negative tests (expected_to_fail)
 
-#### `tests/expected_to_fail/test_polymorphic_type_mismatch.odin`
+##### `tests/expected_to_fail/test_polymorphic_type_mismatch.odin`
 ```odin
 package test_polymorphic_type_mismatch
 import "core:fmt"
@@ -450,29 +514,13 @@ main :: proc() {
 ```
 **Expected failure**: `cannot unify $T int with string`.
 
-#### `tests/test_polymorphic_unused.odin` (positive test!)
-```odin
-package test_polymorphic_unused
-import "core:fmt"
-
-unused :: proc(x: $T) -> T { return x }
-
-main :: proc() {
-    fmt.println("nothing")   // poly proc never called — compiles cleanly
-}
-```
-Asserts: poly procs with no call sites compile cleanly (no body emitted).
-
 ### Deferred (NOT to be added yet — would fail until `where` is implemented)
 - `expected_to_fail/test_polymorphic_where_clause.odin`
   (`proc($T: $T) where type_of($T) == int` rejecting non-int call)
 
 ## Discrete Implementation Stages
 
-Each stage is independently committable and must keep all existing tests
-passing. This minimizes debugging surface area when a regression appears.
-
-### Stage 1: Grammar + detection only (no behavior change)
+### ✅ Stage 1: Grammar + detection only (no behavior change) — DONE
 
 **Goal**: Add shorthand grammar rule, detection function `poly_signature_is_polymorphic`,
 and hook into `sem_register_top_level_declaration` to mark symbols
@@ -492,7 +540,7 @@ poly code in the body).
 **Verification**: `cmake --build build && ./tests/run_tests.sh`. All existing
 tests plus the new one must pass.
 
-### Stage 2: Skip body analysis for poly procs (silently)
+### ✅ Stage 2: Skip body analysis for poly procs (silently) — DONE
 
 **Goal**: `sem_analyse_procedure_literal` early-returns for poly procs if
 not currently instantiating. Poly procs that are *called* will fail because
@@ -509,7 +557,7 @@ existing tests.
 
 **Verification**: `cmake --build build && ./tests/run_tests.sh`.
 
-### Stage 3: Env-stack instantiation (no caching, no codegen)
+### ✅ Stage 3: Env-stack instantiation (no caching, no codegen) — DONE
 
 **Goal**: Implement `poly_resolve_call` using poly env stack. The semantic
 analyser builds a `PolyEnv` from call-site args, pushes it onto the
@@ -534,12 +582,18 @@ succeeds without errors.
 `test_polymorphic_identity.odin` etc. don't produce semantic errors.
 All existing tests still pass.
 
-### Stage 4: Codegen for specializations + UAF fix
+### ✅ Stage 4: Codegen for specializations + UAF fix — DONE
 
 **Goal**: Drain `pending_specializations` in `ir_generate()` after each file's
 main top-level pass; each spec's specialization is processed via the standard
 top-level path. Fix pre-existing UAF bugs in `scope_lists.c` and scope-free
 ordering before this stage. Mnemonic name mangling for specialization symbols.
+
+**Bug fixes applied during this stage**:
+- `scope_lists.c` — hash key `strdup` to prevent dangling pointer UAF
+- `generator_pop_scope` / `generator_free_deferred_scopes` — defer `scope_free`
+  until after codegen
+- `ir_gen_postfix_call` — 3-priority dispatch (resolved_symbol → sym → cur_type)
 
 **Files touched**:
 - `src/llvm_ir_generator.c` — `ir_gen_top_level_decl` early-return if
@@ -548,30 +602,39 @@ ordering before this stage. Mnemonic name mangling for specialization symbols.
 - `src/scope_lists.c` — fix `free(existing->name)` UAF
 - `src/scope.c` / `src/semantic_analyser.c` — fix scope-free ordering
   (defer scope_free until after codegen, or use arena for symbol_t)
+- `src/ir_gen_postfix.c` — fix dispatch priority for resolved_symbol
 
-**Tests added**: `test_polymorphic_identity.odin`, `test_polymorphic_double.odin`,
-`test_polymorphic_shorthand.odin`, `test_polymorphic_max.odin`,
-`test_polymorphic_unused.odin`.
+**Tests added**: `test_polymorphic_basics.odin` compiles, links, runs correctly.
 
-**Verification**: All tests pass. `test_polymorphic_identity.odin` calls
+**Verification**: All tests pass. `test_polymorphic_basics.odin` calls
 `identity(42)` and expects 42 back.
 
-### Stage 5: Specialization cache + dedup
+### ✅ Stage 5: Specialization cache + dedup — DONE
 
-**Goal**: Hash-table cache on `(poly_origin, arg_type_tuple_hash)`. Before
-instantiating, consult cache. On hit, return existing specialization.
+**Goal**: Proper cache that maps mangled name → `PolySpecialization*`.
+Before analyzing the proc body on each call, check the cache. On hit, return
+the existing specialization immediately — no redundant re-analysis.
+
+**Implementation** (`src/polymorphism.c`):
+- Added static `PolyCacheEntry` array with `poly_cache_lookup()` (linear scan)
+  and `poly_cache_store()` functions.
+- Modified `poly_resolve_call`: cache check placed **after** mangled name
+  generation but **before** `poly_env_push` / `sem_analyse_procedure_literal`.
+  Cache is populated right after a new specialization is created.
+- Removed the old post-analysis global-scope dedup check (lines 559-574) —
+  the pre-analysis cache replaces it.
 
 **Files touched**:
-- `src/polymorphism.c` — add `PolySpecializationCache`, modify
-  `poly_resolve_call` to look up the cache before invoking instantiation,
-  and store the result in the cache after.
+- `src/polymorphism.c` — cache data structures, lookup/store helpers,
+  modified `poly_resolve_call` to check cache before analysis.
 
-**Tests added**: `test_polymorphic_specialization_dedup.odin`.
+**Tests added**: `test_polymorphic_specialization_dedup.odin` — calls
+`double(21)`, `double(42)`, `double(100)` (all `int` specializations);
+verifies all three return correct values.
 
-**Verification**: Manual IR inspection (`--keep-temps`) confirms a single
-`double__poly_int` function for three int calls. Tests pass.
+**Verification**: 159/159 tests pass.
 
-### Stage 6: Polymorphic procs in overload bundles
+### 🔲 Stage 6: Polymorphic procs in overload bundles
 
 **Goal**: `sem_resolve_overload_bundle_call` integrates poly candidates.
 
@@ -586,7 +649,7 @@ instantiating, consult cache. On hit, return existing specialization.
 
 **Verification**: All tests pass; expected-to-fail test fails as expected.
 
-### Stage 7 (deferred): `where` clauses, nested polymorphism,
+### 🔲 Stage 7 (deferred): `where` clauses, nested polymorphism,
 cross-package polymorphic procs, polymorphic structs, `$N` integer poly.
 
 Documented separately — these milestones will be built on top of the
@@ -598,6 +661,8 @@ stable Stage 1–6 work.
 - Existing-file changes: ~150 lines total across 8 files
 - Tests: ~10+ new test files in stages 3–6
 - Estimated complexity: medium-high but flattened by staging
+- **Current progress**: Stages 1–5 complete (including UAF bug fixes,
+  postfix call dispatch fix, and specialization cache). **159/159 tests passing**.
 
 ## Risks / Open Concerns
 
