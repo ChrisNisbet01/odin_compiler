@@ -1374,7 +1374,12 @@ sem_resolve_poly_ident_type(SemContext * ctx, odin_grammar_node_t * node)
 {
     if (node->text == NULL)
         return NULL;
-    TypeDescriptor const * td = poly_env_lookup_type(ctx, node->text);
+    // Strip leading $ from the poly ident name (the lexeme captures "$T" but
+    // the poly env stores entries with the name "T").
+    char const * lookup_name = node->text;
+    if (lookup_name[0] == '$')
+        lookup_name++;
+    TypeDescriptor const * td = poly_env_lookup_type(ctx, lookup_name);
     if (td)
     {
         node->resolved_type = (TypeDescriptor *)td;

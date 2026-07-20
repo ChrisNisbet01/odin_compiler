@@ -39,6 +39,11 @@ printf :: proc(format: string, args: ..any) {
                         print_value(1, args[arg_idx])
                     }
                     arg_idx += 1
+                } else if spec == 'f' {
+                    if arg_idx < len(args) {
+                        print_value(1, args[arg_idx])
+                    }
+                    arg_idx += 1
                 } else if spec == 'v' {
                     if arg_idx < len(args) {
                         print_value(1, args[arg_idx])
@@ -80,6 +85,11 @@ printfln :: proc(format: string, args: ..any) {
                     }
                     arg_idx += 1
                 } else if spec == 'u' {
+                    if arg_idx < len(args) {
+                        print_value(1, args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'f' {
                     if arg_idx < len(args) {
                         print_value(1, args[arg_idx])
                     }
@@ -141,6 +151,11 @@ eprintf :: proc(format: string, args: ..any) {
                         print_value(2, args[arg_idx])
                     }
                     arg_idx += 1
+                } else if spec == 'f' {
+                    if arg_idx < len(args) {
+                        print_value(2, args[arg_idx])
+                    }
+                    arg_idx += 1
                 } else if spec == 'v' {
                     if arg_idx < len(args) {
                         print_value(2, args[arg_idx])
@@ -182,6 +197,11 @@ eprintfln :: proc(format: string, args: ..any) {
                     }
                     arg_idx += 1
                 } else if spec == 'u' {
+                    if arg_idx < len(args) {
+                        print_value(2, args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'f' {
                     if arg_idx < len(args) {
                         print_value(2, args[arg_idx])
                     }
@@ -244,8 +264,33 @@ print_value :: proc(fd: int, v: any) {
     } else if type_of(v) == type_of(byte) {
         b := v.(byte)
         print_byte(fd, b)
+    } else if type_of(v) == type_of(f64) {
+        print_f64(fd, v.(f64))
+    } else if type_of(v) == type_of(f32) {
+        print_f64(fd, f64(v.(f32)))
     } else {
         print_string(fd, "<?>")
+    }
+}
+
+print_f64 :: proc(fd: int, v: f64) {
+    // Handle negative
+    if v < 0 {
+        print_byte(fd, '-')
+        v = -v
+    }
+    // Integer part
+    int_part := int(v)
+    s := int_to_string(int_part)
+    print_string(fd, s)
+    print_byte(fd, '.')
+    // Fractional part: extract 6 digits
+    frac_part := v - f64(int_part)
+    for i in 0..<6 {
+        frac_part *= 10.0
+        digit := int(frac_part)
+        print_byte(fd, u8('0' + digit))
+        frac_part -= f64(digit)
     }
 }
 

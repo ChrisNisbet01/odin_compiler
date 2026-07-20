@@ -675,7 +675,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                             continue;
                         if ((pc->type == AST_NODE_IDENTIFIER || pc->type == AST_NODE_POLY_IDENT) && param_ident == NULL)
                             param_ident = pc;
-                        else if (pc->type == AST_NODE_IDENTIFIER || is_type_node(pc))
+                        else if (pc->type == AST_NODE_IDENTIFIER || is_type_node(pc) || pc->type == AST_NODE_POLY_IDENT)
                             param_type_node = pc;
                     }
                     if (param_type_node == NULL)
@@ -807,6 +807,12 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
                     if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
                     {
                         candidate_types[valid_count] = sym->value.type_info;
+                        candidate_symbols[valid_count] = sym;
+                        valid_count++;
+                    }
+                    else if (sym && sym->is_polymorphic)
+                    {
+                        candidate_types[valid_count] = NULL;
                         candidate_symbols[valid_count] = sym;
                         valid_count++;
                     }
@@ -1748,6 +1754,12 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                     if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
                     {
                         candidate_types[valid_count] = sym->value.type_info;
+                        candidate_symbols[valid_count] = sym;
+                        valid_count++;
+                    }
+                    else if (sym && sym->is_polymorphic)
+                    {
+                        candidate_types[valid_count] = NULL;
                         candidate_symbols[valid_count] = sym;
                         valid_count++;
                     }

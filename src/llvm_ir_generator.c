@@ -677,7 +677,7 @@ ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, L
                 continue;
             if ((child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT) && param_ident == NULL)
                 param_ident = child;
-            else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child))
+            else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child) || child->type == AST_NODE_POLY_IDENT)
                 param_type_node = child;
         }
         if (param_type_node == NULL)

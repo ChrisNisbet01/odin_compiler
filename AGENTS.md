@@ -11,6 +11,16 @@
 - **Net change**: ~659 lines moved (actual extraction), ~3493 removed from main file (the defer/statement/control-flow section).
 - **All 155 tests pass**.
 
+## Accomplishments (session 2026-07-22)
+
+### Implemented polymorphic overload bundle resolution
+- **3 bugs fixed** to make `show :: proc{print_int, double_poly}` work with polymorphic candidates:
+  1. **Root cause (poly_ident name mismatch)**: `sem_resolve_poly_ident_type` in `sem_type_resolver.c:1377` looked up `poly_env_lookup_type(ctx, "$T")` but the poly env stores entries with name `"T"` (with `$` stripped at `poly_build_env_from_args:336`). Fixed by stripping the `$` prefix before lookup.
+  2. **Env binding skipped for `x: $T`**: `poly_build_env_from_args` at `polymorphism.c:331-368` treated ALL `AST_NODE_POLY_IDENT` occurrences as declarations (`$T: typeid` variants that skip `param_idx`), but `x: $T` uses `$T` as a type reference that must be bound to the arg type. Fixed by checking whether the poly ident is the parameter name (declaration) vs. type position (reference).
+  3. **Parameter not registered in body scope**: `sem_analyse_procedure_literal` at `semantic_analyser.c:678` did not include `AST_NODE_POLY_IDENT` in the type node detection for parameter registration (unlike `sem_resolve_procedure_signature:473` which did). Fixed by adding `pc->type == AST_NODE_POLY_IDENT` to the `else if` branch.
+- **Tests**: `test_polymorphic_overload_bundle.odin` passes (covers exact match `show(42)` → `print_int`, and poly specialization `show(3.14)` → `double_poly{T=float}`).
+- **All 160 tests pass**.
+
 ## Accomplishments (session 2026-07-21)
 
 ### Fixed polymorphic call codegen — `op->resolved_symbol` dispatch priority

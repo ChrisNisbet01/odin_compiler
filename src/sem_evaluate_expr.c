@@ -5,6 +5,7 @@
 #include "symbols.h"
 #include "typed_value.h"
 
+#include "polymorphism.h"
 #include "sem_check.h"
 #include "sem_context.h"
 #include "sem_type_resolver.h"
@@ -1919,14 +1920,6 @@ sem_resolve_overload_bundle_call(
         }
     }
 
-    if (match_count == 0)
-    {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "no matching overload for '%s' with %d argument(s)", callee_name ? callee_name : "?", arg_count);
-        sem_error_list_add(&ctx->errors, NULL, call_op, buf);
-        return NULL;
-    }
-
     if (match_count > 1)
     {
         char buf[256];
@@ -1935,5 +1928,64 @@ sem_resolve_overload_bundle_call(
         return NULL;
     }
 
-    return best_match;
+    // No non-poly match found — try polymorphic candidates
+    if (match_count == 0 && candidate_count > 0)
+    {
+        int poly_match_count = 0;
+        symbol_t * poly_winner = NULL;
+
+        for (int ci = 0; ci < candidate_count; ci++)
+        {
+            symbol_t * cand_sym = candidate_symbols[ci];
+            if (cand_sym == NULL || !cand_sym->is_polymorphic)
+                continue;
+
+            // Try to resolve the polymorphic call. Save/restore error list
+            // to suppress spurious errors from non-matching candidates.
+            int saved_error_count = ctx->errors.count;
+            PolySpecialization * spec = poly_resolve_call(ctx, cand_sym, call_op, arg_list_node);
+            if (spec && spec->symbol)
+            {
+                poly_winner = spec->symbol;
+                poly_match_count++;
+            }
+            else
+            {
+                // Restore error state — this candidate didn't match
+                ctx->errors.count = saved_error_count;
+            }
+        }
+
+        if (poly_match_count > 1)
+        {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "ambiguous call to '%s' — %d polymorphic overloads match", callee_name ? callee_name : "?", poly_match_count);
+            sem_error_list_add(&ctx->errors, NULL, call_op, buf);
+            return NULL;
+        }
+
+        if (poly_match_count == 1 && poly_winner)
+        {
+            return poly_winner;
+        }
+
+        // No match at all — fall through to "no matching overload" error
+        char buf[256];
+        snprintf(buf, sizeof(buf), "no matching overload for '%s' with %d argument(s)", callee_name ? callee_name : "?", arg_count);
+        sem_error_list_add(&ctx->errors, NULL, call_op, buf);
+        return NULL;
+    }
+
+    if (match_count == 1)
+    {
+        return best_match;
+    }
+
+    // match_count == 0 but no poly candidates were tried (candidate_count == 0)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "no matching overload for '%s' with %d argument(s)", callee_name ? callee_name : "?", arg_count);
+        sem_error_list_add(&ctx->errors, NULL, call_op, buf);
+        return NULL;
+    }
 }

@@ -317,11 +317,22 @@ poly_build_env_from_args(
             continue;
         }
 
+        // Determine if this param has a poly ident as its NAME (i.e. $T: typeid)
+        // vs. in its TYPE position (x: $T). The first Identifier-like child is the name.
+        odin_grammar_node_t * first_name_child = NULL;
+        for (size_t ci = 0; ci < param->list.count; ci++)
+        {
+            odin_grammar_node_t * child = param->list.children[ci];
+            if (child && (child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT))
+            {
+                first_name_child = child;
+                break;
+            }
+        }
+        bool is_poly_name = (first_name_child && first_name_child->type == AST_NODE_POLY_IDENT);
+
         // Find the type node for this param and check if its type is a poly ident reference
-        // (For the $T: typeid case with the new grammar, PolyIdent is in the name position
-        //  and should be bound to the arg type for this param slot)
         odin_grammar_node_t * poly_type_node = NULL;
-        odin_grammar_node_t * param_type = NULL;
         bool has_poly_decl = false;
         for (size_t ci = 0; ci < param->list.count; ci++)
         {
@@ -330,14 +341,11 @@ poly_build_env_from_args(
                 continue;
             if (child->type == AST_NODE_POLY_IDENT)
             {
-                // This parameter IS a poly type declaration ($T: typeid)
-                // Bind $T to the arg type for the NEXT non-poly param
                 char const * pn = child->text;
                 if (pn && pn[0] == '$')
                     pn = pn + 1;
                 if (pn && out_env->count < MAX_POLY_ENV_ENTRIES)
                 {
-                    // Check if already bound
                     bool already = false;
                     for (int ei = 0; ei < out_env->count; ei++)
                     {
@@ -349,10 +357,14 @@ poly_build_env_from_args(
                     }
                     if (!already)
                     {
-                        // Placeholder — will be bound when we see the type usage
-                        out_env->entries[out_env->count].name = strdup(pn);
-                        out_env->entries[out_env->count].kind = POLY_SLOT_TYPE;
-                        out_env->entries[out_env->count].bound_type = NULL;
+                        int idx = out_env->count;
+                        out_env->entries[idx].name = strdup(pn);
+                        out_env->entries[idx].kind = POLY_SLOT_TYPE;
+                        // If $T is in the TYPE position (x: $T), bind immediately
+                        if (!is_poly_name && param_idx < arg_count)
+                            out_env->entries[idx].bound_type = arg_types[param_idx];
+                        else
+                            out_env->entries[idx].bound_type = NULL;
                         out_env->count++;
                     }
                 }
@@ -361,7 +373,7 @@ poly_build_env_from_args(
             }
         }
 
-        if (has_poly_decl)
+        if (has_poly_decl && is_poly_name)
         {
             // $T: typeid — the poly type declaration doesn't consume an arg slot
             // (it's a compile-time construct). Skip param_idx increment.
