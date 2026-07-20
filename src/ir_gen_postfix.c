@@ -166,36 +166,11 @@ ir_gen_collect_call_args(IrGenContext * ctx, odin_grammar_node_t * node, LLVMVal
 static bool
 ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar_node_t * op, LLVMValueRef * val, TypeDescriptor const ** cur_type)
 {
-    odin_grammar_node_t * ident = expression_unwrap_to_identifier(node->list.children[0]);
     TypeDescriptor const * proc_type = NULL;
-    if (ident)
-    {
-        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
-        if (sym)
-        {
-            // Stage 2 placeholder: a direct call to a polymorphic procedure
-            // is a Stage 3 concern (specialization instantiation). Until that
-            // lands, complain clearly instead of producing bad code.
-            if (sym->is_polymorphic && op->resolved_symbol == NULL)
-            {
-                ir_gen_error_collection_add(
-                    &ctx->errors, NULL, node,
-                    "call to polymorphic procedure is not yet supported"
-                );
-                return true;
-            }
-            proc_type = sym->value.type_info;
-        }
-    }
-    if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
-    {
-        if (*cur_type && (*cur_type)->kind == TD_KIND_PROC)
-            proc_type = *cur_type;
-    }
 
-    // Overload bundle: use resolved symbol from semantic analyser
-    if ((proc_type == NULL || proc_type->kind != TD_KIND_PROC)
-        && op->resolved_symbol != NULL)
+    // Priority 1: semantic analyser resolved this to a concrete symbol
+    // (e.g., polymorphic specialization or overload resolution).
+    if (op->resolved_symbol != NULL)
     {
         symbol_t * resolved = op->resolved_symbol;
         if (resolved->value.type_info && resolved->value.type_info->kind == TD_KIND_PROC)
@@ -213,6 +188,36 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
                 resolved->value.value = *val;
             }
         }
+    }
+
+    // Priority 2: look up the identifier in the current scope
+    if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
+    {
+        odin_grammar_node_t * ident = expression_unwrap_to_identifier(node->list.children[0]);
+        if (ident)
+        {
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
+            if (sym)
+            {
+                if (sym->is_polymorphic && op->resolved_symbol == NULL)
+                {
+                    ir_gen_error_collection_add(
+                        &ctx->errors, NULL, node,
+                        "call to polymorphic procedure is not yet supported"
+                    );
+                    return true;
+                }
+                if (proc_type == NULL)
+                    proc_type = sym->value.type_info;
+            }
+        }
+    }
+
+    // Priority 3: fall back to cur_type (e.g., function pointer calls)
+    if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
+    {
+        if (*cur_type && (*cur_type)->kind == TD_KIND_PROC)
+            proc_type = *cur_type;
     }
 
     if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)

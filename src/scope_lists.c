@@ -63,8 +63,6 @@ scope_symbols_add_entry(scope_symbols_t * list, char const * name, TypedValue va
     symbol_t * existing = scope_symbols_lookup_entry_by_name(list, name);
     if (existing != NULL)
     {
-        free((void *)existing->name);
-        existing->name = strdup(name);
         existing->value = value;
         return;
     }
@@ -73,7 +71,7 @@ scope_symbols_add_entry(scope_symbols_t * list, char const * name, TypedValue va
     if (new_symbol == NULL) return;
     new_symbol->name = strdup(name);
     new_symbol->value = value;
-    generic_hash_table_insert(list->by_name, name, new_symbol);
+    generic_hash_table_insert(list->by_name, new_symbol->name, new_symbol);
 }
 
 symbol_t *

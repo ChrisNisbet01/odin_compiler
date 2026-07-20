@@ -3,6 +3,7 @@
 #include "generator_lists.h"
 #include "odin_grammar_ast.h"
 #include "package_resolver.h"
+#include "polymorphism.h"
 #include "sem_error.h"
 #include "type_descriptors.h"
 
@@ -12,7 +13,7 @@
 // Forward declarations
 typedef struct epc_ast_hook_registry_t epc_ast_hook_registry_t;
 
-typedef struct
+typedef struct SemContext
 {
     odin_grammar_node_t * ast;
     TypeDescriptors * type_registry;
@@ -44,6 +45,17 @@ typedef struct
     // in sem_analyse_procedure_literal so the specialization's body is
     // analyzed normally.
     bool currently_instantiating;
+
+    // Poly env stack (env-stack approach — no AST clone).
+    // Each entry is a PolyEnv with type/int bindings for poly vars.
+    PolyEnv poly_env_stack[MAX_POLY_STACK_DEPTH];
+    int poly_env_stack_depth;
+
+    // Pending specializations generated during semantic pass.
+    // Codegen drains these after the main top-level pass.
+    PolySpecialization ** pending_specializations;
+    int pending_spec_count;
+    int pending_spec_capacity;
 } SemContext;
 
 #include "sem_context.h"

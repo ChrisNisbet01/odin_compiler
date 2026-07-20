@@ -675,7 +675,7 @@ ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, L
             odin_grammar_node_t * child = param->list.children[ci];
             if (child == NULL)
                 continue;
-            if (child->type == AST_NODE_IDENTIFIER && param_ident == NULL)
+            if ((child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT) && param_ident == NULL)
                 param_ident = child;
             else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child))
                 param_type_node = child;
@@ -697,18 +697,37 @@ ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, L
         if (param_ident == NULL || param_type_node == NULL)
             continue;
 
+        // Skip poly type parameters ($T: typeid) — they don't consume runtime
+        // parameter slots in the LLVM function.
+        if (param_ident->type == AST_NODE_POLY_IDENT)
+            continue;
+
         TypeDescriptor const * param_type = param_type_node->resolved_type;
         if (param_type == NULL)
             continue;
 
+        // For poly params ($T), strip the $ prefix for the scope name
+        char const * param_name = param_ident->text;
+        char poly_name_buf[128];
+        if (param_ident->type == AST_NODE_POLY_IDENT && param_name != NULL && param_name[0] == '$')
+        {
+            size_t plen = strlen(param_name + 1);
+            if (plen < sizeof(poly_name_buf))
+            {
+                memcpy(poly_name_buf, param_name + 1, plen);
+                poly_name_buf[plen] = '\0';
+                param_name = poly_name_buf;
+            }
+        }
+
         LLVMValueRef param_val = LLVMGetParam(func, param_index);
         LLVMTypeRef llvm_type = param_type->llvm_type;
-        LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, llvm_type, param_ident->text);
+        LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, llvm_type, param_name);
         LLVMSetAlignment(alloca, LLVMABIAlignmentOfType(ctx->data_layout, llvm_type));
         LLVMBuildStore(ctx->builder, param_val, alloca);
 
         TypedValue tv = create_typed_value(alloca, param_type, true);
-        generator_add_symbol(ctx->gen_ctx, param_ident->text, tv);
+        generator_add_symbol(ctx->gen_ctx, param_name, tv);
 
         param_index++;
     }
@@ -1007,11 +1026,19 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
         return NULL;
 
+    // Skip polymorphic procedures — they are instantiated at call sites
+    // and codegen'd via pending_specializations.
+    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+    if (sym && sym->is_polymorphic)
+        return NULL;
+
     if (value_node->type == AST_NODE_PROCEDURE_DEFINITION)
     {
         TypeDescriptor const * proc_type = value_node->resolved_type;
         if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
             return NULL;
+
+    
 
         ProcDeclAttributes * attrs = (ProcDeclAttributes *)node->metadata;
         char const * func_name = (attrs && attrs->link_name) ? attrs->link_name : name_node->text;
@@ -1065,13 +1092,15 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
             }
 
-            if (strcmp(func_name, "main") == 0)
+                    if (strcmp(func_name, "main") == 0)
             {
                 ir_gen_os_args_init(ctx);
             }
 
             if (body_node)
+            {
                 ir_gen_node(ctx, body_node);
+            }
             else
                 ir_gen_runtime_intrinsic_body(ctx, func_name, proc_type);
 
@@ -2360,7 +2389,9 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_EXPRESSION_STATEMENT:
         if (node->list.count > 0)
+        {
             return ir_gen_node(ctx, node->list.children[0]);
+        }
         return NULL;
 
     case AST_NODE_ASSIGN_STATEMENT:
@@ -2803,6 +2834,111 @@ import_using_copy_symbol(void * value, void * user_data)
     }
 }
 
+// Generate LLVM IR for a single polymorphic specialization.
+// Called during the drain loop in ir_generate().
+static void
+ir_gen_pending_specialization(IrGenContext * ctx, PolySpecialization * spec)
+{
+    if (spec == NULL || spec->symbol == NULL)
+        return;
+
+    char const * mangled_name = spec->symbol->name;
+    if (mangled_name == NULL)
+        return;
+
+    // Look up the specialization's function — it may have been created as a
+    // declaration during ir_gen_postfix_call when another function called it.
+    TypeDescriptor const * proc_type = spec->symbol->value.type_info;
+    if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
+        return;
+
+    LLVMValueRef func = LLVMGetNamedFunction(ctx->module, mangled_name);
+    if (func == NULL)
+    {
+        func = LLVMAddFunction(ctx->module, mangled_name, proc_type->proc_metadata.func_type);
+    }
+
+    // Check if body already exists (already codegen'd)
+    if (LLVMCountBasicBlocks(func) > 0)
+        return;
+
+    // Get the origin AST's ProcedureDefinition — it was fully resolved
+    // during the instantiation semantic pass with the poly env stack active.
+    odin_grammar_node_t * const_decl = spec->origin_const_decl;
+    if (const_decl == NULL)
+        return;
+
+    odin_grammar_node_t * proc_def = NULL;
+    for (size_t i = 0; i < const_decl->list.count; i++)
+    {
+        odin_grammar_node_t * child = const_decl->list.children[i];
+        if (child && child->type == AST_NODE_PROCEDURE_DEFINITION)
+        {
+            proc_def = child;
+            break;
+        }
+    }
+    if (proc_def == NULL)
+        return;
+
+    odin_grammar_node_t * body_node = node_find_child(proc_def, AST_NODE_COMPOUND_STATEMENT);
+    if (body_node == NULL)
+        return;
+
+    // Store LLVM value in the symbol table so callees can find it
+    TypedValue tv = create_typed_value(func, proc_type, false);
+    generator_add_symbol(ctx->gen_ctx, mangled_name, tv);
+
+    // Generate the function body
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
+    LLVMPositionBuilderAtEnd(ctx->builder, entry);
+
+    func_push(ctx, func, proc_type->proc_metadata.return_type);
+    generator_push_scope(ctx->gen_ctx);
+    ir_gen_register_params(ctx, proc_def, func);
+
+    // Inject implicit context parameter for ODIN calling convention
+    if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
+    {
+        LLVMValueRef context_param = LLVMGetParam(func, 0);
+        TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
+        if (ctx_type)
+        {
+            LLVMValueRef context_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
+            LLVMValueRef size_val = LLVMConstInt(
+                LLVMInt64TypeInContext(ctx->context),
+                (long long)LLVMABISizeOfType(ctx->data_layout, ctx_type->llvm_type),
+                false
+            );
+            LLVMBuildMemCpy(ctx->builder, context_alloca, 0, context_param, 0, size_val);
+
+            symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+            if (ctx_sym)
+                ctx_sym->value.value = context_alloca;
+            else
+            {
+                TypedValue ctx_tv = create_typed_value(context_alloca, ctx_type, true);
+                generator_add_symbol(ctx->gen_ctx, "context", ctx_tv);
+            }
+        }
+    }
+
+    // Generate the body
+    ir_gen_node(ctx, body_node);
+
+    // Implicit return if the last block doesn't have a terminator
+    LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(ctx->builder);
+    LLVMValueRef last_inst = LLVMGetLastInstruction(cur_block);
+    if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
+    {
+        ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
+        ir_gen_implicit_return(ctx);
+    }
+
+    generator_pop_scope(ctx->gen_ctx);
+    func_pop(ctx);
+}
+
 bool
 ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
 {
@@ -2849,6 +2985,13 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
 
     // Generate code for the main AST
     ir_gen_process_ast(ctx, ast);
+
+    // Drain pending polymorphic specializations — generate function bodies
+    // for each specialization that was created during the semantic pass.
+    for (int i = 0; i < ctx->pending_spec_count; i++)
+    {
+        ir_gen_pending_specialization(ctx, ctx->pending_specializations[i]);
+    }
 
     // Emit foreign library metadata
     // !llvm.dependent.libraries expects direct MDString operands: !{!"lib1", !"lib2"}

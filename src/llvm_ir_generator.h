@@ -4,6 +4,7 @@
 #include "ir_gen_error.h"
 #include "odin_grammar_ast.h"
 #include "package_resolver.h"
+#include "polymorphism.h"
 #include "type_descriptors.h"
 
 #include <llvm-c/Core.h>
@@ -85,6 +86,10 @@ typedef struct
     int type_info_global_count;
 
     bool bounds_checking_enabled;
+
+    // Pending polymorphic specializations (from semantic analyser)
+    PolySpecialization ** pending_specializations;
+    int pending_spec_count;
 } IrGenContext;
 
 IrGenContext *

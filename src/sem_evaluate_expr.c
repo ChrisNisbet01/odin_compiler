@@ -1304,6 +1304,64 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
         switch (op->type)
         {
         case AST_NODE_POSTFIX_CALL:
+        {
+            // Check if the callee is a polymorphic procedure.
+            // Walk the base expression to find the resolved symbol.
+            symbol_t * callee_sym = NULL;
+            odin_grammar_node_t * base = node->list.children[0];
+            if (base != NULL)
+            {
+                odin_grammar_node_t * inner = base;
+                while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
+                    inner = inner->list.children[0];
+                if (inner->type == AST_NODE_IDENTIFIER)
+                    callee_sym = inner->resolved_symbol;
+            }
+
+            if (callee_sym && callee_sym->is_polymorphic)
+            {
+                // Evaluate argument expressions first
+                odin_grammar_node_t * arg_list = NULL;
+                if (op->list.count > 0 && op->list.children[0] != NULL)
+                {
+                    arg_list = op->list.children[0];
+                    if (arg_list->type == AST_NODE_ARGUMENT_LIST)
+                    {
+                        for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                        {
+                            if (arg_list->list.children[ai])
+                                sem_evaluate_expr(ctx, arg_list->list.children[ai]);
+                        }
+                    }
+                }
+
+                PolySpecialization * spec = poly_resolve_call(ctx, callee_sym, op, arg_list);
+                if (spec && spec->symbol)
+                {
+                    op->resolved_symbol = spec->symbol;
+                    TypeDescriptor const * proc_type = spec->symbol->value.type_info;
+                    if (proc_type && proc_type->kind == TD_KIND_PROC)
+                    {
+                        if (proc_type->proc_metadata.return_count > 1)
+                        {
+                            op->resolved_type = (TypeDescriptor *)proc_type;
+                            type = proc_type;
+                        }
+                        else
+                        {
+                            type = proc_type->proc_metadata.return_type;
+                            op->resolved_type = (TypeDescriptor *)type;
+                        }
+                    }
+                }
+                else
+                {
+                    sem_error_list_add(&ctx->errors, NULL, op,
+                                       "polymorphic procedure call could not be specialized");
+                }
+                break;
+            }
+
             if (type && type->kind == TD_KIND_PROC)
             {
                 if (op->list.count > 0 && op->list.children[0] != NULL)
@@ -1365,6 +1423,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 }
             }
             break;
+        }
 
         case AST_NODE_POSTFIX_MEMBER:
             if (type && (type->kind == TD_KIND_STRUCT || type->kind == TD_KIND_SOA) && op->list.count >= 1

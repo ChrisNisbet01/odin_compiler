@@ -332,7 +332,7 @@ StructRawBody = LBrace StructFieldList RBrace;
 StructType = KwStruct (SoaType | ((Directive IntegerLiteral?)? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
 StructTypeRef = KwStruct Identifier @AST_ACTION_STRUCT_TYPE_REF;
 
-Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon VariadicMarker? TypePrefix @AST_ACTION_PARAMETER;
+Parameter = KwUsing? ((PolyIdent Colon TypePrefix) | (Identifier Colon VariadicMarker? TypePrefix)) @AST_ACTION_PARAMETER;
 Parameters = Ellipsis | (Parameter (Comma Parameter)* (Comma Ellipsis)?) @AST_ACTION_PARAMETERS;
 ParameterList = LParen Parameters? RParen @AST_ACTION_PARAMETER_LIST;
 NamedReturn = Identifier Colon TypePrefix @AST_ACTION_NAMED_RETURN;

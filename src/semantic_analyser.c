@@ -468,9 +468,9 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
                     odin_grammar_node_t * child = param->list.children[ci];
                     if (child == NULL)
                         continue;
-                    if (child->type == AST_NODE_IDENTIFIER && param_ident == NULL)
+                    if ((child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT) && param_ident == NULL)
                         param_ident = child;
-                    else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child))
+                    else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child) || child->type == AST_NODE_POLY_IDENT)
                         param_type_node = child;
                 }
                 if (param_type_node == NULL)
@@ -480,7 +480,7 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
                         odin_grammar_node_t * child = param->list.children[ci - 1];
                         if (child == NULL)
                             continue;
-                        if (child->type == AST_NODE_IDENTIFIER && child != param_ident)
+                        if ((child->type == AST_NODE_IDENTIFIER && child != param_ident))
                         {
                             param_type_node = child;
                             break;
@@ -513,6 +513,13 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
                         continue;
                     param_type_node->resolved_type = (TypeDescriptor *)pt;
                     is_variadic = true;
+                }
+
+                // Skip poly type parameters ($T: typeid) — they don't consume
+                // runtime parameter slots in the LLVM function type.
+                if (param_ident != NULL && param_ident->type == AST_NODE_POLY_IDENT)
+                {
+                    continue;
                 }
 
                 if (param_count >= (int)param_cap)
@@ -574,7 +581,7 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
     return proc_type;
 }
 
-static void
+void
 sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char const * proc_name)
 {
     TypeDescriptor const * return_type = NULL;
@@ -593,7 +600,9 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
     // to run normal body analysis on a cloned specialization whose
     // polymorphism has already been substituted away.
     if (!ctx->currently_instantiating && poly_signature_is_polymorphic(node))
+    {
         return;
+    }
 
     odin_grammar_node_t * comp_stmt_node = NULL;
     for (size_t i = 0; i < node->list.count; i++)
@@ -664,7 +673,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                         odin_grammar_node_t * pc = param->list.children[ci];
                         if (pc == NULL)
                             continue;
-                        if (pc->type == AST_NODE_IDENTIFIER && param_ident == NULL)
+                        if ((pc->type == AST_NODE_IDENTIFIER || pc->type == AST_NODE_POLY_IDENT) && param_ident == NULL)
                             param_ident = pc;
                         else if (pc->type == AST_NODE_IDENTIFIER || is_type_node(pc))
                             param_type_node = pc;
@@ -686,12 +695,17 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                     if (param_ident == NULL || param_type_node == NULL)
                         continue;
 
+                    // For poly params ($T), register with the base name (strip $)
+                    char const * param_name = param_ident->text;
+                    if (param_ident->type == AST_NODE_POLY_IDENT && param_name != NULL && param_name[0] == '$')
+                        param_name = param_name + 1;
+
                     TypeDescriptor const * param_type = param_type_node->resolved_type;
                     if (param_type == NULL)
                         continue;
 
                     TypedValue tv = create_typed_value(NULL, param_type, true);
-                    generator_add_symbol(ctx->gen_ctx, param_ident->text, tv);
+                    generator_add_symbol(ctx->gen_ctx, param_name, tv);
                 }
             }
         }
@@ -829,7 +843,11 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         {
             symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
             if (sym)
+            {
                 sym->is_polymorphic = true;
+                // Store the origin ConstantDecl AST for later instantiation
+                poly_register_origin(sym, node);
+            }
         }
 
         // Try to evaluate as a compile-time integer constant

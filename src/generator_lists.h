@@ -16,6 +16,12 @@ typedef struct
     LLVMContextRef context;
     LLVMBuilderRef builder;
     TypeDescriptors * type_registry;
+
+    // Scopes whose lifetime must extend until after codegen completes
+    // (because AST nodes hold resolved_symbol pointers into them).
+    scope_t ** deferred_scopes;
+    int deferred_count;
+    int deferred_capacity;
 } GeneratorContext;
 
 GeneratorContext * generator_context_create(
@@ -33,3 +39,5 @@ scope_t * generator_current_scope(GeneratorContext * gc);
 void generator_add_symbol(GeneratorContext * gc, char const * name, TypedValue value);
 
 symbol_t * generator_find_symbol(GeneratorContext * gc, char const * name);
+
+void generator_free_deferred_scopes(GeneratorContext * gc);

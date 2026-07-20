@@ -3,19 +3,45 @@
 A monomorphization-based implementation of polymorphic procedures for the Odin
 compiler. Per call-site, type variables in the procedure signature are bound
 to concrete types and integer constants from the argument expressions; the proc
-AST is cloned with substitutions applied; the resulting specialization is
-analyzed & codegen'd as a normal procedure. A cache keyed on
+AST is walked with a poly-variable environment stack (no deep clone) pushing
+bindings onto `SemContext`; the resulting specialization is analyzed &
+codegen'd as a normal procedure. A cache keyed on
 `(proc symbol, arg type pointer tuple)` ensures only one specialization per
 unique binding.
+
+## Core Strategy: Env Stack (No AST Clone)
+
+The original plan called for deep-cloning the AST with substitutions. Instead,
+we use a **poly-aware env stack**:
+
+1. **Detection** (unchanged): `poly_signature_is_polymorphic` — walk signature
+   for any `AST_NODE_POLY_IDENT`.
+
+2. **Instantiation at call-site**: build a `PolyEnv` that maps poly variable
+   names (`"T"`, `"N"`) to concrete types/values. Push this env onto a stack
+   in `SemContext`. Run `sem_analyse_procedure_literal` on the **original**
+   (un-cloned) AST with `ctx->currently_instantiating = true`. Inside
+   `sem_resolve_type_expr` and `sem_resolve_type_identifier`, consult the poly
+   env stack. When env is active, `$T`/`T` resolves to the bound concrete type.
+   After analysis, pop the env. Register the specialization symbol with a
+   mangled name.
+
+3. **Codegen** (unchanged from original plan): specialization symbols are
+   enqueued in `ctx->pending_specializations`; `ir_generate()` drains them
+   after the main top-level pass. The original poly symbol is skipped in codegen.
+
+Benefits: ~500 LoC vs ~1200 LoC for deep-clone approach, no AST cloning bugs,
+no need to deep-copy or reset `resolved_type`/`resolved_symbol` fields.
 
 ## Confirmed Scope
 
 User decisions taken at plan time:
 
-- **Both syntactic forms** — `proc($T: $T)` (explicit) and `proc(x: $T)` (shorthand)
-- **Specialization cache key** = type-pointer tuple
+- **Both syntactic forms** — `proc(x: $T)` (shorthand) and `proc($T: typeid, x: T)` (explicit, deferred)
+- **Specialization cache key** = `(symbol_t*, type-pointer-tuple)` hash
 - **`where` clauses** — skipped initially (parse + ignore for now)
 - **Overload bundles** — polymorphic candidates supported in bundles from start
+  (Stage 6)
 - **Plan granularity** — file-level plan + categorized tests
 
 ## Deferred Features (Not Supported Yet)
@@ -63,6 +89,45 @@ skipped in the test list.
    using `$T` as its type. Tests only instantiate via parameters that bind
    `$T` to a concrete type.
 
+7. **Explicit `$T: typeid` or `$N: int` parameter declarations** — the
+   `(PolyIdent Colon)?` prefix in the `Parameter` grammar rule is present but
+   does not work with the current grammar (because after `PolyIdent Colon`, the
+   grammar expects `Identifier Colon TypePrefix`, which cannot be satisfied by
+   `$T: typeid` since `typeid` is a reserved word). Only the shorthand form
+   `x: $T` is supported initially.
+
+## Pre-existing Bug Fix: Scope UAFs (Prerequisite for Stage 4)
+
+Adding pointer-type fields to `symbol_t` (e.g. `poly_origin_ast`, `poly_cache`)
+shifts the struct's memory layout and exposes pre-existing use-after-free bugs:
+
+1. **`scope_lists.c` line 66**: `free(existing->name)` frees the hash-table
+   entry's key pointer while the key is still in the hash table. This
+   invalidates the key for future lookups, causing hash-table corruption when
+   any `scope_lists` function walks or probes the table.
+
+2. **Scope-free ordering**: `scope_free` frees the `symbol_t` block memory
+   while AST nodes still hold `node->resolved_symbol` pointers into the freed
+   block. This is latent today because `resolved_symbol` is only read during
+   the semantic pass (before scopes are freed), but adding codegen-level
+   access (Stage 4) to `resolved_symbol` after `scope_free` would read freed
+   memory.
+
+**Fix approach** (to be applied as a separate commit between Stage 3 and
+Stage 4):
+- For (1): Free the name string only after removing the entry from the table,
+  or use a separate key allocation strategy.
+- For (2): Either defer `scope_free` until after codegen, or use a
+  slab/arena allocator for `symbol_t` that keeps them alive.
+
+These fixes are required before Stage 4 because Stage 4 accesses
+`resolved_symbol` / `type_info` on specialization symbols during codegen,
+which runs after scopes are cleaned up in the current pipeline.
+
+**Current workaround**: The `symbol_t` struct avoids pointer-type metadata
+fields. Polymorphism data (origin AST, cache) lives in side tables managed by
+`polymorphism.c`.
+
 ## Architecture Overview
 
 Pipeline mirrors the existing semantic / IR pipeline:
@@ -71,229 +136,160 @@ Pipeline mirrors the existing semantic / IR pipeline:
    whose value is a `ProcedureLiteral`, scan its signature for
    `AST_NODE_POLY_IDENT`. If found, mark the symbol as polymorphic and
    **skip body analysis**; register the proc symbol with `type_info = NULL`.
+   Store the origin `ConstantDecl` node in a side table keyed by `symbol_t*`.
 
 2. **Instantiation (semantic, at call-site)** — when
    `sem_evaluate_postfix_call` encounters a callee symbol marked polymorphic:
    - Evaluate argument types
    - Unify arg types with poly params to build an instantiation environment
-   - Look up the cache by `(poly_origin, arg_type_tuple_hash)`
-   - On miss: clone the proc AST, substitute poly idents with concrete types /
-     values, run `sem_analyse_procedure_literal` on the clone, register the
-     specialization as a top-level symbol, store in cache.
+   - Push env onto `SemContext` poly env stack; set `currently_instantiating = true`
+   - Run `sem_analyse_procedure_literal` on the **original** `ProcedureDefinition`
+     — this resolves the signature (POLY_IDENT nodes consult the env stack)
+     and analyzes the body with concrete types
+   - Pop env; set `currently_instantiating = false`
+   - Register the specialization as a top-level symbol with mangled name
+   - Add to `pending_specializations` for codegen
 
-3. **Codegen** — specialization symbols carry a pointer to their cloned
-   specialization AST. After each file's main semantic pass, the driver
-   drains the `pending_specializations` queue and codegen's each as if it
-   were a regular top-level procedure. Mangling:
-   `<proc_name>__poly_<argtypecanon1>_<argtypecanon2>...`.
+3. **Codegen** — specialization symbols are stored in
+   `ctx->pending_specializations`. After each file's main semantic pass, the
+   driver drains the queue and codegen's each as if it were a regular top-level
+   procedure. Mangling: `<proc_name>__poly_<argtypecanon1>_<argtypecanon2>...`.
 
-Polymorphism-specific code lives in two new modules plus one shared module,
-all kept separate from the existing code. Existing files are touched only
-with small additions (hook points); no refactoring of unrelated functionality.
+Polymorphism-specific code lives in `polymorphism.h` / `polymorphism.c`.
 
-## New Modules
+## New / Modified Modules
 
 ### 1. `src/polymorphism.h` / `src/polymorphism.c`
 
 Public API:
 
 ```c
-// Read-only detection: scan a procedure signature AST for any $T/$N usage.
-bool poly_signature_is_polymorphic(odin_grammar_node_t * sig_node);
+// --- Poly env (type-level only for Stage 3) ---
+typedef enum { POLY_SLOT_TYPE, POLY_SLOT_INT } PolySlotKind;
 
-// Instantiate (or look up in cache) a specialization of the poly proc whose
-// origin symbol is `poly_symbol`, for the given concrete argument types.
-// On cache hit, returns the existing specialization without re-analyzing.
-// On miss, clones the AST, substitutes, analyses, registers in scope & cache.
+#define MAX_POLY_ENV_ENTRIES 16
+#define MAX_POLY_STACK_DEPTH 8
+
+typedef struct {
+    char const * name;              // "T", "N", ...
+    PolySlotKind kind;
+    TypeDescriptor const * bound_type;    // for POLY_SLOT_TYPE
+    long long bound_int_value;           // for POLY_SLOT_INT
+} PolyEnvEntry;
+
+typedef struct {
+    PolyEnvEntry entries[MAX_POLY_ENV_ENTRIES];
+    int count;
+} PolyEnv;
+
+// Env stack management (SemContext owns the stack array)
+void poly_env_push(SemContext * ctx, PolyEnv * env);
+void poly_env_pop(SemContext * ctx);
+TypeDescriptor const * poly_env_lookup_type(SemContext * ctx, char const * name);
+bool poly_env_lookup_int(SemContext * ctx, char const * name, long long * out_val);
+
+// Origin tracking — side table mapping symbol_t* → ConstantDecl AST node
+void poly_register_origin(symbol_t * sym, odin_grammar_node_t * const_decl);
+odin_grammar_node_t * poly_get_origin(symbol_t * sym);
+
+// Instantiation result
+typedef struct {
+    symbol_t * symbol;       // the specialization symbol (with concrete type_info)
+} PolySpecialization;
+
+// Resolve a call to a polymorphic procedure.
 PolySpecialization * poly_resolve_call(
     SemContext * ctx,
     symbol_t * poly_symbol,
-    TypeDescriptor const ** arg_types,
-    int arg_count
-);
-
-// Score a candidate proc type against concrete arg types for overload-bundle
-// resolution. Returns -1 for no match, 0 for exact, higher = more conversions.
-// If candidate type uses $T/$N polymorphism, the unification env is written
-// to `out_env` / `out_env_count` for downstream instantiation.
-int poly_score_candidate(
-    SemContext * ctx,
-    TypeDescriptor const * candidate_proc_type,
-    TypeDescriptor const ** arg_types,
-    int arg_count,
-    PolyEnv * out_env,
-    int * out_env_count
+    odin_grammar_node_t * call_op,
+    odin_grammar_node_t * arg_list_node
 );
 ```
 
-### 2. `src/polymorphism_shared.h` / `src/polymorphism_shared.c`
+### 2. `src/semantic_analyser.h`
 
-Shared matching/unification used by both polymorphic call resolution and
-existing overload-bundle resolution. Factored out of
-`sem_resolve_overload_bundle_call`:
-
-- `poly_match_arg_to_param(SemContext * ctx, TypeDescriptor * arg_type, TypeDescriptor * param_type, PolyEnv * env, int * env_count)`
-- `poly_score_candidate(...)` (declared above)
-
-## Modifications to Existing Files
-
-### `src/symbols.h`
-Add a single field to `symbol_t`:
-```c
-bool is_polymorphic;
-```
-
-**NOTE**: The plan originally proposed adding `poly_origin_ast` and `poly_cache` pointers directly to `symbol_t`, but doing so shifts the memory layout of `symbol_t` in a way that exposes pre-existing use-after-free bugs in `scope_lists.c` (`free(existing->name)` invalidates the hash-table entry's key pointer) and the scope-cleanup ordering (`scope_free` runs while AST nodes still hold `node->resolved_symbol` pointers into freed symbol_t blocks). These UAFs are pre-existing latent bugs that manifest only after specific memory-layout shifts. They are deferred to a future bug-fix stage (not part of polymorphism work); for now, polymorphism-specific metadata (origin AST, cache) lives in side tables keyed by `symbol_t*` and managed inside `polymorphism.c`.
-
-### `src/sem_context.h`
-Add:
-```c
-odin_grammar_node_t ** pending_specializations;
-int pending_spec_count, pending_spec_capacity;
-```
-
-### `src/odin_grammar.gdl`
-Add shorthand `Identifier Colon PolyIdent` alternative to `Parameter`:
-```
-Parameter = KwUsing?
-          ( (PolyIdent Colon)? Identifier Colon VariadicMarker? TypePrefix
-          | Identifier Colon PolyIdent )
-          @AST_ACTION_PARAMETER;
-```
-
-### `src/semantic_analyser.c`
-- `sem_register_top_level_declaration` (~line 760): after `sem_resolve_procedure_signature`,
-  call `poly_signature_is_polymorphic(sig_node)`. If true:
-  - Set `sym->is_polymorphic = true`, `sym->poly_origin_ast = value_node`.
-  - Set `sym->value.type_info = NULL` (don't pre-bind proc type).
-  - Register the proc under its declared name (still findable by callers).
-- `sem_analyse_procedure_literal` (~line 577): at entry, if
-  `poly_signature_is_polymorphic(sig_node) && !ctx->currently_instantiating`
-  → return early (poly procs are not analyzed standalone; only their clones).
-- `sem_resolve_procedure_signature` (~line 492): when parameter type node is
-  `AST_NODE_POLY_IDENT`, record it but do NOT call `sem_resolve_type_expr`
-  (which would return NULL). For poly sigs return a sentinel poly-proc
-  TypeDescriptor with null param_types.
-
-### `src/sem_evaluate_expr.c`
-At the two `AST_NODE_POSTFIX_CALL` handlers (lines 1197 and 1306 — package-
-qualified and unqualified call paths), add a branch BEFORE the existing
-`type->kind == TD_KIND_PROC` test:
+Add to `SemContext`:
 
 ```c
-if (sym && sym->is_polymorphic) {
-    // evaluate args, build type list
-    TypeDescriptor const * arg_types[MAX_ARGS];
-    int arg_count = 0;
-    collect_arg_types(ctx, arg_list, arg_types, &arg_count);
-    PolySpecialization * spec = poly_resolve_call(ctx, sym, arg_types, arg_count);
-    if (spec && spec->symbol) {
-        op->resolved_symbol = spec->symbol;
-        op->resolved_type = (TypeDescriptor *)spec->symbol->value.type_info;
-    }
-    break;
-}
+// Poly env stack (env-stack approach — no AST clone)
+PolyEnv poly_env_stack[MAX_POLY_STACK_DEPTH];
+int poly_env_stack_depth;
+
+// Pending specializations for codegen
+PolySpecialization ** pending_specializations;
+int pending_spec_count;
+int pending_spec_capacity;
 ```
 
-In `sem_resolve_overload_bundle_call` (line 1810-1861) per-candidate loop,
-add a branch BEFORE the assignability check:
+### 3. `src/sem_context.c`
 
-```c
-if (candidate_symbols[ci]->is_polymorphic) {
-    PolyEnv env[MAX_POLY];
-    int env_count = 0;
-    int score = poly_score_candidate(ctx, candidate_types[ci],
-                                     arg_types, arg_count, env, &env_count);
-    if (score >= 0) {
-        PolySpecialization * spec = poly_resolve_call(
-            ctx, candidate_symbols[ci], arg_types, arg_count);
-        if (spec && spec->symbol) {
-            best_match = spec->symbol;
-            match_count++;
-        }
-    }
-    continue;
-}
-```
+Initialize new fields to zero in `sem_context_init`; free pending specs array
+in `sem_context_destroy`.
 
-### `src/llvm_ir_generator.c`
-- `ir_gen_top_level_decl` (~line 990): at entry, check `sym->is_polymorphic`.
-  If true → return early (poly procs emit no LLVM function from their origin
-  decl; only their instantiations do).
-- Extend `ir_generate()` end-loop: after iterating the file's top-level
-  decls, drain `ctx->pending_specializations` and codegen each cloned
-  `AST_NODE_CONSTANT_DECL` node via the standard top-level path.
-- Mangling: `attrs->link_name = "<proc>__poly_<mangle>"` set on the cloned
-  AST's metadata.
+### 4. `src/sem_type_resolver.c`
 
-### `src/ir_gen_postfix.c`
-In `ir_gen_postfix_call` (line 170-203), if the callee lookup resolves to a
-poly-marked symbol, return a "no direct call to polymorphic origin" error
-(invalid use). Direct calls must always go through `op->resolved_symbol`
-which is the specialization symbol set by the semantic analyser.
+- Add `AST_NODE_POLY_IDENT` to the dispatch table → `sem_resolve_poly_ident_type`
+  handler that consults `poly_env_lookup_type()`.
+- Modify `sem_resolve_type_identifier` to also check the poly env stack
+  (poly var names like `T` appear as bare `Identifier` in return types).
 
-### `src/CMakeLists.txt`
-Add `polymorphism.c` and `polymorphism_shared.c` to the odinc target.
+### 5. `src/sem_evaluate_expr.c`
+
+In both `AST_NODE_POSTFIX_CALL` handlers (package-qualified and local):
+- Before the existing `type->kind == TD_KIND_PROC` test, check if the callee
+  symbol is polymorphic → route to `poly_resolve_call()`.
+- Evaluate args, pass them to `poly_resolve_call()`, set
+  `op->resolved_symbol` and `op->resolved_type` from the specialization.
+
+### 6. `src/semantic_analyser.c`
+
+- `sem_register_top_level_declaration`: after marking `sym->is_polymorphic`,
+  call `poly_register_origin(sym, node)` (the ConstantDecl).
+- `sem_resolve_procedure_signature`: when looking for `param_type_node`,
+  also accept `AST_NODE_POLY_IDENT` alongside `Identifier` / `is_type_node`.
+
+### 7. `src/llvm_ir_generator.c` / `src/ir_gen_postfix.c`
+
+- `ir_gen_top_level_decl`: skip poly-origin symbols (already done by
+  `ir_gen_postfix.c` error guard in Stage 2).
+- `ir_generate()`: after the main top-level pass, drain
+  `pending_specializations` and codegen each via the standard top-level path
+  with mangled name.
+- `ir_gen_postfix_call`: existing Stage 2 guard emits error for direct poly
+  calls (should never reach here in Stage 3 because the semantic analyser
+  routes through `poly_resolve_call` and sets `op->resolved_symbol`).
+
+### 8. `src/symbols.h`
+
+Only `bool is_polymorphic` (no pointer fields — UAF workaround).
 
 ## Semantic Details
 
-### Polymorphic Param Detection (`poly_signature_is_polymorphic`)
+### Polymorphic Param Detection
 1. Walk `sig_node->children` for `PARAMETER_LIST` → `PARAMETERS` → `PARAMETER[]`.
 2. For each `PARAMETER`:
-   - Scan children for `AST_NODE_POLY_IDENT` (explicit tag OR shorthand).
-   - If the tag's name appears as `AST_NODE_POLY_IDENT` in `TypePrefix`
-     → binds `SLOT_TYPE`.
-   - Else if `TypePrefix` resolves to a normal type AND the poly name is
-     used elsewhere in the signature (e.g. `[$N]int`) → binds
-     `SLOT_INT_CONST`.
-3. Walk `Returns` for the same poly uses.
+   - Scan children for `AST_NODE_POLY_IDENT` in type position.
+3. Walk `Returns` for the same poly uses (both `PolyIdent` and bare `Identifier`).
 4. If any `PolyIdent` is found in params OR returns → return true.
 
 ### Instantiation Environment
-- Initialize empty `PolyEnv[16]` (limit 16 poly vars per proc).
-- For each poly-typed param at position `i` (its declared type is a `PolyIdent`):
-  - Look up `arg_types[i]` from call site.
-  - Search `env` for the poly name: if already bound, verify equality with
-    `arg_types[i]` (else: type mismatch error). If not yet bound, add it.
-  - Set the cloned param's type to the concrete type.
-- For each `SLOT_INT_CONST` poly (e.g. `$N: int`):
-  - If call-site supplies a constant int arg → bind from that.
-  - Else if a sibling poly-typed param uses it (e.g. `[$N]int`), derive
-    `$N = len(arg_type[i])` from the array argument.
-  - Else → emit "cannot infer $N" error.
+- Initialize empty `PolyEnv`.
+- For each parameter whose type is a `PolyIdent`:
+  - Look up arg type at same position from call site.
+  - If poly name already bound: verify type equality. Otherwise: add to env.
+- Push env onto `SemContext` poly env stack.
 
-### AST Clone + Substitute
-1. Deep clone the `ProcedureDefinition` (and the wrapping `ConstantDecl`).
-2. Reuse `text` pointers (lexer-owned, safe to share).
-3. Reset `resolved_type` and `resolved_symbol` to NULL in every cloned node.
-4. Walk the clone recursively. For each `AST_NODE_POLY_IDENT` node:
-   - Look up name in `env`.
-   - For `SLOT_TYPE` binding → synthesize an `AST_NODE_BASIC_TYPE` /
-     `AST_NODE_IDENTIFIER` node that resolves to the bound `TypeDescriptor`.
-     Pre-populate the cloned node's `resolved_type` so
-     `sem_resolve_type_expr` picks it up.
-   - For `SLOT_INT_CONST` binding → synthesize an `AST_NODE_INTEGER_VALUE`
-     with `text = "<int>"` and a pre-resolved value.
-5. Run `sem_resolve_procedure_signature` on the cloned sig → produces a
-   concrete `TypeDescriptor*` for the specialization.
-6. Register specialization's name in the parent scope **before** analyzing
-   the body (enables recursion-as-self-call).
-7. Run `sem_analyse_procedure_literal` on the cloned body with a fresh scope
-   that pre-injects all poly var names as `SYMBOL_TYPE` / `SYMBOL_CONSTANT`
-   entries.
+### Env Resolution During Instantiation
+- `sem_resolve_type_expr` for `AST_NODE_POLY_IDENT`: consult `poly_env_lookup_type()`.
+- `sem_resolve_type_identifier` (bare `Identifier` like `T`): also consult
+  `poly_env_lookup_type()` before falling through to scope lookup.
 
-### Cache
-- Hash table in `polymorphism.c` keyed on
-  `(uint64_t poly_origin_ptr, uint64_t arg_type_tuple_hash)`.
-- `arg_type_tuple_hash` = combined hash of `arg_types[i]` pointers
-  (XOR + rotate).
-- Linear scan on hash collision (chained buckets).
-- Lifetime: lives for the entire compilation. Specializations never evicted.
-
-### Mangled Names
-- Format: `<origin_name>__poly_<argtypecanon1>_<argtypecanon2>...`
-- Example: `double__poly_int` for `double($T: $T)` called with `int`.
+### Registration of Specializations
+- Mangling: `<origin_name>__poly_<param_type1>_<param_type2>...`
 - Use `type_write_canonical_name` to get printable type names.
+- Register in the current scope with the mangled name.
+- Set `type_info` to the concrete proc type.
+- Add to `pending_specializations` for codegen.
 
 ## Tests
 
@@ -326,7 +322,7 @@ main :: proc() {
 package test_polymorphic_identity
 import "core:fmt"
 
-identity :: proc($T: $T, x: T) -> T {
+identity :: proc(x: $T) -> T {
     return x
 }
 
@@ -341,7 +337,7 @@ main :: proc() {
 package test_polymorphic_double
 import "core:fmt"
 
-double :: proc($T: $T, x: T) -> T {
+double :: proc(x: $T) -> T {
     return x + x
 }
 
@@ -373,7 +369,7 @@ main :: proc() {
 package test_polymorphic_max
 import "core:fmt"
 
-max_poly :: proc($T: $T, a, b: T) -> T {
+max_poly :: proc(a, b: $T) -> T {
     if a > b { return a }
     return b
 }
@@ -391,7 +387,7 @@ main :: proc() {
 package test_polymorphic_shorthand
 import "core:fmt"
 
-double2 :: proc(x: $T) -> $T {
+double2 :: proc(x: $T) -> T {
     return x + x
 }
 
@@ -409,7 +405,7 @@ package test_polymorphic_overload_bundle
 import "core:fmt"
 
 print_int :: proc(x: int) -> int { return x }
-print_poly :: proc($T: $T, x: T) -> T { return x }
+print_poly :: proc(x: $T) -> T { return x }
 
 show :: proc{print_int, print_poly}
 
@@ -427,7 +423,7 @@ main :: proc() {
 package test_polymorphic_specialization_dedup
 import "core:fmt"
 
-double :: proc($T: $T, x: T) -> T { return x + x }
+double :: proc(x: $T) -> T { return x + x }
 
 main :: proc() {
     a := double(21)
@@ -444,7 +440,7 @@ main :: proc() {
 package test_polymorphic_type_mismatch
 import "core:fmt"
 
-mismatch :: proc($T: $T, a: T, b: T) -> T {
+mismatch :: proc(a, b: $T) -> T {
     return a + b
 }
 
@@ -459,7 +455,7 @@ main :: proc() {
 package test_polymorphic_unused
 import "core:fmt"
 
-unused :: proc($T: $T, x: T) -> T { return x }
+unused :: proc(x: $T) -> T { return x }
 
 main :: proc() {
     fmt.println("nothing")   // poly proc never called — compiles cleanly
@@ -485,8 +481,7 @@ still try to be analyzed normally, which will cause compile errors on real
 poly code in the body).
 
 **Files touched**:
-- `src/odin_grammar.gdl` — shorthand `Parameter` rule.
-- `src/symbols.h` — add `is_polymorphic`, `poly_origin_ast`, `poly_cache`.
+- `src/symbols.h` — add `is_polymorphic`.
 - `src/polymorphism.h` / `src/polymorphism.c` — new files with
   `poly_signature_is_polymorphic` only (stub the rest).
 - `src/CMakeLists.txt` — add `polymorphism.c`.
@@ -494,8 +489,8 @@ poly code in the body).
 
 **Tests added**: `test_polymorphic_unused.odin` (passes — unused poly compiles).
 
-**Verification**: `cmake --build build && ./tests/run_tests.sh`. All 156
-existing tests plus the new one must pass.
+**Verification**: `cmake --build build && ./tests/run_tests.sh`. All existing
+tests plus the new one must pass.
 
 ### Stage 2: Skip body analysis for poly procs (silently)
 
@@ -508,69 +503,58 @@ existing tests.
 - `src/semantic_analyser.c` — early-return in `sem_analyse_procedure_literal`
   if `poly_signature_is_polymorphic && !ctx->currently_instantiating`.
 - `src/sem_context.h` — add `bool currently_instantiating` flag (init false).
-- `src/sem_evaluate_expr.c` — when resolving callee symbol, if
-  `is_polymorphic` flag is set, emit a useful error ("polymorphic
-  procedure called but specialization not yet implemented"). Stage 3
-  replaces this error with actual instantiation.
+- `src/ir_gen_postfix.c` — emit clean error for direct poly calls.
 
-**Tests**: No new tests. Existing tests still pass. Calling a poly proc
-would now give a clear error.
+**Tests**: No new tests. Existing tests still pass.
 
 **Verification**: `cmake --build build && ./tests/run_tests.sh`.
 
-### Stage 3: AST clone + substitute + instantiation (no caching)
+### Stage 3: Env-stack instantiation (no caching, no codegen)
 
-**Goal**: Implement the core `poly_resolve_call` without caching. Each
-call-site creates a fresh specialization (correct but inefficient — creates
-duplicate specializations for repeated identical calls).
-
-**Files touched**:
-- `src/polymorphism.c` — implement:
-  - `poly_collect_poly_params` — gather named poly vars from signature
-  - `poly_collect_arg_types` — evaluate arg expression types at call-site
-  - `poly_unify` — match args against params, build `PolyEnv`
-  - `poly_clone_ast` — deep clone (reuse `text`, NULL `resolved_type`)
-  - `poly_substitute_in_ast` — walk clone, replace `AST_NODE_POLY_IDENT`
-  - `poly_instantiate` (no-cache variant) — drive clone + analyse +
-    register in parent scope + add to `pending_specializations`
-- `src/polymorphism.h` — full public API.
-- `src/semantic_analyser.c` — `sem_resolve_procedure_signature`
-  understands `AST_NODE_POLY_IDENT` in param type slots (records instead
-  of resolving).
-- `src/sem_evaluate_expr.c` — replace Stage-2 error with:
-  - `poly_resolve_call(ctx, sym, arg_types, arg_count)` call
-  - Set `op->resolved_symbol` to specialization's symbol.
-
-**Tests added**: `test_polymorphic_identity.odin`,
-`test_polymorphic_double.odin`, `test_polymorphic_shorthand.odin`,
-`test_polymorphic_max.odin`, `test_polymorphic_unused.odin`.
-
-**Verification**: `cmake --build build && ./tests/run_tests.sh`. New poly
-tests pass; existing tests unaffected.
-
-### Stage 4: Codegen for specializations
-
-**Goal**: Drain `pending_specializations` in `ir_generate()` after each
-file's main top-level pass; each spec's cloned `AST_NODE_CONSTANT_DECL` is
-processed via the standard top-level path. Mangling the function name
-prevents symbol collisions with the original poly symbol. The original
-poly symbol emits nothing (already skipped in Stage 2 / Stage 3).
+**Goal**: Implement `poly_resolve_call` using poly env stack. The semantic
+analyser builds a `PolyEnv` from call-site args, pushes it onto the
+`SemContext` poly env stack, re-runs `sem_analyse_procedure_literal` on the
+original proc AST (which now resolves correctly through the env), and registers
+a specialization symbol. **No codegen yet** — the specialization is registered
+but no LLVM IR is emitted. Verification only checks that semantic analysis
+succeeds without errors.
 
 **Files touched**:
-- `src/llvm_ir_generator.c`:
-  - `ir_gen_top_level_decl` early-return if `sym->is_polymorphic`.
-  - `ir_generate()` end: drain `ctx->pending_specializations` — for each,
-    set its `attrs->link_name` to the mangled specialization name, then
-    call `ir_gen_top_level_decl` on the cloned node.
-- `src/polymorphism.c` — `poly_make_mangled_name` helper.
-- `src/ir_gen_postfix.c` — guard: if direct callee symbol is poly (not
-  via `resolved_symbol` specialization path), emit error.
+- `src/polymorphism.h` — full public API (PolyEnv, poly_resolve_call, etc.)
+- `src/polymorphism.c` — env stack, origin tracking, poly_build_env_from_args,
+  poly_resolve_call implementation
+- `src/semantic_analyser.h` — poly_env_stack[], poly_env_stack_depth,
+  pending_specializations fields
+- `src/sem_context.c` — init/destroy new fields
+- `src/sem_type_resolver.c` — POLY_IDENT dispatch, poly-aware identifier resolver
+- `src/sem_evaluate_expr.c` — poly branch in POSTFIX_CALL handlers
+- `src/semantic_analyser.c` — register origin, handle POLY_IDENT in sig resolution
 
-**Tests added**: `test_polymorphic_array_len.odin` (uses `$N` value poly),
-`test_polymorphic_swap.odin` (two poly vars), `test_polymorphic_unused.odin`.
+**Tests**: No runtime tests (no codegen). Manual verification that
+`test_polymorphic_identity.odin` etc. don't produce semantic errors.
+All existing tests still pass.
 
-**Verification**: All Stage-3 tests still pass; new tests work; no
-regressions in the existing 156.
+### Stage 4: Codegen for specializations + UAF fix
+
+**Goal**: Drain `pending_specializations` in `ir_generate()` after each file's
+main top-level pass; each spec's specialization is processed via the standard
+top-level path. Fix pre-existing UAF bugs in `scope_lists.c` and scope-free
+ordering before this stage. Mnemonic name mangling for specialization symbols.
+
+**Files touched**:
+- `src/llvm_ir_generator.c` — `ir_gen_top_level_decl` early-return if
+  `sym->is_polymorphic`; `ir_generate()` drain + codegen pending specs
+- `src/polymorphism.c` — `poly_make_mangled_name` helper
+- `src/scope_lists.c` — fix `free(existing->name)` UAF
+- `src/scope.c` / `src/semantic_analyser.c` — fix scope-free ordering
+  (defer scope_free until after codegen, or use arena for symbol_t)
+
+**Tests added**: `test_polymorphic_identity.odin`, `test_polymorphic_double.odin`,
+`test_polymorphic_shorthand.odin`, `test_polymorphic_max.odin`,
+`test_polymorphic_unused.odin`.
+
+**Verification**: All tests pass. `test_polymorphic_identity.odin` calls
+`identity(42)` and expects 42 back.
 
 ### Stage 5: Specialization cache + dedup
 
@@ -579,8 +563,8 @@ instantiating, consult cache. On hit, return existing specialization.
 
 **Files touched**:
 - `src/polymorphism.c` — add `PolySpecializationCache`, modify
-  `poly_resolve_call` to look up the cache before invoking
-  `poly_instantiate`, and store the result in the cache after.
+  `poly_resolve_call` to look up the cache before invoking instantiation,
+  and store the result in the cache after.
 
 **Tests added**: `test_polymorphic_specialization_dedup.odin`.
 
@@ -592,12 +576,8 @@ instantiating, consult cache. On hit, return existing specialization.
 **Goal**: `sem_resolve_overload_bundle_call` integrates poly candidates.
 
 **Files touched**:
-- `src/polymorphism_shared.h` / `src/polymorphism_shared.c` — refactor
-  matching logic from `sem_resolve_overload_bundle_call`; expose
-  `poly_score_candidate`.
 - `src/sem_evaluate_expr.c` — in the per-candidate loop, add the
   "candidate is polymorphic → score + instantiate" branch.
-- `src/CMakeLists.txt` — add `polymorphism_shared.c`.
 
 **Tests added**: `test_polymorphic_overload_bundle.odin`.
 
@@ -607,31 +587,33 @@ instantiating, consult cache. On hit, return existing specialization.
 **Verification**: All tests pass; expected-to-fail test fails as expected.
 
 ### Stage 7 (deferred): `where` clauses, nested polymorphism,
-cross-package polymorphic procs, polymorphic structs.
+cross-package polymorphic procs, polymorphic structs, `$N` integer poly.
 
 Documented separately — these milestones will be built on top of the
 stable Stage 1–6 work.
 
 ## Estimated Scope
 
-- New code: ~1200–1500 lines
-- Existing-file changes: ~150 lines total across 6 files
+- New code: ~800–1000 lines (env-stack approach is smaller than clone)
+- Existing-file changes: ~150 lines total across 8 files
 - Tests: ~10+ new test files in stages 3–6
-- Estimated complexity: high but flattened by staging
+- Estimated complexity: medium-high but flattened by staging
 
 ## Risks / Open Concerns
 
-1. **AST deep-clone correctness** — must clone `list.children` arrays,
-   `metadata` (clone or recreate — don't share), reset
-   `resolved_type`/`resolved_symbol`, share `text`.
-2. **Recursion inside instantiated procs** — specialization's symbol must
-   be registered in parent scope *before* analyzing its body, mirroring
-   the non-poly recursion fix (see AGENTS.md).
-3. **Poly-proc called from inside another poly-proc** — deferred
-   (Stage 7). Initial tests avoid this pattern.
+1. **Env-stack correctness** — poly env must be active during the entire
+   procedure body analysis for all identifier lookups to resolve correctly.
+   The env is pushed before `sem_analyse_procedure_literal` and popped after.
+2. **Recursion inside instantiated procs** — specialization's symbol must be
+   registered in parent scope *before* analyzing its body, mirroring the
+   non-poly recursion fix.
+3. **Poly-proc called from inside another poly-proc** — deferred (Stage 7).
+   Initial tests avoid this pattern.
 4. **Forward declarations of poly procs** — deferred (Stage 7).
 5. **Cross-package polymorphic procs** — deferred (Stage 7).
 6. **Polymorphic return-type inference via `auto_cast` / untyped literals**
    — out of scope. Tests always bind `$T`/`$U` via a parameter.
-
-None of these are blockers for the staged implementation.
+7. **Bare `T` vs `$T` in return types** — the env-stack approach relies on
+   `sem_resolve_type_identifier` also checking the poly env. This means a
+   bare `T` in the return type resolves to the poly bound type when the
+   env is active. This is correct for the shorthand form `proc(x: $T) -> T`.

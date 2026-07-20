@@ -19,7 +19,7 @@ ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
     LLVMValueRef asm_val = LLVMGetInlineAsm(
         asm_ftype,
         "syscall", 7,
-        "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", 57,
+        "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", 54,
         true, false, LLVMInlineAsmDialectATT, false
     );
     LLVMValueRef syscall_no = LLVMConstInt(i64_type, 1, false); // SYS_write
@@ -204,7 +204,7 @@ ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
         LLVMValueRef asm_val = LLVMGetInlineAsm(
             asm_ftype,
             "syscall", 7,
-            "={rax},{rax},{rdi},~{rcx},~{r11}", 33,
+            "={rax},{rax},{rdi},~{rcx},~{r11}", 32,
             true, false, LLVMInlineAsmDialectATT, false
         );
         LLVMValueRef syscall_no = LLVMConstInt(i64_type, 60, false); // SYS_exit
@@ -252,7 +252,7 @@ ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
         LLVMValueRef asm_val_2 = LLVMGetInlineAsm(
             asm_ftype_2,
             "syscall", 7,
-            "={rax},{rax},{rdi},~{rcx},~{r11}", 33,
+            "={rax},{rax},{rdi},~{rcx},~{r11}", 32,
             true, false, LLVMInlineAsmDialectATT, false
         );
         syscall_no = LLVMConstInt(i64_type, 3, false); // SYS_close

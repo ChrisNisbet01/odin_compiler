@@ -1,6 +1,7 @@
 #include "sem_type_resolver.h"
 
 #include "ast_utils.h"
+#include "polymorphism.h"
 #include "scope.h"
 #include "symbols.h"
 #include "typed_value.h"
@@ -38,6 +39,7 @@ static TypeDescriptor const * sem_resolve_slice_type(SemContext * ctx, odin_gram
 static TypeDescriptor const * sem_resolve_soa_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_tuple_type(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_resolve_poly_ident_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_union_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_vector_type(SemContext * ctx, odin_grammar_node_t * node);
@@ -55,6 +57,7 @@ static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *
     [AST_NODE_MAYBE_TYPE] = sem_resolve_maybe_type,
     [AST_NODE_MULTI_POINTER_TYPE] = sem_resolve_multi_pointer_type,
     [AST_NODE_POINTER_TYPE] = sem_resolve_pointer_type,
+    [AST_NODE_POLY_IDENT] = sem_resolve_poly_ident_type,
     [AST_NODE_PROCEDURE_SIGNATURE] = sem_resolve_proc_sig_type,
     [AST_NODE_SLICE_TYPE] = sem_resolve_slice_type,
     [AST_NODE_SOA_TYPE] = sem_resolve_soa_type,
@@ -1367,11 +1370,39 @@ sem_resolve_vector_type(SemContext * ctx, odin_grammar_node_t * node)
 }
 
 static TypeDescriptor const *
+sem_resolve_poly_ident_type(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->text == NULL)
+        return NULL;
+    TypeDescriptor const * td = poly_env_lookup_type(ctx, node->text);
+    if (td)
+    {
+        node->resolved_type = (TypeDescriptor *)td;
+        return td;
+    }
+    return NULL;
+}
+
+static TypeDescriptor const *
 sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node)
 {
 
     if (node->text == NULL)
         return NULL;
+
+    // When a polymorphic instantiation is active, check the poly env stack
+    // first. Poly variable names like `T` appear as bare Identifier nodes
+    // in return types and body expressions.
+    if (ctx->poly_env_stack_depth > 0)
+    {
+        TypeDescriptor const * poly_type = poly_env_lookup_type(ctx, node->text);
+        if (poly_type)
+        {
+            node->resolved_type = (TypeDescriptor *)poly_type;
+            return poly_type;
+        }
+    }
+
     // Look up the identifier in the current scope to see if it's a type alias
     symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
     if (sym != NULL && sym->kind == SYMBOL_TYPE && sym->value.type_info != NULL)

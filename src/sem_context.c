@@ -101,6 +101,10 @@ sem_context_init(
     ctx->import_stack_count = 0;
     ctx->import_stack_capacity = 0;
     ctx->currently_instantiating = false;
+    ctx->poly_env_stack_depth = 0;
+    ctx->pending_specializations = NULL;
+    ctx->pending_spec_count = 0;
+    ctx->pending_spec_capacity = 0;
     register_builtin_context_types(type_registry);
 }
 
@@ -123,6 +127,10 @@ sem_context_destroy(SemContext * ctx)
     ctx->import_stack = NULL;
     ctx->import_stack_count = 0;
     ctx->import_stack_capacity = 0;
+    free(ctx->pending_specializations);
+    ctx->pending_specializations = NULL;
+    ctx->pending_spec_count = 0;
+    ctx->pending_spec_capacity = 0;
 }
 
 char *

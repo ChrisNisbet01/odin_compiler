@@ -11,6 +11,14 @@
 - **Net change**: ~659 lines moved (actual extraction), ~3493 removed from main file (the defer/statement/control-flow section).
 - **All 155 tests pass**.
 
+## Accomplishments (session 2026-07-21)
+
+### Fixed polymorphic call codegen — `op->resolved_symbol` dispatch priority
+- **Root cause**: `ir_gen_postfix_call` in `ir_gen_postfix.c:167-216` used `sym->value.type_info` (the **original** polymorphic type with 0 runtime params — `$T: typeid` and `x: T` both skipped during pass1). The `resolved_symbol` path at lines 197-216 was gated behind `(proc_type == NULL || proc_type->kind != TD_KIND_PROC)`, which was false because the original type IS `TD_KIND_PROC`. The specialization's concrete type was never consulted for call codegen.
+- **Fix**: Restructured the dispatch into 3 priorities: (1) `op->resolved_symbol` from semantic analyser (`poly_resolve_call`), (2) scope-based `sym` lookup, (3) `*cur_type` fallback. When the semantic analyser has resolved a polymorphic call to a concrete specialization, that specialization's type and LLVM function value are used directly.
+- **Also fixed UAF bugs**: Scope hash-key dangling (`scope_lists.c:74` used caller's transient pointer instead of `strdup`d copy) and immediate scope-free during codegen (`generator_pop_scope` defers `scope_free`; `generator_free_deferred_scopes` called in `main.c:598-600` after codegen).
+- **Result**: `test_polymorphic_basics.odin` (and its self-contained `/tmp/test_poly.odin` variant) compiles, links, and executes correctly. **All 158 tests pass**.
+
 ## Accomplishments (session 2026-07-18)
 
 ### Phase 3.4: Split `ir_gen_node` — 11 inline cases → named function calls

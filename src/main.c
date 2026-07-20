@@ -549,6 +549,8 @@ main(int argc, char * argv[])
         }
         ir_ctx->imports = sem_ctx.imports;
         ir_ctx->import_count = sem_ctx.import_count;
+        ir_ctx->pending_specializations = sem_ctx.pending_specializations;
+        ir_ctx->pending_spec_count = sem_ctx.pending_spec_count;
         ir_ctx->file_path = NULL;
 
         bool ir_ok = ir_generate(ir_ctx, ast_root);
@@ -592,6 +594,10 @@ main(int argc, char * argv[])
         }
 
         ir_gen_context_destroy(ir_ctx);
+
+        // Free scopes whose lifetimes were extended past semantic analysis
+        // so resolved_symbol pointers remain valid during codegen.
+        generator_free_deferred_scopes(gen_ctx);
     }
 
     if (sem_ok) exit_code = EXIT_SUCCESS;

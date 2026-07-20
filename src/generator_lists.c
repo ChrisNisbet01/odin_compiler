@@ -33,6 +33,10 @@ generator_context_create(
         return NULL;
     }
 
+    gc->deferred_scopes = NULL;
+    gc->deferred_count = 0;
+    gc->deferred_capacity = 0;
+
     return gc;
 }
 
@@ -45,8 +49,13 @@ generator_context_destroy(GeneratorContext * gc)
     {
         scope_free(gc->scopes[i]);
     }
+    for (int i = 0; i < gc->deferred_count; i++)
+    {
+        scope_free(gc->deferred_scopes[i]);
+    }
     scope_free(gc->global_scope);
     free(gc->scopes);
+    free(gc->deferred_scopes);
     free(gc);
 }
 
@@ -83,8 +92,25 @@ generator_pop_scope(GeneratorContext * gc)
 {
     if (gc == NULL || gc->count <= 0) return;
     gc->count--;
-    scope_free(gc->scopes[gc->count]);
+    scope_t * popped = gc->scopes[gc->count];
     gc->scopes[gc->count] = NULL;
+
+    // Defer freeing the scope — resolved_symbol pointers in AST nodes may
+    // still reference symbols inside it. They are freed after codegen
+    // completes via generator_free_deferred_scopes().
+    if (gc->deferred_count >= gc->deferred_capacity)
+    {
+        int new_cap = gc->deferred_capacity == 0 ? 64 : gc->deferred_capacity * 2;
+        scope_t ** tmp = realloc(gc->deferred_scopes, (size_t)new_cap * sizeof(scope_t *));
+        if (tmp == NULL)
+        {
+            scope_free(popped);
+            return;
+        }
+        gc->deferred_scopes = tmp;
+        gc->deferred_capacity = new_cap;
+    }
+    gc->deferred_scopes[gc->deferred_count++] = popped;
 }
 
 scope_t *
@@ -108,4 +134,18 @@ generator_find_symbol(GeneratorContext * gc, char const * name)
     scope_t * scope = generator_current_scope(gc);
     if (scope) return scope_find_symbol_entry(scope, name);
     return NULL;
+}
+
+void
+generator_free_deferred_scopes(GeneratorContext * gc)
+{
+    if (gc == NULL) return;
+    for (int i = 0; i < gc->deferred_count; i++)
+    {
+        scope_free(gc->deferred_scopes[i]);
+    }
+    free(gc->deferred_scopes);
+    gc->deferred_scopes = NULL;
+    gc->deferred_count = 0;
+    gc->deferred_capacity = 0;
 }

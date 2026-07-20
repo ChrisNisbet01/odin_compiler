@@ -33,3 +33,7 @@ ImportedPackage * find_imported_package_by_name(SemContext * ctx, char const * n
 
 // Walk a comma-chain Expression tree to collect individual argument nodes
 void sem_collect_comma_chain_args(odin_grammar_node_t * node, odin_grammar_node_t ** out_args, int max_args, int * out_count);
+
+// Polymorphic-procedure instantiation: re-analyses a procedure definition
+// with the poly env stack active (called from polymorphism.c).
+void sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char const * proc_name);
