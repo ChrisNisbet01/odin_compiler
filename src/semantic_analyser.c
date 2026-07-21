@@ -711,6 +711,27 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
         }
     }
 
+    // Register polymorphic integer slots ($N) as i64 constants in body scope
+    if (ctx->poly_env_stack_depth > 0)
+    {
+        PolyEnv * env = &ctx->poly_env_stack[ctx->poly_env_stack_depth - 1];
+        TypeDescriptor const * i64_type = type_descriptor_get_int64_type(ctx->type_registry);
+        for (int ei = 0; ei < env->count; ei++)
+        {
+            if (env->entries[ei].kind == POLY_SLOT_INT && env->entries[ei].name != NULL)
+            {
+                TypedValue tv = create_typed_value(NULL, i64_type, true);
+                scope_add_symbol(generator_current_scope(ctx->gen_ctx), env->entries[ei].name, tv);
+                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), env->entries[ei].name);
+                if (sym)
+                {
+                    sym->has_const_int_val = true;
+                    sym->const_int_val = env->entries[ei].bound_int_value;
+                }
+            }
+        }
+    }
+
     // Pre-register procedure name in body scope for recursion
     if (proc_name != NULL && node->resolved_type != NULL)
     {
@@ -1945,6 +1966,26 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         if (body)
         {
             sem_analyse_compound_statement(ctx, body, expected_return_type);
+        }
+        else
+        {
+            // For the `do`-form (for v in arr do stmt), find the body statement
+            // as the last non-range, non-identifier child.
+            odin_grammar_node_t * body_stmt = NULL;
+            for (size_t i = node->list.count; i > 0; i--)
+            {
+                odin_grammar_node_t * child = node->list.children[i - 1];
+                if (child == NULL)
+                    continue;
+                if (is_for_range && child->type == AST_NODE_IDENTIFIER)
+                    continue;
+                if (child->type == AST_NODE_COMPOUND_STATEMENT)
+                    continue;
+                body_stmt = child;
+                break;
+            }
+            if (body_stmt)
+                sem_pass2_node(ctx, body_stmt, expected_return_type);
         }
 
         generator_pop_scope(ctx->gen_ctx);

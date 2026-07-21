@@ -360,7 +360,7 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
     }
 
     // Phase 5: Coerce integer/float argument values to the declared
-    // parameter types.
+    // parameter types, and load aggregate values from alloca pointers.
     {
         int param_count = proc_type->proc_metadata.param_count;
         int context_offset = (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN) ? 1 : 0;
@@ -370,17 +370,29 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
 
         for (int pi = 0; pi < effective_param_count && pi + context_offset < arg_count; pi++)
         {
-            TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
-            if (param_type == NULL || param_type->kind != TD_KIND_BASIC || param_type->llvm_type == NULL)
-                continue;
-
             int arg_idx = pi + context_offset;
             LLVMValueRef arg_val = args[arg_idx];
             if (arg_val == NULL)
                 continue;
 
+            TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
+            if (param_type == NULL || param_type->llvm_type == NULL)
+                continue;
+
             LLVMTypeRef arg_llvm_type = LLVMTypeOf(arg_val);
             if (arg_llvm_type == param_type->llvm_type)
+                continue;
+
+            // Load aggregate values from alloca pointers when param expects value
+            if (LLVMGetTypeKind(arg_llvm_type) == LLVMPointerTypeKind
+                && (param_type->kind == TD_KIND_ARRAY || param_type->kind == TD_KIND_STRUCT))
+            {
+                args[arg_idx] = LLVMBuildLoad2(ctx->builder, param_type->llvm_type, arg_val, "arg.load");
+                continue;
+            }
+
+            // Integer/float coercion (basic types only)
+            if (param_type->kind != TD_KIND_BASIC)
                 continue;
 
             LLVMTypeKind arg_kind = LLVMGetTypeKind(arg_llvm_type);
@@ -1172,9 +1184,10 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return val;
 
     odin_grammar_node_t * pe_child = node->list.children[0];
-    TypeDescriptor const * cur_type = pe_child ? pe_child->resolved_type : NULL;
+    TypeDescriptor const * cur_type = NULL;
 
-    if (cur_type == NULL && pe_child != NULL)
+    // Prefer scope symbol type (correct for specialization-specific types over shared AST resolved_type)
+    if (pe_child != NULL)
     {
         odin_grammar_node_t * ident = expression_unwrap_to_identifier(pe_child);
         if (ident && ident->text)
@@ -1184,6 +1197,8 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                 cur_type = sym->value.type_info;
         }
     }
+    if (cur_type == NULL && pe_child != NULL)
+        cur_type = pe_child->resolved_type;
 
     for (size_t i = 0; i < postfix_ops->list.count; i++)
     {

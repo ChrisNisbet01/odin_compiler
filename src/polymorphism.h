@@ -74,6 +74,11 @@ typedef struct PolySpecialization
 {
     symbol_t * symbol;          // the specialization symbol (with concrete type_info)
     odin_grammar_node_t * origin_const_decl;  // the original poly ConstantDecl
+    TypeDescriptor const ** param_types;      // specialization-specific param types
+    int param_count;                          // number of param types stored
+    char const ** poly_int_names;             // strdup'd names of $N params
+    long long * poly_int_values;             // corresponding integer values
+    int poly_int_count;                      // number of poly int params
 } PolySpecialization;
 
 // --- Call resolution ---

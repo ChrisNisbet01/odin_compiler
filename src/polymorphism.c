@@ -193,6 +193,13 @@ poly_find_ident_in_subtree(odin_grammar_node_t * node)
 // Instead, the caller (sem_evaluate_expr.c) evaluates args BEFORE calling
 // poly_build_env_from_args, and passes the arg_list_node with resolved types.
 
+static void poly_unify_poly_idents_in_type(
+    SemContext * ctx,
+    odin_grammar_node_t * param_ast,
+    const TypeDescriptor * arg_td,
+    PolyEnv * env
+);
+
 bool
 poly_build_env_from_args(
     SemContext * ctx,
@@ -430,10 +437,115 @@ poly_build_env_from_args(
             }
         }
 
+        // Walk the param's type subtree for POLY_IDENT references (e.g., $N
+        // in array sizes like [$N]int). When found, bind from the corresponding
+        // position in the arg type descriptor.
+        // Skip the param name (first Identifier child) and find the type AST.
+        {
+            odin_grammar_node_t * param_type_ast = NULL;
+            int type_ident_count = 0;
+            for (size_t ci = 0; ci < param->list.count; ci++)
+            {
+                odin_grammar_node_t * child = param->list.children[ci];
+                if (child == NULL)
+                    continue;
+                if (child->type == AST_NODE_IDENTIFIER)
+                {
+                    type_ident_count++;
+                    if (type_ident_count <= 1)
+                        continue;
+                }
+                if (is_type_node(child) || child->type == AST_NODE_IDENTIFIER)
+                {
+                    param_type_ast = child;
+                    break;
+                }
+            }
+            if (param_type_ast && param_idx < arg_count && arg_types[param_idx])
+            {
+                // Recursively walk the type AST to find POLY_IDENT nodes
+                // that need binding from the concrete arg type.
+                poly_unify_poly_idents_in_type(ctx, param_type_ast,
+                    arg_types[param_idx], out_env);
+            }
+        }
+
         param_idx++;
     }
 
     return out_env->count > 0;
+}
+
+// Recursively walk a parameter's type AST, matching structure against a
+// concrete arg type descriptor. When an AST_NODE_POLY_IDENT is found (e.g.,
+// $N in [$N]int), bind it from the corresponding field of the arg type.
+static void
+poly_unify_poly_idents_in_type(
+    SemContext * ctx,
+    odin_grammar_node_t * param_ast,
+    TypeDescriptor const * arg_td,
+    PolyEnv * env
+)
+{
+    if (param_ast == NULL || arg_td == NULL)
+        return;
+
+    if (param_ast->type == AST_NODE_ARRAY_TYPE && arg_td->kind == TD_KIND_ARRAY)
+    {
+        // Walk children: find POLY_IDENT (array size) and recurse into
+        // element type.
+        for (size_t i = 0; i < param_ast->list.count; i++)
+        {
+            odin_grammar_node_t * child = param_ast->list.children[i];
+            if (child == NULL)
+                continue;
+
+            if (child->type == AST_NODE_POLY_IDENT)
+            {
+                // $N in array size position — bind from arg's array count
+                char const * name = child->text;
+                if (name == NULL)
+                    continue;
+                if (name[0] == '$')
+                    name++;
+
+                bool already = false;
+                for (int ei = 0; ei < env->count; ei++)
+                {
+                    if (strcmp(env->entries[ei].name, name) == 0)
+                    {
+                        already = true;
+                        // Fill in a placeholder if this is an int slot with value 0
+                        if (env->entries[ei].kind == POLY_SLOT_INT
+                            && env->entries[ei].bound_int_value == 0
+                            && arg_td->as.array.count > 0)
+                        {
+                            env->entries[ei].bound_int_value =
+                                (long long)arg_td->as.array.count;
+                        }
+                        break;
+                    }
+                }
+                if (!already && env->count < MAX_POLY_ENV_ENTRIES)
+                {
+                    env->entries[env->count].name = strdup(name);
+                    env->entries[env->count].kind = POLY_SLOT_INT;
+                    env->entries[env->count].bound_int_value =
+                        (long long)arg_td->as.array.count;
+                    env->count++;
+                }
+            }
+            else if (is_type_node(child) || child->type == AST_NODE_IDENTIFIER)
+            {
+                // Recurse into element type (matches the structure of the
+                // concrete arg's element type)
+                poly_unify_poly_idents_in_type(
+                    ctx, child, arg_td->element_type, env);
+            }
+        }
+    }
+    // Other composite types (slice, dynamic_array, etc.) could be extended
+    // here in the future to handle $N in their size/length fields.
 }
 
 // =========================================================================
@@ -599,7 +711,22 @@ poly_resolve_call(
     // Run sem_analyse_procedure_literal on the original proc definition
     sem_analyse_procedure_literal(ctx, proc_def, mangled_name);
 
-    // Pop env
+    // Extract poly int values from the env BEFORE poly_env_pop frees the entry names.
+    // We need to own copies of the names because poly_env_pop frees them.
+    int env_int_count = 0;
+    char * env_int_names[MAX_POLY_ENV_ENTRIES];
+    long long env_int_values[MAX_POLY_ENV_ENTRIES];
+    for (int ei = 0; ei < env.count; ei++)
+    {
+        if (env.entries[ei].kind == POLY_SLOT_INT && env.entries[ei].name != NULL)
+        {
+            env_int_names[env_int_count] = strdup(env.entries[ei].name);
+            env_int_values[env_int_count] = env.entries[ei].bound_int_value;
+            env_int_count++;
+        }
+    }
+
+    // Pop env (frees the strdup'd entry names in the pushed copy)
     ctx->currently_instantiating = false;
     poly_env_pop(ctx);
 
@@ -635,6 +762,28 @@ poly_resolve_call(
     {
         spec->symbol = spec_sym;
         spec->origin_const_decl = const_decl;
+
+        // Save polymorphic integer contract params ($N) from the pre-pop snapshot
+        spec->poly_int_count = env_int_count;
+        if (env_int_count > 0)
+        {
+            spec->poly_int_names = malloc((size_t)env_int_count * sizeof(char *));
+            spec->poly_int_values = malloc((size_t)env_int_count * sizeof(long long));
+            for (int ei = 0; ei < env_int_count; ei++)
+            {
+                spec->poly_int_names[ei] = env_int_names[ei]; // take ownership
+                spec->poly_int_values[ei] = env_int_values[ei];
+            }
+        }
+
+        // Save specialization-specific param types from the concrete proc type
+        if (concrete_proc_type->kind == TD_KIND_PROC)
+        {
+            spec->param_count = concrete_proc_type->proc_metadata.param_count;
+            spec->param_types = malloc((size_t)spec->param_count * sizeof(TypeDescriptor const *));
+            for (int pi = 0; pi < spec->param_count; pi++)
+                spec->param_types[pi] = concrete_proc_type->proc_metadata.params[pi];
+        }
 
         // Enqueue for codegen
         if (ctx->pending_spec_count >= ctx->pending_spec_capacity)

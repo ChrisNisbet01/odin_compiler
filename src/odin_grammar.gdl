@@ -469,7 +469,7 @@ ArgumentList = Expression? @AST_ACTION_ARGUMENT_LIST;
 
 // --- Statements ---
 
-CompoundStatement = LBrace Statement* RBrace @AST_ACTION_COMPOUND_STATEMENT;
+CompoundStatement = LBrace (Semicolon? Statement)* Semicolon? RBrace @AST_ACTION_COMPOUND_STATEMENT;
 
 DeferStatement = KwDefer Statement @AST_ACTION_DEFER_STATEMENT;
 
@@ -489,11 +489,11 @@ ForStatement = KwFor
                ((ForInitStmt Semicolon Expression? Semicolon Expression?)
                | ForRangeClause
                | Expression?)
-               CompoundStatement
+               (CompoundStatement | (KwDo Statement))
                @AST_ACTION_FOR_STATEMENT;
 
-SwitchCaseClause = KwCase Expression (Comma Expression)* Colon Statement* @AST_ACTION_SWITCH_CASE;
-SwitchDefaultClause = KwCase Colon Statement* @AST_ACTION_SWITCH_DEFAULT;
+SwitchCaseClause = KwCase Expression (Comma Expression)* Colon (Semicolon? Statement)* Semicolon? @AST_ACTION_SWITCH_CASE;
+SwitchDefaultClause = KwCase Colon (Semicolon? Statement)* Semicolon? @AST_ACTION_SWITCH_DEFAULT;
 SwitchBody = LBrace (SwitchCaseClause | SwitchDefaultClause)* RBrace;
 SwitchStatement = KwSwitch Directive? Expression? SwitchBody @AST_ACTION_SWITCH_STATEMENT;
 

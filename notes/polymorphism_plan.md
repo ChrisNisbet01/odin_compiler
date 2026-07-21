@@ -634,7 +634,7 @@ verifies all three return correct values.
 
 **Verification**: 159/159 tests pass.
 
-### 🔲 Stage 6: Polymorphic procs in overload bundles
+### ✅ Stage 6: Polymorphic procs in overload bundles — DONE
 
 **Goal**: `sem_resolve_overload_bundle_call` integrates poly candidates.
 
@@ -647,13 +647,76 @@ verifies all three return correct values.
 **Negative test added**:
 `tests/expected_to_fail/test_polymorphic_type_mismatch.odin`.
 
+**Bugs fixed during this stage**:
+1. `sem_resolve_poly_ident_type` — stripped `$` prefix before `poly_env_lookup_type`
+   (env stores `"T"` but raw text was `"$T"`).
+2. `poly_build_env_from_args` — `x: $T` was treated as a type-param declaration
+   (skipping `param_idx` and binding); fixed by distinguishing poly ident in name
+   position vs. type position.
+3. `ir_gen_register_params` — `AST_NODE_POLY_IDENT` not recognized as a type node
+   (same bug as `semantic_analyser.c:678`, which was fixed in an earlier session).
+
 **Verification**: All tests pass; expected-to-fail test fails as expected.
 
-### 🔲 Stage 7 (deferred): `where` clauses, nested polymorphism,
-cross-package polymorphic procs, polymorphic structs, `$N` integer poly.
+### ✅ Stage 7: `$N` integer polymorphic parameters — DONE
+
+**Goal**: Support `[$N]int` array sizes in polymorphic proc signatures, where
+`$N` is bound from the integer argument at the call site. For example:
+`sum_array :: proc($N: int, arr: [$N]int) -> int`.
+
+**Implementation** (`src/polymorphism.c`, `src/llvm_ir_generator.c`, etc.):
+- `poly_build_env_from_args`: `$N: int` parameters create `POLY_SLOT_INT` entries
+  that map the poly ident name to the argument's integer value.
+- `poly_unify_poly_idents_in_type`: walks type AST nodes for `POLY_IDENT` in
+  array-size position and creates `POLY_SLOT_INT` entries.
+- `poly_env_push` / `poly_env_pop`: env stack for int values (in addition to types).
+- `poly_env_lookup_int`: retrieves bound int value by name.
+- `ir_gen_pending_specialization`: registers `$N` constants in the specialization
+  scope as `has_const_int_val` entries before body codegen.
+
+**Bugs fixed during this stage**:
+1. **`poly_env_pop` use-after-free**: `poly_env_push` does a shallow struct copy;
+   the pushed copy and local `env` share the same `strdup`'d `name` pointers.
+   After `poly_env_pop` frees those pointers, reading them via the local `env`
+   yields stale data. **Fix**: extract poly int values from the local `env`
+   **before** `poly_env_pop` is called, using a local snapshot array.
+   Saves them into `PolySpecialization.poly_int_names` / `poly_int_values` /
+   `poly_int_count`.
+2. **Stale AST `resolved_symbol`**: `ir_gen_postfix_expression` used
+   `pe_child->resolved_type` which could be stale from a previous instantiation
+   (same AST shared across all specializations). **Fix**: scope-symbol type is
+   now preferred over `pe_child->resolved_type`.
+3. **Aggregate-by-value arg loading**: In `ir_gen_postfix_call` Phase 5, when
+   the argument is a pointer (from alloca for composite types) but the param
+   expects an array or struct by value, a `LLVMBuildLoad2` is emitted to pass
+   the value.
+
+**Files touched**:
+- `src/polymorphism.h` — `PolySpecialization.poly_int_names`, `poly_int_values`,
+  `poly_int_count` fields.
+- `src/polymorphism.c` — poly int snapshot before `poly_env_pop`;
+  `poly_unify_poly_idents_in_type` creates `POLY_SLOT_INT` entries.
+- `src/llvm_ir_generator.c` — `ir_gen_pending_specialization` registers $N
+  constants; `ir_gen_identifier` checks `has_const_int_val`.
+- `src/ir_gen_postfix.c` — prefers scope-symbol type; loads aggregate values
+  from pointers.
+- `src/ir_gen_statement.c` — small fix for compound statement handling.
+- `src/odin_grammar.gdl` — `$N: int` parameter grammar.
+- `src/sem_type_resolver.c` — poly ident resolution for array sizes.
+- `src/semantic_analyser.c` — handle `$N` poly idents in parameter registration.
+- `src/polymorphism.c` — poly int env entries in `poly_build_env_from_args` and
+  `poly_unify_poly_idents_in_type`.
+
+**Tests added**: `test_polymorphic_array_size.odin` — calls `sum_array(5, a)`
+where `a: [5]int`, verifies the result `15`.
+
+**Verification**: All 161 tests pass. Intermediate debugging stubs
+(`test_poly_array*.odin`, `test_poly_dollar_test.odin`) deleted.
+
+### 🔲 Stage 8: Remaining deferred features
 
 Documented separately — these milestones will be built on top of the
-stable Stage 1–6 work.
+stable Stage 1–7 work.
 
 ## Estimated Scope
 
@@ -661,8 +724,9 @@ stable Stage 1–6 work.
 - Existing-file changes: ~150 lines total across 8 files
 - Tests: ~10+ new test files in stages 3–6
 - Estimated complexity: medium-high but flattened by staging
-- **Current progress**: Stages 1–5 complete (including UAF bug fixes,
-  postfix call dispatch fix, and specialization cache). **159/159 tests passing**.
+- **Current progress**: Stages 1–7 complete (including UAF bug fixes,
+  postfix call dispatch fix, specialization cache, overload bundle poly
+  support, and `$N` integer polymorphic parameters). **161/161 tests passing**.
 
 ## Risks / Open Concerns
 

@@ -295,7 +295,7 @@ static TypeDescriptor const *
 sem_resolve_array_type(SemContext * ctx, odin_grammar_node_t * node)
 {
 
-    // ArrayType = LBracket (IntegerLiteral)? RBracket TypePrefix
+    // ArrayType = LBracket (IntegerLiteral | PolyIdent | Identifier)? RBracket TypePrefix
     odin_grammar_node_t * size_node = node_find_child(node, AST_NODE_INTEGER_VALUE);
     odin_grammar_node_t * elem_type_node = NULL;
     for (size_t i = 0; i < node->list.count; i++)
@@ -318,6 +318,31 @@ sem_resolve_array_type(SemContext * ctx, odin_grammar_node_t * node)
     if (size_node && size_node->text)
     {
         count = (size_t)parse_odin_unsigned(size_node->text, NULL, 0);
+    }
+    else
+    {
+        // Try PolyIdent for $N during poly instantiation
+        size_node = node_find_child(node, AST_NODE_POLY_IDENT);
+        if (size_node && size_node->text)
+        {
+            char const * poly_name = size_node->text;
+            if (poly_name[0] == '$')
+                poly_name++;
+            long long val = 0;
+            if (poly_env_lookup_int(ctx, poly_name, &val))
+                count = (size_t)val;
+        }
+        else
+        {
+            // Try Identifier for bare T (declared by preceding $T: typeid param)
+            size_node = node_find_child(node, AST_NODE_IDENTIFIER);
+            if (size_node && size_node->text)
+            {
+                long long val = 0;
+                if (poly_env_lookup_int(ctx, size_node->text, &val))
+                    count = (size_t)val;
+            }
+        }
     }
 
     TypeDescriptor const * arr_type = get_or_create_array_type(ctx->type_registry, elem_type, count);

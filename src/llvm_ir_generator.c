@@ -278,6 +278,13 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
     if (sym == NULL)
         return NULL;
 
+    // Handle compile-time integer constants (e.g., poly $N in body scope)
+    if (sym->has_const_int_val)
+    {
+        LLVMTypeRef elem_type = sym->value.type_info ? sym->value.type_info->llvm_type : LLVMInt64TypeInContext(ctx->context);
+        return LLVMConstInt(elem_type, (unsigned long long)sym->const_int_val, true);
+    }
+
     // Forward-declare procedures that haven't been code-generated yet
     if (sym->value.value == NULL && sym->value.type_info
         && sym->value.type_info->kind == TD_KIND_PROC)
@@ -632,7 +639,8 @@ ir_gen_register_enum_enumerators(IrGenContext * ctx, odin_grammar_node_t * enum_
 // --- Procedure parameter registration ---
 
 static void
-ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, LLVMValueRef func)
+ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, LLVMValueRef func,
+                       TypeDescriptor const * spec_proc_type)
 {
     odin_grammar_node_t * sig_node = node_find_child(proc_literal, AST_NODE_PROCEDURE_SIGNATURE);
     if (sig_node == NULL)
@@ -702,7 +710,22 @@ ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, L
         if (param_ident->type == AST_NODE_POLY_IDENT)
             continue;
 
-        TypeDescriptor const * param_type = param_type_node->resolved_type;
+        // Use specialization-specific param type when available (prevents
+        // AST corruption from shared proc_def across multiple instantiations).
+        // spec_proc_type->proc_metadata.params excludes the context pointer,
+        // so subtract 1 from param_index for ODIN convention.
+        TypeDescriptor const * param_type = NULL;
+        if (spec_proc_type && spec_proc_type->kind == TD_KIND_PROC)
+        {
+            int spec_idx = (int)param_index;
+            if (proc_literal->resolved_type && proc_literal->resolved_type->kind == TD_KIND_PROC
+                && proc_literal->resolved_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
+                spec_idx--;
+            if (spec_idx >= 0 && spec_idx < spec_proc_type->proc_metadata.param_count)
+                param_type = spec_proc_type->proc_metadata.params[spec_idx];
+        }
+        if (param_type == NULL)
+            param_type = param_type_node->resolved_type;
         if (param_type == NULL)
             continue;
 
@@ -1062,7 +1085,7 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             func_push(ctx, func, proc_type->proc_metadata.return_type);
 
             generator_push_scope(ctx->gen_ctx);
-            ir_gen_register_params(ctx, value_node, func);
+            ir_gen_register_params(ctx, value_node, func, NULL);
 
             // Inject implicit context parameter for ODIN calling convention
             if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
@@ -1257,7 +1280,7 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     func_push(ctx, func, proc_type->proc_metadata.return_type);
 
     generator_push_scope(ctx->gen_ctx);
-    ir_gen_register_params(ctx, value_node, func);
+    ir_gen_register_params(ctx, value_node, func, NULL);
 
     // Inject implicit context parameter for ODIN calling convention
     if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
@@ -2895,7 +2918,29 @@ ir_gen_pending_specialization(IrGenContext * ctx, PolySpecialization * spec)
 
     func_push(ctx, func, proc_type->proc_metadata.return_type);
     generator_push_scope(ctx->gen_ctx);
-    ir_gen_register_params(ctx, proc_def, func);
+
+    // Register polymorphic integer constants ($N) in the specialization's scope
+    if (spec->poly_int_count > 0)
+    {
+        TypeDescriptor const * i64_type = type_descriptor_get_int64_type(ctx->type_registry);
+        if (i64_type)
+        {
+            for (int pi = 0; pi < spec->poly_int_count; pi++)
+            {
+                TypedValue tv = create_typed_value(NULL, i64_type, true);
+                generator_add_symbol(ctx->gen_ctx, spec->poly_int_names[pi], tv);
+                symbol_t * nsym = scope_find_symbol_entry(
+                    generator_current_scope(ctx->gen_ctx), spec->poly_int_names[pi]);
+                if (nsym)
+                {
+                    nsym->has_const_int_val = true;
+                    nsym->const_int_val = spec->poly_int_values[pi];
+                }
+            }
+        }
+    }
+
+    ir_gen_register_params(ctx, proc_def, func, proc_type);
 
     // Inject implicit context parameter for ODIN calling convention
     if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)

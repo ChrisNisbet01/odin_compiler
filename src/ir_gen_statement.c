@@ -265,7 +265,9 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
             {
                 is_for_range = true;
                 range_expr_node = child;
+                continue;
             }
+            // Non-identifier, non-range child — this is the do-form body
             break;
         }
     }
@@ -300,14 +302,21 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
             = LLVMBuildInBoundsGEP2(ctx->builder, range_struct, range_alloca, high_gep_i, 2, "for.range.high.gep");
         LLVMValueRef high_val = LLVMBuildLoad2(ctx->builder, i64, high_gep, "for.high");
 
-        // 3. Find body node
+        // 3. Find body node (CompoundStatement or do-form statement)
         for (size_t i = 0; i < node->list.count; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
-            if (child && child->type == AST_NODE_COMPOUND_STATEMENT)
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_COMPOUND_STATEMENT)
             {
                 body_node = child;
                 break;
+            }
+            // For do-form: body is the last child that is not an identifier, range, or compound
+            if (child->type != AST_NODE_IDENTIFIER && !(child->resolved_type && child->resolved_type->kind == TD_KIND_RANGE))
+            {
+                body_node = child;
             }
         }
 
