@@ -101,7 +101,9 @@ sem_context_init(
     ctx->import_stack_count = 0;
     ctx->import_stack_capacity = 0;
     ctx->currently_instantiating = false;
+    ctx->poly_env_stack = NULL;
     ctx->poly_env_stack_depth = 0;
+    ctx->poly_env_stack_capacity = 0;
     ctx->pending_specializations = NULL;
     ctx->pending_spec_count = 0;
     ctx->pending_spec_capacity = 0;
@@ -127,6 +129,17 @@ sem_context_destroy(SemContext * ctx)
     ctx->import_stack = NULL;
     ctx->import_stack_count = 0;
     ctx->import_stack_capacity = 0;
+    // Free poly env stack (free entry names in each remaining env)
+    for (int i = 0; i < ctx->poly_env_stack_depth; i++)
+    {
+        for (int j = 0; j < ctx->poly_env_stack[i].count; j++)
+            free((void *)ctx->poly_env_stack[i].entries[j].name);
+    }
+    free(ctx->poly_env_stack);
+    ctx->poly_env_stack = NULL;
+    ctx->poly_env_stack_depth = 0;
+    ctx->poly_env_stack_capacity = 0;
+
     free(ctx->pending_specializations);
     ctx->pending_specializations = NULL;
     ctx->pending_spec_count = 0;

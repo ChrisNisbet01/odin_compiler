@@ -47,9 +47,10 @@ typedef struct SemContext
     bool currently_instantiating;
 
     // Poly env stack (env-stack approach — no AST clone).
-    // Each entry is a PolyEnv with type/int bindings for poly vars.
-    PolyEnv poly_env_stack[MAX_POLY_STACK_DEPTH];
+    // Dynamic array: each entry is a PolyEnv with type/int bindings for poly vars.
+    PolyEnv * poly_env_stack;
     int poly_env_stack_depth;
+    int poly_env_stack_capacity;
 
     // Pending specializations generated during semantic pass.
     // Codegen drains these after the main top-level pass.

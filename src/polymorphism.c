@@ -99,7 +99,14 @@ poly_get_origin(symbol_t * sym)
 void
 poly_env_push(SemContext * ctx, PolyEnv * env)
 {
-    assert(ctx->poly_env_stack_depth < MAX_POLY_STACK_DEPTH);
+    if (ctx->poly_env_stack_depth >= ctx->poly_env_stack_capacity)
+    {
+        int new_cap = ctx->poly_env_stack_capacity == 0 ? 4 : ctx->poly_env_stack_capacity * 2;
+        PolyEnv * tmp = realloc(ctx->poly_env_stack, (size_t)new_cap * sizeof(PolyEnv));
+        assert(tmp != NULL);
+        ctx->poly_env_stack = tmp;
+        ctx->poly_env_stack_capacity = new_cap;
+    }
     ctx->poly_env_stack[ctx->poly_env_stack_depth] = *env;
     ctx->poly_env_stack_depth++;
 }
@@ -704,6 +711,10 @@ poly_resolve_call(
         return cached;
     }
 
+    // Save previous instantiating flag (supports nested polymorphism: an inner
+    // poly_resolve_call must restore the outer flag rather than blindly clearing it).
+    bool prev_instantiating = ctx->currently_instantiating;
+
     // Push env onto stack
     poly_env_push(ctx, &env);
     ctx->currently_instantiating = true;
@@ -726,8 +737,8 @@ poly_resolve_call(
         }
     }
 
-    // Pop env (frees the strdup'd entry names in the pushed copy)
-    ctx->currently_instantiating = false;
+    // Pop env (frees the strdup'd entry names in the pushed copy) and restore flag
+    ctx->currently_instantiating = prev_instantiating;
     poly_env_pop(ctx);
 
     // Get the concrete proc type from the resolved procedure definition

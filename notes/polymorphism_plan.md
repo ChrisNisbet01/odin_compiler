@@ -60,12 +60,10 @@ skipped in the test list.
    **Plan**: Replace the "ignore" stub with a constraint-evaluator in a
    follow-up commit.
 
-2. **Nested polymorphism** — a polymorphic proc calling another polymorphic
-   proc that hasn't yet been instantiated for the outer env. Tests must avoid
-   this pattern; e.g. a polymorphic `sort` calling a polymorphic `swap` where
-   the latter is a free top-level symbol. **Plan**: Pass the outer env down
-   into the inner instantiation when `poly_instantiate` is called during the
-   outer body's analysis.
+2. **Nested polymorphism** — ✅ DONE (Stage 8). A polymorphic proc can now call
+   another polymorphic proc from its body. The poly env stack is searched top-down,
+   so inner bindings are found first. The `currently_instantiating` flag is saved/
+   restored across nested `poly_resolve_call` invocations.
 
 3. **Forward declarations of polymorphic procs** — `---` bodyless syntax for
    poly procs (declaration + later definition). Tests avoid this; both the
@@ -713,7 +711,54 @@ where `a: [5]int`, verifies the result `15`.
 **Verification**: All 161 tests pass. Intermediate debugging stubs
 (`test_poly_array*.odin`, `test_poly_dollar_test.odin`) deleted.
 
-### 🔲 Stage 8: Remaining deferred features
+### ✅ Stage 8: Nested polymorphism + dynamic env stack — DONE
+
+**Goal**: Support poly procs calling other poly procs (nested polymorphism).
+Convert the poly env stack from fixed-size to a dynamic array.
+
+**Implementation** (`src/polymorphism.c`, `src/polymorphism.h`, `src/semantic_analyser.h`,
+`src/sem_context.c`):
+
+1. **Dynamic poly env stack**:
+   - `SemContext.poly_env_stack` changed from `PolyEnv[MAX_POLY_STACK_DEPTH]`
+     to `PolyEnv *` with `poly_env_stack_capacity`.
+   - `poly_env_push` uses `realloc` to grow the stack when full (starts at 4,
+     doubles on each growth).
+   - `poly_env_pop` and all lookup functions (`poly_env_lookup_type`,
+     `poly_env_lookup_int`) work unchanged with pointer arithmetic.
+   - `sem_context_destroy` frees remaining env entry names and the array.
+   - Removed `#define MAX_POLY_STACK_DEPTH` from `polymorphism.h`.
+
+2. **`currently_instantiating` flag save/restore**:
+   - `poly_resolve_call` now saves `ctx->currently_instantiating` before setting
+     it to `true`, and restores the previous value after `poly_env_pop`. This
+     prevents an inner `poly_resolve_call` from clearing the outer
+     instantiation flag.
+
+**Bugs fixed during this stage**:
+- **`currently_instantiating` flag clobber**: When `poly_resolve_call` was called
+  from within an already-active instantiation (nested poly call), it unconditonally
+  set `ctx->currently_instantiating = false` after returning. This caused
+  `sem_analyse_procedure_literal` for the outer proc to early-return, skipping
+  body analysis of the outer specialization.
+
+**Files touched**:
+- `src/polymorphism.h` — removed `MAX_POLY_STACK_DEPTH`; updated comment.
+- `src/polymorphism.c` — `poly_env_push` uses realloc; `poly_resolve_call`
+  saves/restores `currently_instantiating`.
+- `src/semantic_analyser.h` — `poly_env_stack` changed to `PolyEnv *`; added
+  `poly_env_stack_capacity`.
+- `src/sem_context.c` — init/destroy dynamic array.
+
+**Tests added**:
+- `test_polymorphic_nested.odin` — `double` calls `identity` (both poly, same `$T`).
+- `test_polymorphic_nested_deep.odin` — `triple` → `double` → `identity` (3 levels).
+- `test_polymorphic_nested_diff_params.odin` — different `$T`/`$U` param names.
+- `test_polymorphic_nested_array.odin` — `wrap_sum` calls `sum_array` (both with `$N`).
+
+**Verification**: All 165 tests pass (161 previous + 4 new).
+
+### 🔲 Stage 9: Remaining deferred features
 
 Documented separately — these milestones will be built on top of the
 stable Stage 1–7 work.
@@ -724,9 +769,10 @@ stable Stage 1–7 work.
 - Existing-file changes: ~150 lines total across 8 files
 - Tests: ~10+ new test files in stages 3–6
 - Estimated complexity: medium-high but flattened by staging
-- **Current progress**: Stages 1–7 complete (including UAF bug fixes,
+- **Current progress**: Stages 1–8 complete (including UAF bug fixes,
   postfix call dispatch fix, specialization cache, overload bundle poly
-  support, and `$N` integer polymorphic parameters). **161/161 tests passing**.
+  support, `$N` integer polymorphic parameters, nested polymorphism,
+  and dynamic poly env stack). **165/165 tests passing**.
 
 ## Risks / Open Concerns
 
@@ -736,7 +782,7 @@ stable Stage 1–7 work.
 2. **Recursion inside instantiated procs** — specialization's symbol must be
    registered in parent scope *before* analyzing its body, mirroring the
    non-poly recursion fix.
-3. **Poly-proc called from inside another poly-proc** — deferred (Stage 7).
+3. **Poly-proc called from inside another poly-proc** — ✅ DONE (Stage 8).
    Initial tests avoid this pattern.
 4. **Forward declarations of poly procs** — deferred (Stage 7).
 5. **Cross-package polymorphic procs** — deferred (Stage 7).

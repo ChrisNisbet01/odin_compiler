@@ -34,7 +34,6 @@ typedef enum
 } PolySlotKind;
 
 #define MAX_POLY_ENV_ENTRIES 16
-#define MAX_POLY_STACK_DEPTH 8
 
 typedef struct
 {
@@ -51,7 +50,7 @@ typedef struct
 } PolyEnv;
 
 // --- Env stack management ---
-// SemContext owns the stack array (poly_env_stack[], poly_env_stack_depth).
+// SemContext owns the stack as a dynamic array (poly_env_stack, poly_env_stack_depth).
 
 void poly_env_push(struct SemContext * ctx, PolyEnv * env);
 void poly_env_pop(struct SemContext * ctx);
