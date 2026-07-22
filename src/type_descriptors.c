@@ -649,7 +649,17 @@ type_descriptors_destroy_registry(TypeDescriptors * registry)
         }
         free(registry->types[i]);
     }
+    if (registry->data_layout)
+        LLVMDisposeTargetData(registry->data_layout);
     free(registry);
+}
+
+LLVMTargetDataRef
+type_descriptors_get_data_layout(TypeDescriptors * registry)
+{
+    if (registry == NULL)
+        return NULL;
+    return registry->data_layout;
 }
 
 void

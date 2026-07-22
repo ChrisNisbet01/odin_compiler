@@ -61,31 +61,14 @@ ir_gen_context_create(char const * module_name, TypeDescriptors * type_registry,
         return NULL;
     }
 
-    // Set a default data layout on the module
+    // Set data layout on the module from the type registry's pre-computed layout
+    ctx->data_layout = type_descriptors_get_data_layout(type_registry);
+    if (ctx->data_layout != NULL)
     {
-        LLVMInitializeNativeTarget();
-        LLVMInitializeNativeAsmPrinter();
-        char const * triple = LLVMGetDefaultTargetTriple();
-        LLVMTargetRef target = NULL;
-        char * error = NULL;
-        if (LLVMGetTargetFromTriple(triple, &target, &error) == 0)
-        {
-            LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
-                target, triple, "generic", "", LLVMCodeGenLevelDefault, LLVMRelocDefault, LLVMCodeModelDefault
-            );
-            LLVMTargetDataRef target_dl = LLVMCreateTargetDataLayout(tm);
-            char * dl_str = LLVMCopyStringRepOfTargetData(target_dl);
-            LLVMSetDataLayout(ctx->module, dl_str);
-            LLVMDisposeMessage(dl_str);
-            LLVMDisposeTargetData(target_dl);
-            LLVMDisposeTargetMachine(tm);
-        }
-        else
-        {
-            LLVMDisposeMessage(error);
-        }
+        char * dl_str = LLVMCopyStringRepOfTargetData(ctx->data_layout);
+        LLVMSetDataLayout(ctx->module, dl_str);
+        LLVMDisposeMessage(dl_str);
     }
-    ctx->data_layout = LLVMGetModuleDataLayout(ctx->module);
     ctx->type_registry = type_registry;
     ctx->gen_ctx = gen_ctx;
     ctx->anon_counter = 0;

@@ -758,10 +758,58 @@ Convert the poly env stack from fixed-size to a dynamic array.
 
 **Verification**: All 165 tests pass (161 previous + 4 new).
 
-### 🔲 Stage 9: Remaining deferred features
+### ✅ Stage 9: Where-clause evaluation — DONE
+
+**Goal**: Evaluate `where` clause expressions on polymorphic procedure
+signatures, enabling compile-time type constraints.
+
+**Implementation** (`src/polymorphism.c`):
+- `poly_resolve_type_for_where`: resolves type nodes via poly env stack or
+  type registry (unwraps `AST_NODE_TYPE_NAME`).
+- `poly_eval_typeid_of`: evaluates `typeid_of(T)` by resolving T via poly env.
+- `poly_eval_size_of`: evaluates `size_of(T)` via poly env + LLVM type size.
+- `poly_eval_where_expr`: recursive evaluator for `==`, `!=`, `&&`, `||`, `!`,
+  arithmetic, `typeid_of`, `size_of`.
+- `poly_find_where_clause` / `poly_evaluate_where_clause`: find and evaluate
+  the where clause on a ProcedureDefinition's signature.
+- Where clause evaluated in `poly_resolve_call` AFTER env push so poly idents
+  are bound. Returns NULL on constraint violation (caller decides error vs skip).
+
+**Bugs fixed**:
+1. Implicit function declaration in `polymorphism.c` — `sem_resolve_type_expr()`
+   called without including `sem_type_resolver.h`, causing pointer truncation.
+2. ARGUMENT_LIST comma-chain — `poly_build_env_from_args` and arg evaluation
+   loop in `sem_evaluate_expr.c` decomposed via `sem_collect_comma_chain_args()`.
+
+**Tests**:
+- `test_where_clause.odin` — typeid_of int/f64, size_of matching.
+- `expected_to_fail/test_where_clause_fail.odin` — size_of mismatch.
+
+**Verification**: All 167 tests pass.
+
+### ✅ Stage 10: Where-clause overload filtering — DONE
+
+**Goal**: Use where clauses to filter overload bundle candidates. Poly-only
+overload bundles with complementary where clauses correctly dispatch to the
+matching candidate.
+
+**Implementation**: Already handled by existing infrastructure — `poly_resolve_call`
+evaluates where clauses, and the overload bundle loop in `sem_resolve_overload_bundle_call`
+skips candidates returning NULL from `poly_resolve_call`.
+
+**Tests**:
+- `test_poly_overload_where.odin` — poly-only bundle (`dispatch :: proc{identity_int, identity_f64}`
+  with `where typeid_of(T)==typeid_of(int)` and `typeid_of(T)==typeid_of(f64)`),
+  size_of-based dispatch, logical OR where clause.
+- `expected_to_fail/test_poly_overload_where_ambiguous.odin` — two candidates
+  with identical where clauses → ambiguity error.
+
+**Verification**: All 169 tests pass (167 previous + 2 new).
+
+### 🔲 Remaining deferred features
 
 Documented separately — these milestones will be built on top of the
-stable Stage 1–7 work.
+stable Stage 1–10 work.
 
 ## Estimated Scope
 
@@ -769,10 +817,11 @@ stable Stage 1–7 work.
 - Existing-file changes: ~150 lines total across 8 files
 - Tests: ~10+ new test files in stages 3–6
 - Estimated complexity: medium-high but flattened by staging
-- **Current progress**: Stages 1–8 complete (including UAF bug fixes,
+- **Current progress**: Stages 1–10 complete (including UAF bug fixes,
   postfix call dispatch fix, specialization cache, overload bundle poly
   support, `$N` integer polymorphic parameters, nested polymorphism,
-  and dynamic poly env stack). **165/165 tests passing**.
+  dynamic poly env stack, where clause evaluation, and where-clause
+  overload filtering). **169/169 tests passing**.
 
 ## Risks / Open Concerns
 

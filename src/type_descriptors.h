@@ -176,6 +176,8 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
 
 void type_descriptors_destroy_registry(TypeDescriptors * registry);
 
+LLVMTargetDataRef type_descriptors_get_data_layout(TypeDescriptors * registry);
+
 TypeDescriptor const *
 get_or_create_basic_type(TypeDescriptors * registry, char const * name, int width, bool is_float, bool is_unsigned);
 

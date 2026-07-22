@@ -1,9 +1,11 @@
 #include "polymorphism.h"
 
+#include "ast_metadata.h"
 #include "ast_utils.h"
 #include "scope.h"
 #include "sem_context.h"
 #include "semantic_analyser.h"
+#include "sem_type_resolver.h"
 #include "symbols.h"
 #include "typed_value.h"
 
@@ -11,6 +13,283 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// =========================================================================
+// Stage 9: where-clause evaluation
+// =========================================================================
+
+// Resolve a type expression in the where-clause context.
+// Checks poly env first (for poly idents like $T / T), then falls back
+// to the normal type resolution path (for concrete types like int).
+static TypeDescriptor const *
+poly_resolve_type_for_where(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node == NULL)
+        return NULL;
+
+    // Unwrap AST_NODE_TYPE_NAME to get to the underlying type node.
+    while (node != NULL && node->type == AST_NODE_TYPE_NAME && node->list.count >= 1)
+        node = node->list.children[0];
+
+    if (node == NULL)
+        return NULL;
+
+    if (node->type == AST_NODE_IDENTIFIER)
+    {
+        char const * name = node->text;
+        if (name != NULL)
+        {
+            char const * lookup = (name[0] == '$') ? name + 1 : name;
+            TypeDescriptor const * td = poly_env_lookup_type(ctx, lookup);
+            if (td != NULL)
+                return td;
+        }
+    }
+
+    if (node->type == AST_NODE_POLY_IDENT)
+    {
+        char const * name = node->text;
+        if (name != NULL)
+        {
+            char const * lookup = (name[0] == '$') ? name + 1 : name;
+            TypeDescriptor const * td = poly_env_lookup_type(ctx, lookup);
+            if (td != NULL)
+                return td;
+        }
+    }
+
+    // Fall back to normal type resolution
+    TypeDescriptor const * result = sem_resolve_type_expr(ctx, node);
+    return result;
+}
+
+// Evaluate typeid_of(T) in the where-clause context: resolve T via poly env
+// or type registry, then return its type_id.
+static long long
+poly_eval_typeid_of(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1 || node->list.children[0] == NULL)
+        return -1;
+    odin_grammar_node_t * type_node = node->list.children[0];
+    TypeDescriptor const * td = poly_resolve_type_for_where(ctx, type_node);
+    if (td == NULL)
+        return -1;
+    return td->type_id;
+}
+
+// Evaluate size_of(T) in the where-clause context.
+static long long
+poly_eval_size_of(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1 || node->list.children[0] == NULL)
+        return -1;
+    odin_grammar_node_t * type_node = node->list.children[0];
+    TypeDescriptor const * td = poly_resolve_type_for_where(ctx, type_node);
+    if (td == NULL || td->llvm_type == NULL)
+        return -1;
+    LLVMTargetDataRef dl = type_descriptors_get_data_layout(ctx->type_registry);
+    if (dl == NULL)
+        return -1;
+    return (long long)LLVMABISizeOfType(dl, td->llvm_type);
+}
+
+// Evaluate a where-clause sub-expression, returning a concrete value.
+// Returns -1 if the expression cannot be evaluated at compile time.
+static long long
+poly_eval_where_expr(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node == NULL)
+        return -1;
+
+    // Unwrap single-child expression wrappers
+    while (node != NULL && node->list.count == 1
+           && node->list.children[0] != NULL
+           && node->type != AST_NODE_TYPEID_OF_EXPR
+           && node->type != AST_NODE_SIZE_OF_EXPR
+           && node->type != AST_NODE_INTEGER_VALUE
+           && node->type != AST_NODE_BOOL_TRUE
+           && node->type != AST_NODE_BOOL_FALSE
+           && node->type != AST_NODE_IDENTIFIER)
+    {
+        node = node->list.children[0];
+    }
+
+    switch (node->type)
+    {
+    case AST_NODE_BOOL_TRUE:
+        return 1;
+    case AST_NODE_BOOL_FALSE:
+        return 0;
+
+    case AST_NODE_INTEGER_VALUE:
+    {
+        int ok = 0;
+        long long val = sem_evaluate_constant_int(ctx, node, &ok);
+        return ok ? val : -1;
+    }
+
+    case AST_NODE_TYPEID_OF_EXPR:
+        return poly_eval_typeid_of(ctx, node);
+
+    case AST_NODE_SIZE_OF_EXPR:
+        return poly_eval_size_of(ctx, node);
+
+    case AST_NODE_IDENTIFIER:
+    {
+        // Check poly int env (for $N params)
+        if (node->text != NULL)
+        {
+            long long val = 0;
+            if (poly_env_lookup_int(ctx, node->text, &val))
+                return val;
+        }
+        return -1;
+    }
+
+    // Binary operators
+    case AST_NODE_COMP_EXPRESSION:
+    case AST_NODE_ADD_EXPRESSION:
+    case AST_NODE_MUL_EXPRESSION:
+    case AST_NODE_BIT_AND_EXPRESSION:
+    case AST_NODE_BIT_OR_EXPRESSION:
+    case AST_NODE_BIT_XOR_EXPRESSION:
+    case AST_NODE_SHIFT_EXPRESSION:
+    case AST_NODE_LOG_AND_EXPRESSION:
+    case AST_NODE_LOG_OR_EXPRESSION:
+    {
+        if (node->list.count < 3)
+            return -1;
+
+        // Find the operator node (middle child)
+        odin_grammar_node_t * op_node = node->list.children[1];
+        if (op_node == NULL)
+            return -1;
+        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
+        if (md == NULL)
+            return -1;
+
+        long long lhs = poly_eval_where_expr(ctx, node->list.children[0]);
+        long long rhs = poly_eval_where_expr(ctx, node->list.children[node->list.count - 1]);
+        if (lhs == -1 && md->kind != OP_UNARY_NOT)
+            return -1;
+        if (rhs == -1 && md->kind != OP_UNARY_NOT)
+            return -1;
+
+        switch (md->kind)
+        {
+        case OP_EQ: return (lhs == rhs) ? 1 : 0;
+        case OP_NE: return (lhs != rhs) ? 1 : 0;
+        case OP_LT: return (lhs < rhs) ? 1 : 0;
+        case OP_GT: return (lhs > rhs) ? 1 : 0;
+        case OP_LE: return (lhs <= rhs) ? 1 : 0;
+        case OP_GE: return (lhs >= rhs) ? 1 : 0;
+        case OP_ADD: return lhs + rhs;
+        case OP_SUB: return lhs - rhs;
+        case OP_MUL: return lhs * rhs;
+        case OP_DIV: return (rhs == 0) ? -1 : lhs / rhs;
+        case OP_MOD: return (rhs == 0) ? -1 : lhs % rhs;
+        case OP_BIT_AND: return lhs & rhs;
+        case OP_BIT_OR:  return lhs | rhs;
+        case OP_BIT_XOR: return lhs ^ rhs;
+        case OP_SHL: return lhs << rhs;
+        case OP_SHR: return (rhs < 0 || rhs >= 64) ? -1 : (lhs >> rhs);
+        case OP_LOG_AND: return (lhs != 0 && rhs != 0) ? 1 : 0;
+        case OP_LOG_OR:  return (lhs != 0 || rhs != 0) ? 1 : 0;
+        default: return -1;
+        }
+    }
+
+    // Unary operators
+    case AST_NODE_UNARY_EXPRESSION:
+    {
+        if (node->list.count < 2)
+            return -1;
+        odin_grammar_node_t * op_node = node_find_op(node);
+        if (op_node == NULL)
+            return -1;
+        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
+        if (md == NULL)
+            return -1;
+
+        odin_grammar_node_t * operand = NULL;
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            if (node->list.children[i] != NULL && node->list.children[i] != op_node)
+            { operand = node->list.children[i]; break; }
+        }
+        if (operand == NULL)
+            return -1;
+
+        long long inner = poly_eval_where_expr(ctx, operand);
+        if (inner == -1)
+            return -1;
+
+        switch (md->kind)
+        {
+        case OP_UNARY_NOT: return inner ? 0 : 1;
+        case OP_UNARY_NEG: return -inner;
+        case OP_UNARY_POS: return inner;
+        case OP_UNARY_XOR: return ~inner;
+        default: return -1;
+        }
+    }
+
+    default:
+        return -1;
+    }
+}
+
+// Find the AST_NODE_WHERE_CLAUSE inside a procedure definition's signature.
+static odin_grammar_node_t *
+poly_find_where_clause(odin_grammar_node_t * proc_def_node)
+{
+    if (proc_def_node == NULL)
+        return NULL;
+
+    odin_grammar_node_t * sig = NULL;
+    for (size_t i = 0; i < proc_def_node->list.count; i++)
+    {
+        odin_grammar_node_t * child = proc_def_node->list.children[i];
+        if (child != NULL && child->type == AST_NODE_PROCEDURE_SIGNATURE)
+        { sig = child; break; }
+    }
+    if (sig == NULL)
+        return NULL;
+
+    for (size_t i = 0; i < sig->list.count; i++)
+    {
+        odin_grammar_node_t * child = sig->list.children[i];
+        if (child != NULL && child->type == AST_NODE_WHERE_CLAUSE)
+            return child;
+    }
+    return NULL;
+}
+
+// Evaluate a where clause in the context of the poly env stack.
+// Returns true if the constraint is satisfied, false if violated.
+// Returns true (vacuously satisfied) if no where clause is present.
+static bool
+poly_evaluate_where_clause(SemContext * ctx, odin_grammar_node_t * proc_def_node)
+{
+    odin_grammar_node_t * where_node = poly_find_where_clause(proc_def_node);
+    if (where_node == NULL)
+        return true; // no constraint
+
+    // The WHERE_CLAUSE node has the Expression as its child
+    odin_grammar_node_t * expr = NULL;
+    for (size_t i = 0; i < where_node->list.count; i++)
+    {
+        if (where_node->list.children[i] != NULL)
+        { expr = where_node->list.children[i]; break; }
+    }
+    if (expr == NULL)
+        return true;
+
+    long long result = poly_eval_where_expr(ctx, expr);
+    if (result == -1)
+        return false; // couldn't evaluate → constraint not met
+    return result != 0;
+}
 
 // =========================================================================
 // Stage 1: detection
@@ -244,18 +523,33 @@ poly_build_env_from_args(
     if (param_list_node == NULL)
         return false;
 
-    // Collect arg types from the call site
+    // Collect arg types from the call site.
+    // ArgumentList may contain a single comma-chained Expression or separate
+    // children. Handle both by walking the argument list's children and
+    // decomposing comma chains.
     TypeDescriptor const * arg_types[MAX_POLY_ENV_ENTRIES];
     int arg_count = 0;
     if (arg_list_node && arg_list_node->type == AST_NODE_ARGUMENT_LIST)
     {
-        for (size_t ai = 0; ai < arg_list_node->list.count && arg_count < MAX_POLY_ENV_ENTRIES; ai++)
+        // Collect the direct children of the ArgumentList
+        odin_grammar_node_t * raw_args[MAX_POLY_ENV_ENTRIES];
+        int raw_count = 0;
+        for (size_t ai = 0; ai < arg_list_node->list.count && raw_count < MAX_POLY_ENV_ENTRIES; ai++)
         {
-            odin_grammar_node_t * arg_node = arg_list_node->list.children[ai];
-            if (arg_node == NULL)
-                continue;
-            arg_types[arg_count] = arg_node->resolved_type;
-            arg_count++;
+            if (arg_list_node->list.children[ai])
+                raw_args[raw_count++] = arg_list_node->list.children[ai];
+        }
+        // Decompose comma chains from each child
+        for (int ai = 0; ai < raw_count && arg_count < MAX_POLY_ENV_ENTRIES; ai++)
+        {
+            odin_grammar_node_t * chain_args[MAX_POLY_ENV_ENTRIES];
+            int chain_count = 0;
+            sem_collect_comma_chain_args(raw_args[ai], chain_args, MAX_POLY_ENV_ENTRIES, &chain_count);
+            for (int ci = 0; ci < chain_count && arg_count < MAX_POLY_ENV_ENTRIES; ci++)
+            {
+                arg_types[arg_count] = chain_args[ci] ? chain_args[ci]->resolved_type : NULL;
+                arg_count++;
+            }
         }
     }
 
@@ -718,6 +1012,16 @@ poly_resolve_call(
     // Push env onto stack
     poly_env_push(ctx, &env);
     ctx->currently_instantiating = true;
+
+    // Evaluate where clause (Stage 9) — must be after env push so
+    // poly_env_lookup_type is available for constraint evaluation.
+    if (!poly_evaluate_where_clause(ctx, proc_def))
+    {
+        ctx->currently_instantiating = prev_instantiating;
+        poly_env_pop(ctx);
+        free(mangled_name);
+        return NULL; // constraint violated — caller decides error vs skip
+    }
 
     // Run sem_analyse_procedure_literal on the original proc definition
     sem_analyse_procedure_literal(ctx, proc_def, mangled_name);

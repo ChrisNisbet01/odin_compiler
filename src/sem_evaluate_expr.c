@@ -1202,13 +1202,16 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             {
                                 odin_grammar_node_t * arg_list = op->list.children[0];
                                 if (arg_list->type == AST_NODE_ARGUMENT_LIST)
-                                {
-                                    for (size_t ai = 0; ai < arg_list->list.count; ai++)
-                                    {
-                                        if (arg_list->list.children[ai])
-                                            sem_evaluate_expr(ctx, arg_list->list.children[ai]);
-                                    }
-                                }
+                    {
+                        for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                        {
+                            if (arg_list->list.children[ai])
+                            {
+                                odin_grammar_node_t * argn = arg_list->list.children[ai];
+                                sem_evaluate_expr(ctx, argn);
+                            }
+                        }
+                    }
                             }
                             if (type->proc_metadata.return_count > 1)
                             {
@@ -1330,8 +1333,17 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     {
                         for (size_t ai = 0; ai < arg_list->list.count; ai++)
                         {
-                            if (arg_list->list.children[ai])
-                                sem_evaluate_expr(ctx, arg_list->list.children[ai]);
+                            odin_grammar_node_t * raw = arg_list->list.children[ai];
+                            if (raw == NULL)
+                                continue;
+                            odin_grammar_node_t * chain_args[128];
+                            int chain_count = 0;
+                            sem_collect_comma_chain_args(raw, chain_args, 128, &chain_count);
+                            for (int ci = 0; ci < chain_count; ci++)
+                            {
+                                if (chain_args[ci])
+                                    sem_evaluate_expr(ctx, chain_args[ci]);
+                            }
                         }
                     }
                 }

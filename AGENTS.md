@@ -13,6 +13,19 @@
 
 ## Accomplishments (session 2026-07-22)
 
+### Implemented `where` clause evaluation (Stage 9)
+- **Root cause of segfault (implicit function declaration)**: `polymorphism.c` called `sem_resolve_type_expr()` without including `sem_type_resolver.h`. The compiler assumed it returned `int`, truncating the 64-bit pointer to 32 bits (e.g., `0x5e477c85fcd0` → `0x7c85fcd0`). Fixed by adding `#include "sem_type_resolver.h"` to `polymorphism.c`.
+- **Root cause of nil bound_type (ARGUMENT_LIST comma-chain issue)**: `poly_build_env_from_args` iterated `arg_list_node->list.children` directly, but the argument list wraps comma-separated expressions in a single `AST_NODE_EXPRESSION` child via chainl1. Fixed by decomposing each ARGUMENT_LIST child through `sem_collect_comma_chain_args()` to extract individual argument expressions. Same fix applied to the argument evaluation loop in `sem_evaluate_expr.c`.
+- **Where clause evaluation functions** (already implemented in previous session): `poly_resolve_type_for_where` (unwraps `AST_NODE_TYPE_NAME`, looks up poly env), `poly_eval_typeid_of`, `poly_eval_size_of`, `poly_eval_where_expr` (recursive evaluator for `==`, `!=`, `&&`, `||`, `!`, arithmetic, `typeid_of`, `size_of`), `poly_find_where_clause`, `poly_evaluate_where_clause`.
+- **Where clause hooked into `poly_resolve_call`**: After `poly_env_push`, before `sem_analyse_procedure_literal`. Returns NULL on constraint violation (caller decides error vs skip).
+- **Tests**: `test_where_clause.odin` (3 tests: `typeid_of(T)==typeid_of(int)`, `typeid_of(T)==typeid_of(f64)`, `size_of(A)==size_of(B)` with matching sizes). `expected_to_fail/test_where_clause_fail.odin` (mismatched `size_of` correctly produces compile error).
+- **All 167 tests pass** (164 previous + 2 new regular + 1 new expected-to-fail, minus test_where_clause_fail.odin which replaces previous placeholder).
+
+### Implemented where-clause overload filtering (Stage 10)
+- **No code changes needed** — the infrastructure from Stage 9 (`poly_resolve_call` evaluating where clauses + `sem_resolve_overload_bundle_call` loop calling `poly_resolve_call` per candidate with error suppression) already handles this case.
+- **Tests**: `test_poly_overload_where.odin` (5 subtests: poly-only bundle `dispatch :: proc{identity_int, identity_f64}` with `where typeid_of(T)==typeid_of(int)` / `typeid_of(T)==typeid_of(f64)` dispatching int vs f64 args; size_of-based dispatch; logical OR where clause). `expected_to_fail/test_poly_overload_where_ambiguous.odin` (two candidates with identical where clauses → ambiguity error).
+- **All 169 tests pass** (167 previous + 2 new).
+
 ### Implemented polymorphic overload bundle resolution
 - **3 bugs fixed** to make `show :: proc{print_int, double_poly}` work with polymorphic candidates:
   1. **Root cause (poly_ident name mismatch)**: `sem_resolve_poly_ident_type` in `sem_type_resolver.c:1377` looked up `poly_env_lookup_type(ctx, "$T")` but the poly env stores entries with name `"T"` (with `$` stripped at `poly_build_env_from_args:336`). Fixed by stripping the `$` prefix before lookup.

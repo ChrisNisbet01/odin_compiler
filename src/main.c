@@ -439,7 +439,30 @@ main(int argc, char * argv[])
     r.llvm_ctx = llvm_ctx;
     LLVMBuilderRef builder = LLVMCreateBuilderInContext(llvm_ctx);
     r.builder = builder;
+    // Create target data layout early — needed by the type registry for
+    // struct size/alignment computation, and by the semantic analyser for
+    // compile-time size_of in where-clause evaluation.
     LLVMTargetDataRef data_layout = NULL;
+    {
+        LLVMInitializeNativeTarget();
+        LLVMInitializeNativeAsmPrinter();
+        char const * triple = LLVMGetDefaultTargetTriple();
+        LLVMTargetRef target = NULL;
+        char * error = NULL;
+        if (LLVMGetTargetFromTriple(triple, &target, &error) == 0)
+        {
+            LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
+                target, triple, "generic", "", LLVMCodeGenLevelDefault,
+                LLVMRelocDefault, LLVMCodeModelDefault);
+            data_layout = LLVMCreateTargetDataLayout(tm);
+            LLVMDisposeTargetMachine(tm);
+        }
+        else
+        {
+            fprintf(stderr, "Warning: could not detect target: %s\n", error);
+            LLVMDisposeMessage(error);
+        }
+    }
 
     TypeDescriptors * type_reg = type_descriptors_create_registry(llvm_ctx, data_layout, builder);
     if (type_reg == NULL)
