@@ -821,7 +821,8 @@ stable Stage 1–10 work.
   postfix call dispatch fix, specialization cache, overload bundle poly
   support, `$N` integer polymorphic parameters, nested polymorphism,
   dynamic poly env stack, where clause evaluation, and where-clause
-  overload filtering). **169/169 tests passing**.
+  overload filtering). Explicit `$T: typeid` / `$N: int` parameter
+  syntax verified. **170/170 tests passing**.
 
 ## Risks / Open Concerns
 

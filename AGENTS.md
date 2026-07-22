@@ -26,6 +26,13 @@
 - **Tests**: `test_poly_overload_where.odin` (5 subtests: poly-only bundle `dispatch :: proc{identity_int, identity_f64}` with `where typeid_of(T)==typeid_of(int)` / `typeid_of(T)==typeid_of(f64)` dispatching int vs f64 args; size_of-based dispatch; logical OR where clause). `expected_to_fail/test_poly_overload_where_ambiguous.odin` (two candidates with identical where clauses → ambiguity error).
 - **All 169 tests pass** (167 previous + 2 new).
 
+### Verified explicit `$T: typeid` parameter syntax
+- **Grammar already works** — `proc($T: typeid, x: T)` parses correctly as `PolyIdent Colon TypePrefix`. No code changes needed.
+- **Key finding**: The explicit `$T: typeid` form is for declarations only. Calls must use shorthand form (`identity_explicit(42)`, not `identity_explicit(int, 42)`), because type keywords like `int`, `string`, `f64` don't parse as value expressions in `PrimaryExpression`.
+- **Also discovered**: `proc($N: int, arr: [$N]int)` explicit form doesn't register `$N` in body scope (only the shorthand `proc(arr: [$N]int)` works). This is because the explicit `$N: int` is skipped by `poly_build_env_from_args` and the body scope registration doesn't handle the explicit declaration position.
+- **Tests**: `test_poly_explicit_params.odin` (6 subtests: `identity_explicit` with int/f64/bool, `first_of` with int/f64, `sum_array` shorthand with `$N`).
+- **All 170 tests pass**.
+
 ### Implemented polymorphic overload bundle resolution
 - **3 bugs fixed** to make `show :: proc{print_int, double_poly}` work with polymorphic candidates:
   1. **Root cause (poly_ident name mismatch)**: `sem_resolve_poly_ident_type` in `sem_type_resolver.c:1377` looked up `poly_env_lookup_type(ctx, "$T")` but the poly env stores entries with name `"T"` (with `$` stripped at `poly_build_env_from_args:336`). Fixed by stripping the `$` prefix before lookup.
