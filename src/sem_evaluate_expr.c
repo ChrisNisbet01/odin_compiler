@@ -1196,6 +1196,69 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                         break;
 
                     case AST_NODE_POSTFIX_CALL:
+                    {
+                        // Check if the package member is polymorphic; if so,
+                        // instantiate a specialization via poly_resolve_call.
+                        symbol_t * pkg_callee_sym = NULL;
+                        if (i > 0)
+                        {
+                            odin_grammar_node_t * prev_op = postfix_ops->list.children[i-1];
+                            if (prev_op && prev_op->resolved_symbol)
+                                pkg_callee_sym = prev_op->resolved_symbol;
+                        }
+
+                        if (pkg_callee_sym && pkg_callee_sym->is_polymorphic)
+                        {
+                            odin_grammar_node_t * arg_list = NULL;
+                            if (op->list.count > 0 && op->list.children[0] != NULL)
+                                arg_list = op->list.children[0];
+
+                            // Evaluate args first (poly_resolve_call reads resolved_type)
+                            if (arg_list && arg_list->type == AST_NODE_ARGUMENT_LIST)
+                            {
+                                for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                                {
+                                    odin_grammar_node_t * raw = arg_list->list.children[ai];
+                                    if (raw == NULL)
+                                        continue;
+                                    odin_grammar_node_t * chain_args[128];
+                                    int chain_count = 0;
+                                    sem_collect_comma_chain_args(raw, chain_args, 128, &chain_count);
+                                    for (int ci = 0; ci < chain_count; ci++)
+                                    {
+                                        if (chain_args[ci])
+                                            sem_evaluate_expr(ctx, chain_args[ci]);
+                                    }
+                                }
+                            }
+
+                            PolySpecialization * spec = poly_resolve_call(ctx, pkg_callee_sym, op, arg_list);
+                            if (spec && spec->symbol)
+                            {
+                                op->resolved_symbol = spec->symbol;
+                                TypeDescriptor const * proc_type = spec->symbol->value.type_info;
+                                if (proc_type && proc_type->kind == TD_KIND_PROC)
+                                {
+                                    if (proc_type->proc_metadata.return_count > 1)
+                                    {
+                                        op->resolved_type = (TypeDescriptor *)proc_type;
+                                        type = proc_type;
+                                    }
+                                    else
+                                    {
+                                        type = proc_type->proc_metadata.return_type;
+                                        op->resolved_type = (TypeDescriptor *)type;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                sem_error_list_add(&ctx->errors, NULL, op,
+                                                   "polymorphic procedure call could not be specialized");
+                            }
+                            break;
+                        }
+
                         if (type && type->kind == TD_KIND_PROC)
                         {
                             if (op->list.count > 0 && op->list.children[0] != NULL)
@@ -1249,6 +1312,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             }
                         }
                         break;
+                    }
 
                     case AST_NODE_POSTFIX_SUBSCRIPT:
                         if (type

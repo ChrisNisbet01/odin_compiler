@@ -34,8 +34,8 @@ Single-component (`v.x = val`) and multi-component (`v.xy = val`, `v.xyzw = val`
 
 ### `soa_zip` / `soa_unzip` ✅ IMPLEMENTED
 
-### `$T` / `$N` — Compile-time polymorphic parameters (generics)
-Generic procedures with polymorphic type/value parameters. Requires major type system overhaul, monomorphization, and full compile-time evaluation. The largest missing feature.
+### `$T` / `$N` — Compile-time polymorphic parameters (generics) ✅ IMPLEMENTED
+Polymorphic procedures with `$T` (typeid) and `$N` (int) parameters. Monomorphization-based via a poly env stack (no AST clone). Specialization cache keyed on `(proc symbol, arg type pointer tuple)`. `where` clause filtering for overload bundles. Overload bundles with poly candidates. Nested poly calls. Forward declarations of poly procs. Shorthand form `proc(x: $T)` and explicit form `proc($T: typeid, x: T)` both work. 171 tests pass. Cross-package calls are the remaining gap (Stage 11).
 
 ## Bugs
 

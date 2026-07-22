@@ -935,14 +935,22 @@ import_using_copy_symbol(void * value, void * user_data)
     if (sym == NULL || sym->name == NULL || target_scope == NULL || sym->is_private)
         return;
     scope_add_symbol(target_scope, sym->name, sym->value);
+    symbol_t * copy = scope_find_symbol_entry(target_scope, sym->name);
+    if (copy == NULL)
+        return;
     if (sym->has_const_int_val)
     {
-        symbol_t * copy = scope_find_symbol_entry(target_scope, sym->name);
-        if (copy)
-        {
-            copy->const_int_val = sym->const_int_val;
-            copy->has_const_int_val = true;
-        }
+        copy->const_int_val = sym->const_int_val;
+        copy->has_const_int_val = true;
+    }
+    // Propagate polymorphism flag and register origin AST so poly calls
+    // through the `using`-imported copy can resolve (Stage 11).
+    if (sym->is_polymorphic)
+    {
+        copy->is_polymorphic = true;
+        odin_grammar_node_t * origin = poly_get_origin(sym);
+        if (origin != NULL)
+            poly_register_origin(copy, origin);
     }
 }
 

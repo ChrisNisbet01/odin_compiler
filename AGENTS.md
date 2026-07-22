@@ -468,6 +468,14 @@ The `@AST_ACTION_POSTFIX_SLICE` action is shared between `PostfixOpSlice` (for `
 - **Tests**: `test_poly_forward_decl.odin` added with 7 subtests (int identity, float identity, int add, int swap, float swap, where-clause int identity).
 - **All 171 tests pass** (170 previous + 1 new).
 
+### Implemented cross-package polymorphic procs (Stage 11)
+- **Root cause #1 (package-qualified poly calls)**: The package-qualified branch of `sem_evaluate_postfix_expr` at `sem_evaluate_expr.c:1198` had no `is_polymorphic` arm — only `TD_KIND_PROC` (non-poly) and `TD_KIND_OVERLOAD_BUNDLE`. A package-qualified poly call like `pkg.identity(42)` fell through with the unspecialized proc type, silently leaving the result variable undeclared. **Fix**: Before the `TD_KIND_PROC` check, retrieve the symbol from the preceding `POSTFIX_MEMBER` op's `resolved_symbol` (`postfix_ops->list.children[i-1]`). If `sym->is_polymorphic`, evaluate args via `sem_collect_comma_chain_args` + `sem_evaluate_expr`, call `poly_resolve_call`, and populate `call_op->resolved_symbol` / `call_op->resolved_type` from the specialization (mirrors the local poly branch at lines 1310–1376).
+- **Root cause #2 (`import using` poly copies)**: `import_using_copy_symbol` (both in `semantic_analyser.c:930` and duplicate in `llvm_ir_generator.c:2825`) only propagated `name`, `value`, `const_int_val`, and `has_const_int_val` — NOT `is_polymorphic`. The new local copy was also never registered with `poly_register_origin`, so `poly_get_origin(copy)` returned NULL. **Fix**: Both copies now detect `sym->is_polymorphic`, propagate the flag to the copy, and call `poly_register_origin(copy, poly_get_origin(sym))` to register the origin AST.
+- **IR generation**: No changes needed — `ir_gen_postfix_call` Priority 1 already handles specializations via `op->resolved_symbol` and forward-declares the mangled function via `LLVMGetNamedFunction` / `LLVMAddFunction`.
+- **Test helper package** at `tests/test_poly_cross_pkg_helper/test_poly_cross_pkg_helper.odin`: `identity` (no where), `identity_int_only` (typeid where), `sum_same_size` (size_of where), `add` (two poly params), `identity_int` (non-poly for bundle), `mixed_bundle` (poly + non-poly bundle), `helper_int` (baseline).
+- **Tests**: `test_poly_cross_pkg.odin` (package-qualified poly calls — int, float, where-clause, two-param, size_of where, non-poly baseline), `test_poly_cross_pkg_using.odin` (`import using` unqualified poly calls), `test_poly_cross_pkg_bundle.odin` (cross-package overload bundle dispatch), `expected_to_fail/test_poly_cross_pkg_where_mismatch.odin` (cross-package where-clause mismatch correctly produces compile error).
+- **All 175 tests pass** (171 previous + 3 new regular + 1 new expected-to-fail).
+
 ## Accomplishments (session 2026-07-14, continued)
 
 ### Implemented exhaustiveness checking for enum switches

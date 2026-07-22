@@ -808,8 +808,108 @@ skips candidates returning NULL from `poly_resolve_call`.
 
 ### 🔲 Remaining deferred features
 
-Documented separately — these milestones will be built on top of the
-stable Stage 1–10 work.
+The following features are built on top of the stable Stage 1–10 work.
+Each is independently implementable; listed in priority order.
+
+#### Stage 11: Cross-package polymorphic procs — DONE
+
+**Goal**: Allow `pkg.foo(42)` where `foo` is a polymorphic proc in an
+imported package. Also fix `import using "poly_pkg"` followed by
+`identity(42)` where `identity` is a poly proc from the imported package.
+
+**Implementation**:
+
+1. **Package-qualified poly arm** (`sem_evaluate_expr.c:1198–1262`):
+   Added a poly detection check before the `TD_KIND_PROC` branch in the
+   package-qualified path of `sem_evaluate_postfix_expr`. The
+   `POSTFIX_MEMBER` op (preceding the `POSTFIX_CALL` in the iteration)
+   stores the package-scope symbol on its `resolved_symbol`. The
+   `POSTFIX_CALL` handler reads `postfix_ops->list.children[i-1]`
+   to retrieve that symbol. If `sym->is_polymorphic == true`, the
+   args are evaluated (via `sem_collect_comma_chain_args` +
+   `sem_evaluate_expr`, mirroring the local poly branch) and
+   `poly_resolve_call(ctx, sym, call_op, arg_list)` is called. The
+   resulting specialization populates `call_op->resolved_symbol` /
+   `call_op->resolved_type`. On failure, the
+   "polymorphic procedure call could not be specialized" error is
+   emitted (same as the local branch).
+
+2. **`import using` symbol copy fix** (both `semantic_analyser.c:930–953`
+   and `llvm_ir_generator.c:2825–2848`): `import_using_copy_symbol` now
+   propagates the `is_polymorphic` flag to the local copy and registers
+   the copy with `poly_register_origin(copy, poly_get_origin(original))`.
+   This allows un-qualified calls (`identity(42)` after `import using`)
+   to reach `poly_resolve_call` via the local poly branch.
+
+3. **IR generation**: No changes needed — `ir_gen_postfix_call` Priority 1
+   already handles specializations via `op->resolved_symbol` and
+   forward-declares the mangled function via `LLVMGetNamedFunction` /
+   `LLVMAddFunction`.
+
+**Tests**:
+- `tests/test_poly_cross_pkg_helper/test_poly_cross_pkg_helper.odin` —
+  helper package with `identity`, `identity_int_only` (where clause),
+  `sum_same_size` (size_of where clause), `add`, `identity_int`
+  (non-poly for bundle), `mixed_bundle` (poly + non-poly bundle),
+  `helper_int` (non-poly baseline).
+- `tests/test_poly_cross_pkg.odin` — package-qualified poly calls
+  (`pkg.identity(42)`, `pkg.identity(3.14)`, `pkg.identity_int_only(7)`,
+  `pkg.add(10, 20)`, `pkg.sum_same_size(100, 200)`,
+  `pkg.helper_int(41)`).
+- `tests/test_poly_cross_pkg_using.odin` — `import using` poly calls
+  (unqualified `identity`, `identity_int_only`, `add`, `sum_same_size`).
+- `tests/test_poly_cross_pkg_bundle.odin` — cross-package overload
+  bundle with one poly + one non-poly candidate (mixed_bundle dispatch
+  for int and float).
+- `tests/expected_to_fail/test_poly_cross_pkg_where_mismatch.odin` —
+  cross-package where-clause mismatch (typeid_of(f64) != typeid_of(int))
+  correctly produces compile error.
+
+**Verification**: All 175 tests pass (171 previous + 4 new — 3 pass +
+1 expected-to-fail). Cross-package overload bundles with mixed
+poly/non-poly candidates work end-to-end via the existing
+`sem_resolve_overload_bundle_call` → `poly_resolve_call` path.
+
+**Key insight**: The package-qualified branch and non-package branch
+of `sem_evaluate_postfix_expr` are entirely separate code paths
+(different early-returns). The poly call detection only existed in
+the non-package branch. The fix needed only ~50 lines added to the
+package branch — no shared helper was extracted because the call
+expression node layout differs slightly between branches.
+
+#### Stage 12: Polymorphic return-type inference via `auto_cast` / untyped literals — NEXT
+
+**Goal**: Allow `proc identity() -> $T { return 0 }` where `T` is inferred
+from the return-type context at the call site rather than from an
+argument. Currently out of scope (tests always bind `$T`/`$U` via a
+parameter).
+
+**Current status**: Not started. Marked "out of scope" in the original
+plan. Would require reverse-propagation of expected return type into the
+poly env.
+
+#### Stage 13: `$T` in nested type positions
+
+**Goal**: `proc(x: [[$N]$T]$T)` — polymorphic types nested inside
+array/slice/pointer constructors. The env-stack approach should handle
+this since `sem_resolve_type_expr` consults the poly env for all type
+positions, but it is untested.
+
+**Current status**: Not started. May already work — needs test coverage
+to verify. If broken, fix is likely in `poly_build_env_from_args` (may
+not descend into nested type expressions to find `$T`/`$N` refs).
+
+#### Stage 14: Polymorphic struct/enum/union members
+
+**Goal**: `Box :: struct($T: typeid) { val: T }` — polymorphic aggregate
+types with per-instantiation field types. This is the largest remaining
+feature and requires extending the env-stack approach beyond procedures
+to type declarations.
+
+**Current status**: Not started. Requires significant work: poly type
+detection on `AST_NODE_STRUCT_TYPE`/`AST_NODE_ENUM_TYPE`/`AST_NODE_UNION_TYPE`,
+per-instantiation type descriptor generation, and instantiation at use
+sites (variable declarations, field access).
 
 ## Estimated Scope
 
@@ -817,14 +917,16 @@ stable Stage 1–10 work.
 - Existing-file changes: ~150 lines total across 8 files
 - Tests: ~10+ new test files in stages 3–6
 - Estimated complexity: medium-high but flattened by staging
-- **Current progress**: Stages 1–10 complete (including UAF bug fixes,
+- **Current progress**: Stages 1–11 complete (including UAF bug fixes,
   postfix call dispatch fix, specialization cache, overload bundle poly
   support, `$N` integer polymorphic parameters, nested polymorphism,
-  dynamic poly env stack, where clause evaluation, and where-clause
-  overload filtering). Explicit `$T: typeid` / `$N: int` parameter
-  syntax verified. **Polymorphic forward declarations verified** (no code
-  changes needed — `poly_register_origin` overwrites on re-registration).
-  **171/171 tests passing**.
+  dynamic poly env stack, where clause evaluation, where-clause overload
+  filtering, and cross-package polymorphic procs). Explicit `$T: typeid`
+  / `$N: int` parameter syntax verified. **Polymorphic forward
+  declarations verified** (no code changes needed — `poly_register_origin`
+  overwrites on re-registration). **175/175 tests passing**. Remaining:
+  Stages 12–14 (return-type inference, nested types, polymorphic
+  aggregates).
 
 ## Risks / Open Concerns
 
@@ -838,7 +940,7 @@ stable Stage 1–10 work.
    Initial tests avoid this pattern.
 4. **Forward declarations of poly procs** — ✅ VERIFIED (no code changes
    needed; `poly_register_origin` overwrites origin on re-registration).
-5. **Cross-package polymorphic procs** — deferred (Stage 7).
+5. **Cross-package polymorphic procs** — ✅ DONE (Stage 11).
 6. **Polymorphic return-type inference via `auto_cast` / untyped literals**
    — out of scope. Tests always bind `$T`/`$U` via a parameter.
 7. **Bare `T` vs `$T` in return types** — the env-stack approach relies on
