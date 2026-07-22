@@ -822,7 +822,9 @@ stable Stage 1–10 work.
   support, `$N` integer polymorphic parameters, nested polymorphism,
   dynamic poly env stack, where clause evaluation, and where-clause
   overload filtering). Explicit `$T: typeid` / `$N: int` parameter
-  syntax verified. **170/170 tests passing**.
+  syntax verified. **Polymorphic forward declarations verified** (no code
+  changes needed — `poly_register_origin` overwrites on re-registration).
+  **171/171 tests passing**.
 
 ## Risks / Open Concerns
 
@@ -834,7 +836,8 @@ stable Stage 1–10 work.
    non-poly recursion fix.
 3. **Poly-proc called from inside another poly-proc** — ✅ DONE (Stage 8).
    Initial tests avoid this pattern.
-4. **Forward declarations of poly procs** — deferred (Stage 7).
+4. **Forward declarations of poly procs** — ✅ VERIFIED (no code changes
+   needed; `poly_register_origin` overwrites origin on re-registration).
 5. **Cross-package polymorphic procs** — deferred (Stage 7).
 6. **Polymorphic return-type inference via `auto_cast` / untyped literals**
    — out of scope. Tests always bind `$T`/`$U` via a parameter.

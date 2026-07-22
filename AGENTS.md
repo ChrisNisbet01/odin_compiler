@@ -459,6 +459,15 @@ The `if condition do statement` form is not supported by the grammar (only `if c
 ### Key insight (this session)
 The `@AST_ACTION_POSTFIX_SLICE` action is shared between `PostfixOpSlice` (for `arr[..]`, `arr[low..high]`, etc.) and the new `PostfixOpFullSlice` (for `arr[:]`). Both produce `AST_NODE_POSTFIX_SLICE` nodes, so the semantic analyser and IR generator handle them identically without needing to distinguish the source syntax.
 
+## Accomplishments (session 2026-07-23)
+
+### Verified polymorphic forward declarations (no code changes needed)
+- **Finding**: Forward declarations of poly procs (`foo :: proc($T: typeid, x: T) -> T ---`) followed by definitions (`foo :: proc($T: typeid, x: T) -> T { ... }`) **already work** without any code changes.
+- **Root cause**: `poly_register_origin` at `polymorphism.c:333` already overwrites the origin when the same symbol is registered twice. Since forward declarations must come before definitions in Odin, the definition (with body) is always the last one processed. `poly_get_origin` returns the latest ConstantDecl, which contains the `ProcedureDefinition` with the `CompoundStatement` body.
+- **Verified**: basic `identity`, `add`, `swap_values`, where-clause `identity_int_only` — all work with forward declarations. Mixed poly + non-poly forward declarations work.
+- **Tests**: `test_poly_forward_decl.odin` added with 7 subtests (int identity, float identity, int add, int swap, float swap, where-clause int identity).
+- **All 171 tests pass** (170 previous + 1 new).
+
 ## Accomplishments (session 2026-07-14, continued)
 
 ### Implemented exhaustiveness checking for enum switches
