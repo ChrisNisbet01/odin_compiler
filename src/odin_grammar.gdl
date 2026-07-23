@@ -329,7 +329,7 @@ BitSetType = KwBitSet LBracket (TypePrefix | BitSetRange) RBracket @AST_ACTION_B
 StructField = KwUsing? Identifier (Comma Identifier)* Colon TypePrefix (Directive IntegerLiteral)? @AST_ACTION_STRUCT_FIELD;
 StructFieldList = delimited_flex(StructField, Semicolon) Semicolon? @AST_ACTION_STRUCT_FIELD_LIST;
 StructRawBody = LBrace StructFieldList RBrace;
-StructType = KwStruct (SoaType | ((Directive IntegerLiteral?)? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
+StructType = KwStruct (SoaType | (ParameterList? (Directive IntegerLiteral?)? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
 StructTypeRef = KwStruct Identifier @AST_ACTION_STRUCT_TYPE_REF;
 
 Parameter = KwUsing? ((PolyIdent Colon TypePrefix) | (Identifier Colon VariadicMarker? TypePrefix)) @AST_ACTION_PARAMETER;
@@ -352,11 +352,16 @@ VectorType = KwSimd LBracket IntegerLiteral RBracket TypePrefix @AST_ACTION_VECT
 
 TupleType = LBracket TypePrefix (Comma TypePrefix)+ RBracket @AST_ACTION_TUPLE_TYPE;
 
+// Type application for polymorphic types: Box(int), Vec2(f64), IntBox(float, 3)
+// IntegerLiteral allows compile-time value args (e.g. for $N: int params).
+TypeApplication = Identifier LParen ((TypePrefix | IntegerLiteral) (Comma (TypePrefix | IntegerLiteral))*)? RParen @AST_ACTION_TYPE_APPLICATION;
+
 // Base types for TypeName (no left recursion)
 TypePrefix = TupleType | PointerType | DynamicArrayType | SliceType | MultiPointerType | ArrayType
            | MapType | VectorType | ProcedureSignature
            | StructType | UnionType | EnumType | BitFieldType | BitSetType
            | DistinctType | BasicType | StructTypeRef | EnumTypeRef
+           | TypeApplication
            | Identifier | PolyIdent | MaybeType
            | SoaType;
 

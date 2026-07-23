@@ -316,6 +316,31 @@ poly_signature_is_polymorphic(odin_grammar_node_t const * sig_node)
     return poly_walk_has_ident(sig_node);
 }
 
+bool
+poly_struct_has_type_params(odin_grammar_node_t const * struct_node)
+{
+    if (struct_node == NULL)
+        return false;
+
+    // StructType children: ParameterList? (Directive IntegerLiteral?)? StructRawBody
+    // Look for a ParameterList child
+    for (size_t i = 0; i < struct_node->list.count; i++)
+    {
+        odin_grammar_node_t * child = struct_node->list.children[i];
+        if (child != NULL && child->type == AST_NODE_PARAMETER_LIST)
+        {
+            // Check if any parameter has a PolyIdent in its type
+            for (size_t j = 0; j < child->list.count; j++)
+            {
+                odin_grammar_node_t * param = child->list.children[j];
+                if (param != NULL && poly_walk_has_ident(param))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
 // =========================================================================
 // Side table: symbol_t* -> ConstantDecl AST node (origin tracking)
 // =========================================================================

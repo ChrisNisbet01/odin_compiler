@@ -5,6 +5,7 @@
 #include "scope.h"
 #include "symbols.h"
 #include "typed_value.h"
+#include "semantic_analyser.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +42,7 @@ static TypeDescriptor const * sem_resolve_struct_type(SemContext * ctx, odin_gra
 static TypeDescriptor const * sem_resolve_tuple_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_poly_ident_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_union_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_vector_type(SemContext * ctx, odin_grammar_node_t * node);
 
@@ -64,6 +66,7 @@ static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *
     [AST_NODE_STRUCT_TYPE] = sem_resolve_struct_type,
     [AST_NODE_TUPLE_TYPE] = sem_resolve_tuple_type,
     [AST_NODE_TYPE_NAME] = sem_resolve_basic_or_type_name,
+    [AST_NODE_TYPE_APPLICATION] = sem_resolve_type_application,
     [AST_NODE_UNION_TYPE] = sem_resolve_union_type,
     [AST_NODE_VECTOR_TYPE] = sem_resolve_vector_type,
 };
@@ -940,6 +943,8 @@ sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
                 name_node = child;
             else if (is_type_node(child))
                 type_node = child;
+            else if (child->type == AST_NODE_IDENTIFIER && name_node != NULL)
+                type_node = child;
             else if (child->type == AST_NODE_DIRECTIVE && child->text
                      && strcmp(child->text, "#align") == 0)
             {
@@ -1471,4 +1476,183 @@ sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node)
     }
     return NULL;
     
+}
+
+// --- TypeApplication: Box(int), Vec2(f64), etc. ---
+
+// Collect every AST_NODE_PARAMETER found under a PARAMETER_LIST node.
+// The AST nesting is: PARAMETER_LIST -> PARAMETERS -> PARAMETER* (optionally
+// trailing ELLIPSIS).  Returns the count and fills `out` (capacity
+// `max_params`).
+static int
+collect_parameters_from_param_list(odin_grammar_node_t * param_list,
+                                   odin_grammar_node_t ** out, int max_params)
+{
+    int count = 0;
+    for (size_t i = 0; i < param_list->list.count && count < max_params; i++)
+    {
+        odin_grammar_node_t * child = param_list->list.children[i];
+        if (child == NULL || child->type != AST_NODE_PARAMETERS)
+            continue;
+        for (size_t j = 0; j < child->list.count && count < max_params; j++)
+        {
+            odin_grammar_node_t * param = child->list.children[j];
+            if (param != NULL && param->type == AST_NODE_PARAMETER)
+                out[count++] = param;
+        }
+    }
+    return count;
+}
+
+static TypeDescriptor const *
+sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node)
+{
+    // TypeApplication children: [Identifier("Box"), TypeArg1, TypeArg2, ...]
+    if (node->list.count < 1)
+        return NULL;
+
+    odin_grammar_node_t * name_node = node->list.children[0];
+    if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER || name_node->text == NULL)
+        return NULL;
+
+    // Look up the identifier — must be a polymorphic type
+    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+    if (sym == NULL || !sym->is_polymorphic || sym->kind != SYMBOL_TYPE)
+        return NULL;
+
+    // Get the origin ConstantDecl AST
+    odin_grammar_node_t * origin = poly_get_origin(sym);
+    if (origin == NULL)
+        return NULL;
+
+    // Extract the StructType from the ConstantDecl
+    // ConstantDecl children: [Identifier("Box"), StructType]
+    odin_grammar_node_t * struct_type = NULL;
+    for (size_t i = 0; i < origin->list.count; i++)
+    {
+        odin_grammar_node_t * child = origin->list.children[i];
+        if (child != NULL && child != name_node && child->type == AST_NODE_STRUCT_TYPE)
+        {
+            struct_type = child;
+            break;
+        }
+    }
+    if (struct_type == NULL)
+        return NULL;
+
+    // Extract the ParameterList from the StructType
+    odin_grammar_node_t * param_list = node_find_child(struct_type, AST_NODE_PARAMETER_LIST);
+    if (param_list == NULL)
+        return NULL;
+
+    // Collect individual PARAMETER nodes (unwrap PARAMETERS wrapper).
+    odin_grammar_node_t * params[32];
+    int param_count = collect_parameters_from_param_list(param_list, params, 32);
+
+    // Count type arguments (all children except the name)
+    int arg_count = (int)node->list.count - 1;
+    if (arg_count <= 0)
+        return NULL;
+    if (param_count == 0)
+        return NULL;
+    if (arg_count != param_count)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "type '%s' expects %d type arguments but got %d",
+                 name_node->text, param_count, arg_count);
+        sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
+        return NULL;
+    }
+
+    // Build poly env by matching params against type arguments
+    PolyEnv env = {0};
+    for (int arg_idx = 0; arg_idx < param_count; arg_idx++)
+    {
+        odin_grammar_node_t * param = params[arg_idx];
+
+        // Extract param name (first Identifier or PolyIdent child)
+        odin_grammar_node_t * param_name = NULL;
+        odin_grammar_node_t * param_type_node = NULL;
+        for (size_t ci = 0; ci < param->list.count; ci++)
+        {
+            odin_grammar_node_t * child = param->list.children[ci];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_POLY_IDENT || child->type == AST_NODE_IDENTIFIER)
+            {
+                if (param_name == NULL)
+                {
+                    param_name = child;
+                    continue;
+                }
+            }
+            if (is_type_node(child) || (child->type == AST_NODE_IDENTIFIER && param_name != NULL))
+            {
+                param_type_node = child;
+                break;
+            }
+        }
+        if (param_name == NULL || param_name->text == NULL)
+            continue;
+        if (param_type_node == NULL)
+            continue;
+
+        // Determine if this param is a type param ($T: typeid) or int param ($N: int)
+        // by checking the param's declared type text.
+        char const * ptype_text = param_type_node->text;
+        bool is_int_param = (ptype_text != NULL
+                             && (strcmp(ptype_text, "int") == 0
+                                 || strcmp(ptype_text, "i8") == 0
+                                 || strcmp(ptype_text, "i16") == 0
+                                 || strcmp(ptype_text, "i32") == 0
+                                 || strcmp(ptype_text, "i64") == 0
+                                 || strcmp(ptype_text, "i128") == 0
+                                 || strcmp(ptype_text, "u8") == 0
+                                 || strcmp(ptype_text, "u16") == 0
+                                 || strcmp(ptype_text, "u32") == 0
+                                 || strcmp(ptype_text, "u64") == 0
+                                 || strcmp(ptype_text, "u128") == 0));
+
+        odin_grammar_node_t * type_arg = node->list.children[1 + arg_idx];
+        if (type_arg == NULL)
+            continue;
+
+        // Strip $ from param name
+        char const * pname = param_name->text;
+        if (pname[0] == '$')
+            pname++;
+
+        if (is_int_param)
+        {
+            // Evaluate the argument as a compile-time integer constant
+            int const_ok = 0;
+            long long int_val = sem_evaluate_constant_int(ctx, type_arg, &const_ok);
+            if (!const_ok)
+                return NULL;
+            env.entries[env.count].name = strdup(pname);
+            env.entries[env.count].kind = POLY_SLOT_INT;
+            env.entries[env.count].bound_int_value = int_val;
+            env.count++;
+        }
+        else
+        {
+            // Type param — resolve the argument as a type
+            TypeDescriptor const * arg_type = sem_resolve_type_expr(ctx, type_arg);
+            if (arg_type == NULL)
+                return NULL;
+            env.entries[env.count].name = strdup(pname);
+            env.entries[env.count].kind = POLY_SLOT_TYPE;
+            env.entries[env.count].bound_type = arg_type;
+            env.count++;
+        }
+    }
+
+    // Push env and resolve the struct type
+    poly_env_push(ctx, &env);
+    TypeDescriptor const * result = sem_resolve_struct_type(ctx, struct_type);
+    poly_env_pop(ctx);
+
+    if (result != NULL)
+        node->resolved_type = (TypeDescriptor *)result;
+    return result;
 }

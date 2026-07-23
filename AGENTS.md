@@ -1,3 +1,19 @@
+## Accomplishments (session 2026-07-24)
+
+### Implemented polymorphic struct types with $N int params (Stage 14b)
+- **Grammar** (`odin_grammar.gdl`): Extended `TypeApplication` rule to accept `IntegerLiteral` as an argument in addition to `TypePrefix`: `TypeApplication = Identifier LParen ((TypePrefix | IntegerLiteral) (Comma (TypePrefix | IntegerLiteral))*)? RParen`. Enables `IntBox(int, 3)` syntax for poly structs with `$N: int` parameters.
+- **Type resolution** (`sem_type_resolver.c`): Updated `sem_resolve_type_application()` to detect whether each param is a type param (`$T: typeid`) or int param (`$N: int`/`$N: u32`/etc) by checking the param's declared type text. For int params, evaluates the argument via `sem_evaluate_constant_int` and binds it with `POLY_SLOT_INT` instead of `POLY_SLOT_TYPE`. The existing `sem_resolve_array_type` already looks up `$N` via `poly_env_lookup_int`, so `[$N]T` field types resolve correctly with the int binding.
+- **Tests**: `test_poly_struct_int_param.odin` (4 subtests: `IntBox(int, 3)` + `IntBox(f64, 5)` + `IntBox(int, 2)` array subscript/accumulation, `Buf(4, int)` u32-typed `$N`). **All 183 tests pass**.
+
+### Implemented polymorphic struct types (Stage 14)
+- **Grammar** (`odin_grammar.gdl`): Extended `StructType` to accept optional `ParameterList` before the body: `StructType = KwStruct (SoaType | (ParameterList? (Directive IntegerLiteral?)? StructRawBody))`. Added `TypeApplication` rule `Identifier LParen (TypePrefix (Comma TypePrefix)*)? RParen` in `TypePrefix`, enabling `Box(int)` syntax.
+- **AST**: Added `AST_NODE_TYPE_APPLICATION` enum + action. Marked as type node in `is_type_node_table` (`ast_utils.c`).
+- **Detection** (`polymorphism.c`): `poly_struct_has_type_params()` checks if a StructType has a ParameterList with PolyIdent children. Pass1 (`semantic_analyser.c`) marks poly struct symbols as `is_polymorphic=true`, `kind=SYMBOL_TYPE`, and registers origin. Pass2 skips poly struct ConstantDecl resolution.
+- **Type resolution** (`sem_type_resolver.c`): `sem_resolve_type_application()` resolves `Box(int)` by: (1) looking up the poly struct symbol, (2) extracting the origin ConstantDecl's StructType, (3) collecting PARAMETER nodes through the `PARAMETER_LIST → PARAMETERS → PARAMETER` nesting (via `collect_parameters_from_param_list`), (4) building a PolyEnv with `T → int`, (5) pushing env and calling `sem_resolve_struct_type`, (6) popping env.
+- **Two bugs fixed**: (a) ParameterList contains `PARAMETERS` wrapper nodes (not `PARAMETER` directly) — previous code looked for `AST_NODE_PARAMETER` as immediate children of `PARAMETER_LIST`, finding 0. (b) Struct field type detection in `sem_resolve_struct_type` didn't recognize `AST_NODE_IDENTIFIER` as a type node when `name_node` was already set — for poly structs, field types like `T` parse as bare `Identifier` (not `$T`), so they were silently skipped. Added an `else if (child->type == AST_NODE_IDENTIFIER && name_node != NULL)` branch to capture bare-identifier type references.
+- **IR generation**: No changes needed — `register_struct_type` deduplicates by LLVM layout. Multiple instantiations (`Box(int)`, `Box(f64)`) produce distinct struct types with correct field types.
+- **Tests**: `test_poly_struct.odin` (5 subtests: int/f64/u32 instantiation, write/read, multiple-instantiation independence), `test_poly_struct_multi_param.odin` (4 subtests: 2-param `Pair`, 3-param `Triple`, same-type pairs, mixed-type pairs), `expected_to_fail/test_poly_struct_type_mismatch.odin` (wrong arg count). **All 182 tests pass**.
+
 ## Accomplishments (session 2026-07-23, continued)
 
 ### Fixed composite type argument passing (slice/struct/array values)

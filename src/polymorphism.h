@@ -113,3 +113,7 @@ char * poly_make_mangled_name(symbol_t * poly_symbol, PolyEnv * env);
 // polymorphic identifier (in parameters or returns). Used at the top-level
 // registration site to decide whether to mark the proc symbol polymorphic.
 bool poly_signature_is_polymorphic(odin_grammar_node_t const * sig_node);
+
+// True if the given struct type node has poly parameters in its ParameterList.
+// Used to detect polymorphic struct declarations like struct($T: typeid) { ... }
+bool poly_struct_has_type_params(odin_grammar_node_t const * struct_node);

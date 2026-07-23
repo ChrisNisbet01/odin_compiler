@@ -427,6 +427,7 @@ DEFINE_ACTION(ast_action_expand_values_expr_action, AST_NODE_EXPAND_VALUES_EXPR,
 DEFINE_ACTION(ast_action_compress_values_expr_action, AST_NODE_COMPRESS_VALUES_EXPR, false)
 DEFINE_ACTION(ast_action_soa_zip_expr_action, AST_NODE_SOA_ZIP_EXPR, false)
 DEFINE_ACTION(ast_action_soa_unzip_expr_action, AST_NODE_SOA_UNZIP_EXPR, false)
+DEFINE_ACTION(ast_action_type_application_action, AST_NODE_TYPE_APPLICATION, false)
 // --- Terminal nodes (text captured for semantic use) ---
 DEFINE_TERMINAL_ACTION(ast_action_identifier_action, AST_NODE_IDENTIFIER)
 DEFINE_TERMINAL_ACTION(ast_action_poly_ident_action, AST_NODE_POLY_IDENT)
@@ -568,6 +569,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_COMPRESS_VALUES_EXPR, ast_action_compress_values_expr_action);
     REGISTER(AST_ACTION_SOA_ZIP_EXPR, ast_action_soa_zip_expr_action);
     REGISTER(AST_ACTION_SOA_UNZIP_EXPR, ast_action_soa_unzip_expr_action);
+    REGISTER(AST_ACTION_TYPE_APPLICATION, ast_action_type_application_action);
     REGISTER(AST_ACTION_INTEGER_BASE, ast_action_integer_base_action);
     REGISTER(AST_ACTION_INTEGER_VALUE, ast_action_integer_value_action);
     REGISTER(AST_ACTION_FLOAT_BASE, ast_action_float_base_action);

@@ -942,35 +942,44 @@ types nested inside array/slice/pointer constructors.
 int/f64/u8, two-param `[$N]$T,[$N]$U`, and `^$T` pointer poly. All 178
 tests pass.
 
-#### Stage 14: Polymorphic struct/enum/union members
+#### Stage 14: Polymorphic struct types — ✅ DONE (14A + 14A.5)
 
 **Goal**: `Box :: struct($T: typeid) { val: T }` — polymorphic aggregate
-types with per-instantiation field types. This is the largest remaining
-feature and requires extending the env-stack approach beyond procedures
-to type declarations.
+types with per-instantiation field types. This extends the env-stack approach
+beyond procedures to type declarations.
 
-**Current status**: Not started. Requires significant work: poly type
-detection on `AST_NODE_STRUCT_TYPE`/`AST_NODE_ENUM_TYPE`/`AST_NODE_UNION_TYPE`,
-per-instantiation type descriptor generation, and instantiation at use
-sites (variable declarations, field access).
+**Current status**: Complete.
+- 14A: Single and multi type-param poly structs (`Box(int)`, `Pair(int, f64)`,
+  `Triple(int, f64, u32)`). Grammar, AST, semantic detection, pass2 skip,
+  `sem_resolve_type_application` with poly env push/pop.
+- 14A.5: `$N: int` int params, enabling `IntBox(int, 3)` with `data: [$N]T`
+  fields. Grammar extended to accept `IntegerLiteral` as TypeApplication
+  argument. Key bugs fixed: (a) `ParameterList → PARAMETERS → PARAMETER`
+  nesting, (b) bare-identifier field types not recognized as type nodes when
+  `name_node` already set.
+- Tests: `test_poly_struct.odin`, `test_poly_struct_multi_param.odin`,
+  `test_poly_struct_int_param.odin`,
+  `expected_to_fail/test_poly_struct_type_mismatch.odin`.
+  **183/183 tests passing**.
+
+### Remaining poly struct phases (future):
+- Phase 14B: Struct literal construction `Box(int){val = 42}`
+- Phase 14C: Type inference `b := Box{val = 42}` (requires untyped literals)
+- Phase 14D: Polymorphic enum/union types (`Result(T,E) :: union{...}`)
 
 ## Estimated Scope
 
-- New code: ~800–1000 lines (env-stack approach is smaller than clone)
-- Existing-file changes: ~150 lines total across 8 files
-- Tests: ~10+ new test files in stages 3–6
-- Estimated complexity: medium-high but flattened by staging
-- **Current progress**: Stages 1–13 complete (including UAF bug fixes,
+- **Current progress**: Stages 1–14 complete (including UAF bug fixes,
   postfix call dispatch fix, specialization cache, overload bundle poly
   support, `$N` integer polymorphic parameters, nested polymorphism,
   dynamic poly env stack, where clause evaluation, where-clause overload
-  filtering, cross-package polymorphic procs, return-type inference, and
-  `$T` in nested type positions). Explicit `$T: typeid` / `$N: int`
-  parameter syntax verified. Polymorphic forward declarations verified.
-  Integer→float coercion for untyped literals implemented.
-  **179/179 tests passing**. Remaining: Stage 14 (polymorphic aggregates).
-  Full untyped literal architecture designed in
-  `notes/untyped_literals_plan.md`.
+  filtering, cross-package polymorphic procs, return-type inference,
+  `$T` in nested type positions, and polymorphic struct types including
+  `$N` int params). Explicit `$T: typeid` / `$N: int` parameter syntax
+  verified. Polymorphic forward declarations verified. Integer→float
+  coercion for untyped literals implemented.
+  **183/183 tests passing**. Full untyped literal architecture designed
+  in `notes/untyped_literals_plan.md`.
 
 ## Risks / Open Concerns
 

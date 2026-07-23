@@ -877,6 +877,23 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
             }
         }
 
+        // Mark the symbol as polymorphic if its struct type uses any
+        // $T / $N poly identifiers in its parameter list. Polymorphic struct
+        // types are NOT resolved standalone; usage sites instantiate
+        // specializations via TypeApplication (e.g., Box(int)).
+        if (value_node != NULL && value_node->type == AST_NODE_STRUCT_TYPE
+            && poly_struct_has_type_params(value_node))
+        {
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            if (sym)
+            {
+                sym->is_polymorphic = true;
+                sym->kind = SYMBOL_TYPE;
+                // Store the origin ConstantDecl AST for later instantiation
+                poly_register_origin(sym, node);
+            }
+        }
+
         // Try to evaluate as a compile-time integer constant
         if (value_node != NULL && value_node->type != AST_NODE_PROCEDURE_DEFINITION && value_node->type != AST_NODE_PROC_OVERLOAD_BUNDLE)
         {
@@ -1773,6 +1790,30 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         if (value_node->type == AST_NODE_PROCEDURE_DEFINITION)
         {
             sem_analyse_procedure_literal(ctx, value_node, name_node->text);
+        }
+        else if (value_node->type == AST_NODE_STRUCT_TYPE)
+        {
+            // Check if this is a poly struct type — skip resolution
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            if (sym && sym->is_polymorphic)
+            {
+                // Poly struct template — skip resolution. Type will be
+                // instantiated at usage sites via TypeApplication.
+                break;
+            }
+            // Non-poly struct: resolve normally
+            TypeDescriptor const * td = sem_resolve_type_expr(ctx, value_node);
+            if (td != NULL)
+            {
+                value_node->resolved_type = (TypeDescriptor *)td;
+                TypedValue tv = create_typed_value(NULL, td, false);
+                scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+                symbol_t * s = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+                if (s)
+                    s->kind = SYMBOL_TYPE;
+                break;
+            }
+            sem_evaluate_expr(ctx, value_node);
         }
         else if (value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
         {
