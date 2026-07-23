@@ -877,13 +877,13 @@ the non-package branch. The fix needed only ~50 lines added to the
 package branch — no shared helper was extracted because the call
 expression node layout differs slightly between branches.
 
-#### Stage 12: Polymorphic return-type inference via `auto_cast` / untyped literals — IN PROGRESS
+#### Stage 12: Polymorphic return-type inference via `auto_cast` / untyped literals — DONE
 
 **Goal**: Allow `proc default_value() -> $T { return 0 }` where `T` is inferred
 from the return-type context at the call site (e.g., `r: int = default_value()`)
 rather than from an argument. 
 
-**Implementation** (partial):
+**Implementation**:
 
 1. **`SemContext::poly_expected_return_type`** — new field in `SemContext`
    (threaded through to `poly_resolve_call`). Initialized to NULL in
@@ -902,28 +902,45 @@ rather than from an argument.
    poly var to the expected return type. Used as fallback in both the
    failed-env-build path and the succeeded-but-empty-env path.
 
-**Limitations**:
-- `return 0` in `-> $T` where T=f64 fails because `sem_can_implicitly_convert`
-  only allows integer→integer and float→float for untyped literals. The literal
-  `0` has `AST_NODE_INTEGER_VALUE` inner type. Needs extension for cross-kind
-  coercion of untyped numeric literals.
-- Only works for single-poly-var return positions.
+5. **Integer→float coercion** — `sem_can_implicitly_convert` now allows
+   `INTEGER_VALUE` to convert to float types and `FLOAT_VALUE` to convert
+   to integer types, matching Odin's untyped literal semantics.
 
-**Tests**: `test_poly_return_inference.odin` (5 subtests: zero_value → int/i64/u32,
+**Tests**: `test_poly_return_inference.odin` (6 subtests: zero_value → int/i64/u32/f64,
 one_value → int, identity with param+return $T).
-`expected_to_fail/test_poly_return_unbound.odin` (unbound $T with := → error).
+`expected_to_fail/test_poly_return_unbound.odin` (untyped $T with := → error).
 **177/177 tests passing**.
+
+**Note**: Full untyped literal architecture (proper `untyped_int`/`untyped_float`
+type kinds, context propagation, overload resolution, polymorphic binding)
+is designed in `notes/untyped_literals_plan.md`. The current approach uses a
+targeted fix in `sem_can_implicitly_convert` as Phase 1.
 
 #### Stage 13: `$T` in nested type positions
 
-**Goal**: `proc(x: [[$N]$T]$T)` — polymorphic types nested inside
-array/slice/pointer constructors. The env-stack approach should handle
-this since `sem_resolve_type_expr` consults the poly env for all type
-positions, but it is untested.
+**Goal**: `proc(arr: [$N]$T)`, `proc(p: ^$T)`, `proc(s: []$T)` — polymorphic
+types nested inside array/slice/pointer constructors.
 
-**Current status**: Not started. May already work — needs test coverage
-to verify. If broken, fix is likely in `poly_build_env_from_args` (may
-not descend into nested type expressions to find `$T`/`$N` refs).
+**Completed**. Three issues fixed:
+
+1. **`poly_unify_poly_idents_in_type`** — extended with `AST_NODE_SLICE_TYPE`,
+   `AST_NODE_DYNAMIC_ARRAY_TYPE`, `AST_NODE_MULTI_POINTER_TYPE`,
+   `AST_NODE_POINTER_TYPE`, and `AST_NODE_MAYBE_TYPE` branches. Extracted
+   helper functions: `poly_env_bind_type`, `poly_env_bind_int`,
+   `poly_bind_poly_ident_type`, `poly_scan_children_for_poly_idents`.
+
+2. **`is_type_node_table`** — added `[AST_NODE_POLY_IDENT] = true` so that
+   `$T` in type positions is correctly classified by `is_type_node()`.
+
+3. **`sem_resolve_array_type`** — reordered to determine array size BEFORE
+   searching for element type. After adding `POLY_IDENT` to `is_type_node`,
+   the old element-type search would pick up `$N` (integer poly) as the
+   element type. Now the size (integer literal, `$N`, or bare `N`) is resolved
+   first, then the element type search skips the size node.
+
+**Test**: `test_poly_nested_types.odin` — 6 subtests covering `[$N]$T` with
+int/f64/u8, two-param `[$N]$T,[$N]$U`, and `^$T` pointer poly. All 178
+tests pass.
 
 #### Stage 14: Polymorphic struct/enum/union members
 
@@ -943,17 +960,17 @@ sites (variable declarations, field access).
 - Existing-file changes: ~150 lines total across 8 files
 - Tests: ~10+ new test files in stages 3–6
 - Estimated complexity: medium-high but flattened by staging
-- **Current progress**: Stages 1–11 complete (including UAF bug fixes,
+- **Current progress**: Stages 1–13 complete (including UAF bug fixes,
   postfix call dispatch fix, specialization cache, overload bundle poly
   support, `$N` integer polymorphic parameters, nested polymorphism,
   dynamic poly env stack, where clause evaluation, where-clause overload
-  filtering, and cross-package polymorphic procs). Explicit `$T: typeid`
-  / `$N: int` parameter syntax verified. **Polymorphic forward
-  declarations verified** (no code changes needed — `poly_register_origin`
-  overwrites on re-registration). **177/177 tests passing**. Stage 12
-  partially complete (return-type inference works for integer-returning
-  procs; untyped literal cross-kind coercion is a pre-existing semantic
-  limitation). Remaining: Stages 12 (finish), 13, 14.
+  filtering, cross-package polymorphic procs, return-type inference, and
+  `$T` in nested type positions). Explicit `$T: typeid` / `$N: int`
+  parameter syntax verified. Polymorphic forward declarations verified.
+  Integer→float coercion for untyped literals implemented.
+  **178/178 tests passing**. Remaining: Stage 14 (polymorphic aggregates).
+  Full untyped literal architecture designed in
+  `notes/untyped_literals_plan.md`.
 
 ## Risks / Open Concerns
 

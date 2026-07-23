@@ -296,12 +296,65 @@ sem_resolve_array_type(SemContext * ctx, odin_grammar_node_t * node)
 {
 
     // ArrayType = LBracket (IntegerLiteral | PolyIdent | Identifier)? RBracket TypePrefix
-    odin_grammar_node_t * size_node = node_find_child(node, AST_NODE_INTEGER_VALUE);
+    // Children: for [$N]$T: [PolyIdent("$N"), PolyIdent("$T")]
+    //          for [3]int: [IntegerValue("3"), BasicType("int")]
+
+    // Step 1: Determine the array size (count).
+    odin_grammar_node_t * size_node = NULL;
+    size_t count = 0;
+
+    // Try IntegerLiteral first
+    size_node = node_find_child(node, AST_NODE_INTEGER_VALUE);
+    if (size_node && size_node->text)
+    {
+        count = (size_t)parse_odin_unsigned(size_node->text, NULL, 0);
+    }
+    else
+    {
+        // Try PolyIdent for $N during poly instantiation — must check before
+        // element type search because is_type_node(POLY_IDENT) is true and
+        // would misidentify $N as the element type.
+        odin_grammar_node_t * poly_node = node_find_child(node, AST_NODE_POLY_IDENT);
+        if (poly_node && poly_node->text)
+        {
+            char const * poly_name = poly_node->text;
+            if (poly_name[0] == '$')
+                poly_name++;
+            long long val = 0;
+            if (poly_env_lookup_int(ctx, poly_name, &val))
+            {
+                count = (size_t)val;
+                size_node = poly_node; // mark as consumed for size
+            }
+        }
+        if (count == 0)
+        {
+            // Try Identifier for bare T (declared by preceding $T: typeid param)
+            odin_grammar_node_t * id_node = node_find_child(node, AST_NODE_IDENTIFIER);
+            if (id_node && id_node->text)
+            {
+                long long val = 0;
+                if (poly_env_lookup_int(ctx, id_node->text, &val))
+                {
+                    count = (size_t)val;
+                    size_node = id_node;
+                }
+            }
+        }
+    }
+
+    // Step 2: Find the element type node — skip POLY_IDENT if it was already
+    // consumed as the size (e.g. $N in [$N]$T).
     odin_grammar_node_t * elem_type_node = NULL;
     for (size_t i = 0; i < node->list.count; i++)
     {
         odin_grammar_node_t * child = node->list.children[i];
-        if (child && (is_type_node(child) || child->type == AST_NODE_IDENTIFIER))
+        if (child == NULL)
+            continue;
+        // Skip the POLY_IDENT that was used as the size
+        if (child == size_node)
+            continue;
+        if (child->type == AST_NODE_IDENTIFIER || is_type_node(child))
         {
             elem_type_node = child;
             break;
@@ -313,37 +366,6 @@ sem_resolve_array_type(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * elem_type = sem_resolve_type_expr(ctx, elem_type_node);
     if (elem_type == NULL)
         return NULL;
-
-    size_t count = 0;
-    if (size_node && size_node->text)
-    {
-        count = (size_t)parse_odin_unsigned(size_node->text, NULL, 0);
-    }
-    else
-    {
-        // Try PolyIdent for $N during poly instantiation
-        size_node = node_find_child(node, AST_NODE_POLY_IDENT);
-        if (size_node && size_node->text)
-        {
-            char const * poly_name = size_node->text;
-            if (poly_name[0] == '$')
-                poly_name++;
-            long long val = 0;
-            if (poly_env_lookup_int(ctx, poly_name, &val))
-                count = (size_t)val;
-        }
-        else
-        {
-            // Try Identifier for bare T (declared by preceding $T: typeid param)
-            size_node = node_find_child(node, AST_NODE_IDENTIFIER);
-            if (size_node && size_node->text)
-            {
-                long long val = 0;
-                if (poly_env_lookup_int(ctx, size_node->text, &val))
-                    count = (size_t)val;
-            }
-        }
-    }
 
     TypeDescriptor const * arr_type = get_or_create_array_type(ctx->type_registry, elem_type, count);
     if (arr_type)

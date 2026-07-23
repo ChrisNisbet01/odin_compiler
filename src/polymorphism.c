@@ -780,6 +780,91 @@ poly_build_env_from_args(
 // Recursively walk a parameter's type AST, matching structure against a
 // concrete arg type descriptor. When an AST_NODE_POLY_IDENT is found (e.g.,
 // $N in [$N]int), bind it from the corresponding field of the arg type.
+
+// Bind a poly ident name to a type in the env.
+static void
+poly_env_bind_type(PolyEnv * env, char const * name, TypeDescriptor const * td)
+{
+    bool already = false;
+    for (int ei = 0; ei < env->count; ei++)
+    {
+        if (strcmp(env->entries[ei].name, name) == 0)
+        {
+            already = true;
+            if (env->entries[ei].kind == POLY_SLOT_TYPE
+                && env->entries[ei].bound_type == NULL)
+                env->entries[ei].bound_type = td;
+            break;
+        }
+    }
+    if (!already && env->count < MAX_POLY_ENV_ENTRIES)
+    {
+        env->entries[env->count].name = strdup(name);
+        env->entries[env->count].kind = POLY_SLOT_TYPE;
+        env->entries[env->count].bound_type = td;
+        env->count++;
+    }
+}
+
+// Bind a poly ident name to an integer in the env.
+static void
+poly_env_bind_int(PolyEnv * env, char const * name, long long val)
+{
+    bool already = false;
+    for (int ei = 0; ei < env->count; ei++)
+    {
+        if (strcmp(env->entries[ei].name, name) == 0)
+        {
+            already = true;
+            if (env->entries[ei].kind == POLY_SLOT_INT
+                && env->entries[ei].bound_int_value == 0 && val > 0)
+                env->entries[ei].bound_int_value = val;
+            break;
+        }
+    }
+    if (!already && env->count < MAX_POLY_ENV_ENTRIES)
+    {
+        env->entries[env->count].name = strdup(name);
+        env->entries[env->count].kind = POLY_SLOT_INT;
+        env->entries[env->count].bound_int_value = val;
+        env->count++;
+    }
+}
+
+// Strip leading '$' from a name and bind a POLY_IDENT node to a type.
+static void
+poly_bind_poly_ident_type(odin_grammar_node_t * node,
+                          TypeDescriptor const * td, PolyEnv * env)
+{
+    char const * name = node->text;
+    if (name == NULL) return;
+    if (name[0] == '$') name++;
+    poly_env_bind_type(env, name, td);
+}
+
+// Scan children of a type AST node for POLY_IDENTs and recurse into
+// nested type nodes, binding against the given element type.
+static void
+poly_scan_children_for_poly_idents(
+    odin_grammar_node_t * param_ast,
+    TypeDescriptor const * elem_td,
+    PolyEnv * env)
+{
+    for (size_t i = 0; i < param_ast->list.count; i++)
+    {
+        odin_grammar_node_t * child = param_ast->list.children[i];
+        if (child == NULL) continue;
+        if (child->type == AST_NODE_POLY_IDENT)
+        {
+            poly_bind_poly_ident_type(child, elem_td, env);
+        }
+        else if (is_type_node(child))
+        {
+            poly_unify_poly_idents_in_type(NULL, child, elem_td, env);
+        }
+    }
+}
+
 static void
 poly_unify_poly_idents_in_type(
     SemContext * ctx,
@@ -793,60 +878,80 @@ poly_unify_poly_idents_in_type(
 
     if (param_ast->type == AST_NODE_ARRAY_TYPE && arg_td->kind == TD_KIND_ARRAY)
     {
-        // Walk children: find POLY_IDENT (array size) and recurse into
-        // element type.
+        // Walk children: find POLY_IDENTs and recurse into type nodes.
+        // For [$N]$T: first POLY_IDENT is size (bind int), remaining
+        // type subtree contains the element type.
         for (size_t i = 0; i < param_ast->list.count; i++)
         {
             odin_grammar_node_t * child = param_ast->list.children[i];
-            if (child == NULL)
-                continue;
-
+            if (child == NULL) continue;
             if (child->type == AST_NODE_POLY_IDENT)
             {
-                // $N in array size position — bind from arg's array count
-                char const * name = child->text;
-                if (name == NULL)
-                    continue;
-                if (name[0] == '$')
-                    name++;
+                char const * raw = child->text;
+                if (raw == NULL) continue;
+                char const * name = (raw[0] == '$') ? raw + 1 : raw;
 
-                bool already = false;
+                // Check if already bound as int (from a previous pass)
+                bool already_bound = false;
                 for (int ei = 0; ei < env->count; ei++)
                 {
                     if (strcmp(env->entries[ei].name, name) == 0)
                     {
-                        already = true;
-                        // Fill in a placeholder if this is an int slot with value 0
+                        already_bound = true;
                         if (env->entries[ei].kind == POLY_SLOT_INT
                             && env->entries[ei].bound_int_value == 0
                             && arg_td->as.array.count > 0)
-                        {
                             env->entries[ei].bound_int_value =
                                 (long long)arg_td->as.array.count;
-                        }
                         break;
                     }
                 }
-                if (!already && env->count < MAX_POLY_ENV_ENTRIES)
+                if (!already_bound)
                 {
-                    env->entries[env->count].name = strdup(name);
-                    env->entries[env->count].kind = POLY_SLOT_INT;
-                    env->entries[env->count].bound_int_value =
-                        (long long)arg_td->as.array.count;
-                    env->count++;
+                    // First encounter of this POLY_IDENT in the array.
+                    // Heuristic: if it's the first child and there are
+                    // more children, it's the size position (bind int).
+                    // Otherwise, it's the element type (bind type).
+                    if (i == 0 && param_ast->list.count > 1)
+                        poly_env_bind_int(env, name,
+                                          (long long)arg_td->as.array.count);
+                    else if (arg_td->element_type != NULL)
+                        poly_env_bind_type(env, name, arg_td->element_type);
                 }
             }
             else if (is_type_node(child) || child->type == AST_NODE_IDENTIFIER)
             {
-                // Recurse into element type (matches the structure of the
-                // concrete arg's element type)
                 poly_unify_poly_idents_in_type(
                     ctx, child, arg_td->element_type, env);
             }
         }
     }
-    // Other composite types (slice, dynamic_array, etc.) could be extended
-    // here in the future to handle $N in their size/length fields.
+    // Slice: []$T
+    else if (param_ast->type == AST_NODE_SLICE_TYPE && arg_td->kind == TD_KIND_SLICE)
+    {
+        poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+    }
+    // Dynamic array: [dynamic]$T
+    else if (param_ast->type == AST_NODE_DYNAMIC_ARRAY_TYPE && arg_td->kind == TD_KIND_DYNAMIC_ARRAY)
+    {
+        poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+    }
+    // Multi-pointer: [|^]$T
+    else if (param_ast->type == AST_NODE_MULTI_POINTER_TYPE && arg_td->kind == TD_KIND_MULTI_POINTER)
+    {
+        poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+    }
+    // Pointer: ^$T
+    else if (param_ast->type == AST_NODE_POINTER_TYPE && arg_td->kind == TD_KIND_POINTER)
+    {
+        poly_scan_children_for_poly_idents(param_ast, arg_td->pointee, env);
+    }
+    // Maybe: Maybe($T)
+    else if (param_ast->type == AST_NODE_MAYBE_TYPE && arg_td->kind == TD_KIND_MAYBE)
+    {
+        poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+    }
+    // Other composite types could be extended here in the future.
 }
 
 // =========================================================================
