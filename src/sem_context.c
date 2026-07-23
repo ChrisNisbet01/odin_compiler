@@ -101,6 +101,7 @@ sem_context_init(
     ctx->import_stack_count = 0;
     ctx->import_stack_capacity = 0;
     ctx->currently_instantiating = false;
+    ctx->poly_expected_return_type = NULL;
     ctx->poly_env_stack = NULL;
     ctx->poly_env_stack_depth = 0;
     ctx->poly_env_stack_capacity = 0;

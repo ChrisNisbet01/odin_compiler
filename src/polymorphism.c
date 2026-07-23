@@ -944,6 +944,142 @@ poly_cache_store(char const * mangled_name, PolySpecialization * spec)
 }
 
 // =========================================================================
+// Stage 12: Return-position poly-binding fallback
+//
+// When a poly proc has `$T` in the return position but NOT in any
+// parameter position, `poly_build_env_from_args` cannot derive a binding
+// from args. The surrounding context (e.g. `r: int = poly_call()`) sets
+// `ctx->poly_expected_return_type` before invoking the call, and this
+// helper walks the proc's AST_NODE_RETURNS subtree to find every
+// `AST_NODE_POLY_IDENT` and bind it to that expected type.
+// =========================================================================
+
+// Walk the RETURNS subtree and collect distinct poly-ident names.
+// `seen_names` / `seen_count` deduplicates within this call.
+static void
+poly_collect_return_poly_idents(odin_grammar_node_t const * node,
+                                 char const * seen_names[MAX_POLY_ENV_ENTRIES],
+                                 int * seen_count)
+{
+    if (node == NULL || *seen_count >= MAX_POLY_ENV_ENTRIES)
+        return;
+
+    if (node->type == AST_NODE_POLY_IDENT)
+    {
+        char const * name = node->text;
+        if (name == NULL)
+            return;
+        // Strip leading '$' if present (poly idents store text like "T").
+        if (name[0] == '$')
+            name++;
+        // Dedup
+        for (int i = 0; i < *seen_count; i++)
+        {
+            if (strcmp(seen_names[i], name) == 0)
+                return;
+        }
+        seen_names[(*seen_count)++] = name;
+        return;
+    }
+    // Also pick up bare identifiers whose name matches a poly slot we
+    // already created (the shorthand `proc() -> T` form, where `T` was
+    // declared via `$T: typeid` in the parameter list). For the
+    // return-position-only case, we only collect POLY_IDENTs here;
+    // the bare-`T` form is handled by poly_env_lookup_type when it
+    // resolves the type node.
+    for (size_t i = 0; i < node->list.count; i++)
+        poly_collect_return_poly_idents(node->list.children[i], seen_names, seen_count);
+}
+
+// Try to fill any empty slots in `env` using the return-position poly idents.
+// Returns true if at least one new binding was added (i.e. the env now has
+// at least one slot with a non-NULL bound_type that was previously unset).
+static bool
+poly_bind_from_return_type(SemContext * ctx,
+                           odin_grammar_node_t * proc_def,
+                           PolyEnv * env,
+                           TypeDescriptor const * expected_return_type){
+    if (proc_def == NULL || expected_return_type == NULL)
+        return false;
+    (void)ctx;
+
+    // Find the ProcedureSignature then the AST_NODE_RETURNS inside it.
+    odin_grammar_node_t * proc_sig = NULL;
+    for (size_t i = 0; i < proc_def->list.count; i++)
+    {
+        odin_grammar_node_t * child = proc_def->list.children[i];
+        if (child && child->type == AST_NODE_PROCEDURE_SIGNATURE)
+        {
+            proc_sig = child;
+            break;
+        }
+    }
+    if (proc_sig == NULL)
+        return false;
+
+    odin_grammar_node_t * returns_node = NULL;
+    for (size_t i = 0; i < proc_sig->list.count; i++)
+    {
+        odin_grammar_node_t * child = proc_sig->list.children[i];
+        if (child && child->type == AST_NODE_RETURNS)
+        {
+            returns_node = child;
+            break;
+        }
+    }
+    if (returns_node == NULL)
+        return false;
+
+    // Collect distinct poly-ident names in the return subtree.
+    char const * seen_names[MAX_POLY_ENV_ENTRIES];
+    int seen_count = 0;
+    poly_collect_return_poly_idents(returns_node, seen_names, &seen_count);
+    if (seen_count == 0)
+        return false;
+
+    // For the simple case of a single poly var, bind it to expected_return_type.
+    // If there are multiple poly vars, we cannot disambiguate which one
+    // corresponds to the expected type — defer (return false).
+    if (seen_count != 1)
+        return false;
+
+    char const * name = seen_names[0];
+
+    // If a slot for this name already exists with a binding, don't override.
+    for (int i = 0; i < env->count; i++)
+    {
+        if (env->entries[i].kind == POLY_SLOT_TYPE
+            && env->entries[i].name != NULL
+            && strcmp(env->entries[i].name, name) == 0
+            && env->entries[i].bound_type != NULL)
+        {
+            return false; // already bound
+        }
+    }
+
+    // Create or fill a slot binding this poly name to the expected type.
+    for (int i = 0; i < env->count; i++)
+    {
+        if (env->entries[i].kind == POLY_SLOT_TYPE
+            && env->entries[i].name != NULL
+            && strcmp(env->entries[i].name, name) == 0)
+        {
+            env->entries[i].bound_type = expected_return_type;
+            return true;
+        }
+    }
+    // No existing slot — create a new one (the name wasn't declared via
+    // `$T: typeid` parameter; it only appears in the return type as `$T`).
+    if (env->count >= MAX_POLY_ENV_ENTRIES)
+        return false;
+    env->entries[env->count].name = strdup(name);
+    env->entries[env->count].kind = POLY_SLOT_TYPE;
+    env->entries[env->count].bound_type = expected_return_type;
+    env->count++;
+    return true;
+}
+
+// =========================================================================
 // poly_resolve_call — the core instantiation logic
 // =========================================================================
 
@@ -985,9 +1121,41 @@ poly_resolve_call(
         return NULL;
     }
 
-    // Build PolyEnv from arg types
+    // Build PolyEnv from arg types (Stage 1-8: binds $T/$N from concrete args).
     PolyEnv env;
     if (!poly_build_env_from_args(ctx, poly_symbol, proc_def, arg_list_node, &env))
+    {
+        // Stage 12: If the env build failed (e.g., $T appears only in the
+        // return position — no parameter binding), try to bind $T from the
+        // surrounding context via `ctx->poly_expected_return_type`.
+        if (ctx->poly_expected_return_type != NULL
+            && poly_bind_from_return_type(ctx, proc_def, &env,
+                                            ctx->poly_expected_return_type))
+        {
+            // Fallback succeeded — env now has at least one binding.
+        }
+        else
+        {
+            sem_error_list_add(&ctx->errors, NULL, call_op,
+                               "failed to build polymorphic environment from arguments");
+            return NULL;
+        }
+    }
+    else
+    {
+        // Stage 12: Even if poly_build_env_from_args succeeded, there may
+        // be a return-position $T that wasn't bound (because no parameter
+        // referenced it). Try the fallback to fill any remaining unbound
+        // type slots from the expected return type.
+        if (ctx->poly_expected_return_type != NULL)
+            poly_bind_from_return_type(ctx, proc_def, &env,
+                                         ctx->poly_expected_return_type);
+    }
+
+    // Guard: if the env is empty but the proc is polymorphic, we have no
+    // bindings and cannot specialize. This catches the case of `$T` only
+    // appearing in the return position with no argument-derived bindings.
+    if (env.count == 0)
     {
         sem_error_list_add(&ctx->errors, NULL, call_op,
                            "failed to build polymorphic environment from arguments");

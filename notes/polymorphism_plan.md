@@ -877,16 +877,42 @@ the non-package branch. The fix needed only ~50 lines added to the
 package branch — no shared helper was extracted because the call
 expression node layout differs slightly between branches.
 
-#### Stage 12: Polymorphic return-type inference via `auto_cast` / untyped literals — NEXT
+#### Stage 12: Polymorphic return-type inference via `auto_cast` / untyped literals — IN PROGRESS
 
-**Goal**: Allow `proc identity() -> $T { return 0 }` where `T` is inferred
-from the return-type context at the call site rather than from an
-argument. Currently out of scope (tests always bind `$T`/`$U` via a
-parameter).
+**Goal**: Allow `proc default_value() -> $T { return 0 }` where `T` is inferred
+from the return-type context at the call site (e.g., `r: int = default_value()`)
+rather than from an argument. 
 
-**Current status**: Not started. Marked "out of scope" in the original
-plan. Would require reverse-propagation of expected return type into the
-poly env.
+**Implementation** (partial):
+
+1. **`SemContext::poly_expected_return_type`** — new field in `SemContext`
+   (threaded through to `poly_resolve_call`). Initialized to NULL in
+   `sem_context_init`.
+
+2. **Var decl handler threading** — `semantic_analyser.c:1687-1703` saves/restores
+   `ctx->poly_expected_return_type` and sets it to `var_type` when
+   `type_node != NULL && var_type != NULL` before evaluating the init expression.
+
+3. **Empty env guard** — `poly_build_env_from_args` returns TRUE for
+   0-param/0-arg poly procs, producing an empty env. Added guard at
+   `polymorphism.c:1158` that returns NULL when `env.count == 0`.
+
+4. **`poly_bind_from_return_type`** — walks `AST_NODE_RETURNS` subtree,
+   collects `AST_NODE_POLY_IDENT` names, and binds a single return-position
+   poly var to the expected return type. Used as fallback in both the
+   failed-env-build path and the succeeded-but-empty-env path.
+
+**Limitations**:
+- `return 0` in `-> $T` where T=f64 fails because `sem_can_implicitly_convert`
+  only allows integer→integer and float→float for untyped literals. The literal
+  `0` has `AST_NODE_INTEGER_VALUE` inner type. Needs extension for cross-kind
+  coercion of untyped numeric literals.
+- Only works for single-poly-var return positions.
+
+**Tests**: `test_poly_return_inference.odin` (5 subtests: zero_value → int/i64/u32,
+one_value → int, identity with param+return $T).
+`expected_to_fail/test_poly_return_unbound.odin` (unbound $T with := → error).
+**177/177 tests passing**.
 
 #### Stage 13: `$T` in nested type positions
 
@@ -924,9 +950,10 @@ sites (variable declarations, field access).
   filtering, and cross-package polymorphic procs). Explicit `$T: typeid`
   / `$N: int` parameter syntax verified. **Polymorphic forward
   declarations verified** (no code changes needed — `poly_register_origin`
-  overwrites on re-registration). **175/175 tests passing**. Remaining:
-  Stages 12–14 (return-type inference, nested types, polymorphic
-  aggregates).
+  overwrites on re-registration). **177/177 tests passing**. Stage 12
+  partially complete (return-type inference works for integer-returning
+  procs; untyped literal cross-kind coercion is a pre-existing semantic
+  limitation). Remaining: Stages 12 (finish), 13, 14.
 
 ## Risks / Open Concerns
 

@@ -476,6 +476,15 @@ The `@AST_ACTION_POSTFIX_SLICE` action is shared between `PostfixOpSlice` (for `
 - **Tests**: `test_poly_cross_pkg.odin` (package-qualified poly calls — int, float, where-clause, two-param, size_of where, non-poly baseline), `test_poly_cross_pkg_using.odin` (`import using` unqualified poly calls), `test_poly_cross_pkg_bundle.odin` (cross-package overload bundle dispatch), `expected_to_fail/test_poly_cross_pkg_where_mismatch.odin` (cross-package where-clause mismatch correctly produces compile error).
 - **All 175 tests pass** (171 previous + 3 new regular + 1 new expected-to-fail).
 
+### Implemented return-type inference for poly procs (Stage 12 — partial)
+- **Root cause of segfault (uninitialized `poly_expected_return_type`)**: `SemContext::poly_expected_return_type` was never initialized to NULL in `sem_context_init`. The stack-allocated `SemContext` had garbage, which passed the `!= NULL` check in `poly_resolve_call`'s fallback path, causing `poly_bind_from_return_type` to operate on a garbage pointer. **Fix**: Added `ctx->poly_expected_return_type = NULL;` in `sem_context_init`.
+- **Empty env guard**: `poly_build_env_from_args` returns TRUE for 0-param/0-arg poly procs (e.g. `proc() -> $T`), producing an empty env. Added a post-build guard at `polymorphism.c:1158` that returns NULL with a compile error when `env.count == 0` (can't specialize without any bindings).
+- **Var decl handler threading**: `semantic_analyser.c:1687-1703` now saves/restores `ctx->poly_expected_return_type` and sets it to the declared variable type when `type_node != NULL && var_type != NULL` before evaluating the initializer expression.
+- **`poly_bind_from_return_type`** (`polymorphism.c:998`): Walks `AST_NODE_RETURNS` subtree, collects `AST_NODE_POLY_IDENT` names via `poly_collect_return_poly_idents`. For a single poly var in return position, binds it to the expected return type. Used as fallback in both the failed-env-build path and the succeeded-but-empty-env path.
+- **Tests**: `test_poly_return_inference.odin` (5 subtests: `zero_value() -> $T` with int/i64/u32 specialization, `one_value() -> $T` returning 1, mixed param+return `$T` via `identity`). `expected_to_fail/test_poly_return_unbound.odin` (unbound `$T` with `:=` syntax produces compile error).
+- **All 177 tests pass** (175 previous + 1 new regular + 1 new expected-to-fail).
+- **Remaining limitation**: `return 0` in a `-> $T` proc where `T=f64` fails "return type mismatch" because `sem_can_implicitly_convert` only allows integer→integer and float→float for literals. The untyped literal `0` has `AST_NODE_INTEGER_VALUE` inner type. Extending this requires either treating untyped numeric literals as cross-kind convertible or special-casing integer literals for float coercion. This is a pre-existing semantic limitation, not a Stage 12 bug.
+
 ## Accomplishments (session 2026-07-14, continued)
 
 ### Implemented exhaustiveness checking for enum switches

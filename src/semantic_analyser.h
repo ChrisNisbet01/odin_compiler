@@ -46,6 +46,15 @@ typedef struct SemContext
     // analyzed normally.
     bool currently_instantiating;
 
+    // Stage 12: Expected return type for poly calls where `$T` appears in
+    // the return position only (no param binding from args). The
+    // surrounding variable declaration (e.g. `r: int = poly_call()`)
+    // threads its declared type down via this field so `poly_resolve_call`
+    // can use it as a fallback binding for the return-position poly var.
+    // NULL most of the time; set transiently around `sem_evaluate_expr`
+    // call sites that have an expected type. Always reset to NULL after.
+    TypeDescriptor const * poly_expected_return_type;
+
     // Poly env stack (env-stack approach — no AST clone).
     // Dynamic array: each entry is a PolyEnv with type/int bindings for poly vars.
     PolyEnv * poly_env_stack;

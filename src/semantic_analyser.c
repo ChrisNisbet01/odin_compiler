@@ -1679,6 +1679,15 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
 
         if (init_node)
         {
+            // Stage 12: When the variable has an explicit declared type
+            // (e.g. `r: int = poly_call()`), thread the declared type down
+            // to `sem_evaluate_expr` via the poly_expected_return_type
+            // context field. This lets `poly_resolve_call` bind `$T` for
+            // poly procs that have `$T` in the return position only.
+            TypeDescriptor const * prev_expected = ctx->poly_expected_return_type;
+            if (type_node != NULL && var_type != NULL)
+                ctx->poly_expected_return_type = var_type;
+
             TypeDescriptor const * init_type = sem_evaluate_expr(ctx, init_node);
             if (type_node == NULL)
             {
@@ -1689,6 +1698,9 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 // Check init type is compatible with declared variable type
                 sem_check_assignment(ctx, node, var_type, init_type, init_node);
             }
+
+            // Always restore the previous expected type (could be NULL).
+            ctx->poly_expected_return_type = prev_expected;
 
             // Tuple destructuring: a, b := some_tuple
             if (id_count > 1 && init_type != NULL && init_type->kind == TD_KIND_TUPLE)
