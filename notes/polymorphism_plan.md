@@ -968,7 +968,7 @@ sites (variable declarations, field access).
   `$T` in nested type positions). Explicit `$T: typeid` / `$N: int`
   parameter syntax verified. Polymorphic forward declarations verified.
   Integer→float coercion for untyped literals implemented.
-  **178/178 tests passing**. Remaining: Stage 14 (polymorphic aggregates).
+  **179/179 tests passing**. Remaining: Stage 14 (polymorphic aggregates).
   Full untyped literal architecture designed in
   `notes/untyped_literals_plan.md`.
 

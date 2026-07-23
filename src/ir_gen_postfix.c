@@ -102,6 +102,21 @@ ir_gen_collect_single_arg(IrGenContext * ctx, odin_grammar_node_t * node, LLVMVa
     args[0] = ir_gen_node(ctx, node);
     if (arg_types)
         arg_types[0] = node->resolved_type;
+
+    // If the value is an alloca pointer to a composite type (slice, struct,
+    // array, etc.), load it. ir_gen_identifier deliberately returns alloca
+    // pointers for composites (needed for GEP/subscript/member access), but
+    // function call arguments need the actual value.
+    if (args[0] != NULL
+        && node->resolved_type != NULL
+        && LLVMGetTypeKind(LLVMTypeOf(args[0])) == LLVMPointerTypeKind
+        && node->resolved_type->llvm_type != NULL
+        && LLVMTypeOf(args[0]) != node->resolved_type->llvm_type)
+    {
+        args[0] = LLVMBuildLoad2(ctx->builder, node->resolved_type->llvm_type,
+                                  args[0], "arg.load");
+    }
+
     return args[0] ? 1 : 0;
 }
 

@@ -1,5 +1,11 @@
 ## Accomplishments (session 2026-07-23, continued)
 
+### Fixed composite type argument passing (slice/struct/array values)
+- **Root cause**: `ir_gen_identifier` deliberately returns alloca pointers for composite types (`TD_KIND_SLICE`, `TD_KIND_STRUCT`, `TD_KIND_ARRAY`, etc.) instead of loading — needed for GEP/subscript/member access. But `ir_gen_collect_single_arg` (in `ir_gen_postfix.c:101-105`) passed these raw alloca pointers directly to function calls. The function signature expects e.g. `{ ptr, i64 }` (the actual struct value) but received `ptr` (pointer to the alloca), causing the callee to interpret the pointer bits as struct fields.
+- **Affected operations**: `make([]int, N)` followed by function call, `arr[:]` full-slice followed by function call, any composite type passed as a call argument. Direct access (`s[0]`, `s.field`) worked fine because GEP operates on the alloca pointer.
+- **Fix in `ir_gen_collect_single_arg`**: After `ir_gen_node` returns a value, checks if LLVM type is pointer but the resolved type's `llvm_type` is a different (struct) type. If so, inserts `LLVMBuildLoad2` to load the actual value before passing to the callee. This is a centralized fix — covers all composite types uniformly.
+- **Tests**: `test_slice_passing.odin` (6 subtests: `make()` first/sum, `arr[:]` first/sum, direct access regression checks). **All 179 tests pass**.
+
 ### Implemented `$T` in nested type positions (Stage 13)
 - **Root cause of `[$N]$T` array resolution failure**: Adding `[AST_NODE_POLY_IDENT] = true` to `is_type_node_table` (in `ast_utils.c`) caused `sem_resolve_array_type` to misidentify `$N` as the element type instead of the size. `is_type_node($N)` returned true, so the element-type search loop at `sem_type_resolver.c:301` picked up `$N` before `$T`. Resolving `$N` as a type failed (it's an integer param), returning NULL.
 - **Fix in `sem_resolve_array_type`**: Reordered to determine array size BEFORE searching for element type. Now: (1) try IntegerLiteral, (2) try PolyIdent with `poly_env_lookup_int`, (3) try bare Identifier with `poly_env_lookup_int`. The consumed size node is tracked; the element-type search skips it. This prevents `$N` from being misclassified as the element type.
