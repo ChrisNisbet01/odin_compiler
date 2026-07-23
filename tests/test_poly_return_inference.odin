@@ -34,12 +34,16 @@ main :: proc() {
 	c: u32 = zero_value()
 	if c != 0 do os.exit(3)
 
-	// (4) `one_value` with int specialization returns 1
+	// (4) f64 specialization — integer literal `0` coerces to f64
+	f: f64 = zero_value()
+	fmt.printf("f64 zero: %f\n", f)
+
+	// (5) `one_value` with int specialization returns 1
 	d: int = one_value()
 	fmt.printf("int one: %d\n", d)
 	if d != 1 do os.exit(4)
 
-	// (5) Mixed: regular poly call (param-binding path) still works
+	// (6) Mixed: regular poly call (param-binding path) still works
 	e: int = identity(42)
 	fmt.printf("identity(42): %d\n", e)
 	if e != 42 do os.exit(5)

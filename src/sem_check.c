@@ -32,9 +32,11 @@ sem_can_implicitly_convert(
         {
             inner = inner->list.children[0];
         }
-        if (inner != NULL && inner->type == AST_NODE_INTEGER_VALUE && is_integer_kind(to_type))
+        if (inner != NULL && inner->type == AST_NODE_INTEGER_VALUE
+            && (is_integer_kind(to_type) || is_floating_kind(to_type)))
             return true;
-        if (inner != NULL && inner->type == AST_NODE_FLOAT_VALUE && is_floating_kind(to_type))
+        if (inner != NULL && inner->type == AST_NODE_FLOAT_VALUE
+            && (is_floating_kind(to_type) || is_integer_kind(to_type)))
             return true;
     }
     return false;
