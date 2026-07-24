@@ -379,9 +379,13 @@ StructLitExpr = (TypeApplication | Identifier) LBrace StructLitFields RBrace @AS
 StructLitField = Identifier Assign AssignExpression @AST_ACTION_STRUCT_LIT_FIELD;
 StructLitFields = delimited_flex(StructLitField, Comma) Comma? @AST_ACTION_STRUCT_LIT_FIELDS;
 
-// ExpressionOrStructLit: tries struct literal first (for positions where { is unambiguous),
+// Array literal: [N]T{val0, val1, ...}
+ArrayLitExpr = ArrayType LBrace ArrayLitElements? RBrace @AST_ACTION_ARRAY_LIT_EXPR;
+ArrayLitElements = delimited_flex(AssignExpression, Comma) Comma? @AST_ACTION_ARRAY_LIT_ELEMENTS;
+
+// ExpressionOrStructLit: tries compound literals first (for positions where { is unambiguous),
 // falls back to plain expression.
-ExpressionOrStructLit = StructLitExpr | Expression;
+ExpressionOrStructLit = StructLitExpr | ArrayLitExpr | Expression;
 
 PrimaryExpression = StringLiteral | RawStringLiteral | RuneLiteral
                   | FloatLiteral | IntegerLiteral

@@ -431,6 +431,8 @@ DEFINE_ACTION(ast_action_type_application_action, AST_NODE_TYPE_APPLICATION, fal
 DEFINE_ACTION(ast_action_struct_lit_expr_action, AST_NODE_STRUCT_LIT_EXPR, false)
 DEFINE_ACTION(ast_action_struct_lit_field_action, AST_NODE_STRUCT_LIT_FIELD, false)
 DEFINE_ACTION(ast_action_struct_lit_fields_action, AST_NODE_STRUCT_LIT_FIELDS, false)
+DEFINE_ACTION(ast_action_array_lit_expr_action, AST_NODE_ARRAY_LIT_EXPR, false)
+DEFINE_ACTION(ast_action_array_lit_elements_action, AST_NODE_ARRAY_LIT_ELEMENTS, false)
 // --- Terminal nodes (text captured for semantic use) ---
 DEFINE_TERMINAL_ACTION(ast_action_identifier_action, AST_NODE_IDENTIFIER)
 DEFINE_TERMINAL_ACTION(ast_action_poly_ident_action, AST_NODE_POLY_IDENT)
@@ -576,6 +578,8 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_STRUCT_LIT_EXPR, ast_action_struct_lit_expr_action);
     REGISTER(AST_ACTION_STRUCT_LIT_FIELD, ast_action_struct_lit_field_action);
     REGISTER(AST_ACTION_STRUCT_LIT_FIELDS, ast_action_struct_lit_fields_action);
+    REGISTER(AST_ACTION_ARRAY_LIT_EXPR, ast_action_array_lit_expr_action);
+    REGISTER(AST_ACTION_ARRAY_LIT_ELEMENTS, ast_action_array_lit_elements_action);
     REGISTER(AST_ACTION_INTEGER_BASE, ast_action_integer_base_action);
     REGISTER(AST_ACTION_INTEGER_VALUE, ast_action_integer_value_action);
     REGISTER(AST_ACTION_FLOAT_BASE, ast_action_float_base_action);

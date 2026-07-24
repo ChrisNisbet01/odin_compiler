@@ -2,9 +2,7 @@
 
 #include "odin_grammar_ast.h"
 
-#define AST_NODE_TYPE_COUNT (AST_NODE_STRUCT_LIT_FIELDS + 1)
-
-static bool const is_type_node_table[AST_NODE_TYPE_COUNT] = {
+static bool const is_type_node_table[AST_NODE_COUNT] = {
     [AST_NODE_BASIC_TYPE] = true,
     [AST_NODE_POINTER_TYPE] = true,
     [AST_NODE_ARRAY_TYPE] = true,
@@ -35,7 +33,7 @@ is_type_node(odin_grammar_node_t * node)
 {
     if (node == NULL)
         return false;
-    if ((size_t)node->type >= AST_NODE_TYPE_COUNT)
+    if ((size_t)node->type >= AST_NODE_COUNT)
         return false;
     return is_type_node_table[node->type];
 }

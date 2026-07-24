@@ -331,6 +331,10 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "StructLitField";
     case AST_NODE_STRUCT_LIT_FIELDS:
         return "StructLitFields";
+    case AST_NODE_ARRAY_LIT_EXPR:
+        return "ArrayLitExpr";
+    case AST_NODE_ARRAY_LIT_ELEMENTS:
+        return "ArrayLitElements";
     }
     return "Unknown";
 }

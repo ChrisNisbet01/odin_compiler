@@ -2010,6 +2010,77 @@ ir_gen_struct_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     return result;
 }
 
+// --- ArrayLitExpr: [3]int{10, 20, 30} ---
+static LLVMValueRef
+ir_gen_array_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->resolved_type == NULL)
+        return NULL;
+    TypeDescriptor const * array_type = node->resolved_type;
+    if (array_type->kind != TD_KIND_ARRAY)
+        return NULL;
+    LLVMTypeRef llvm_type = array_type->llvm_type;
+    if (llvm_type == NULL)
+        return NULL;
+
+    // Start with undef array, then insert each element.
+    LLVMValueRef result = LLVMGetUndef(llvm_type);
+
+    // Find the optional ArrayLitElements child.
+    odin_grammar_node_t * elements_node = NULL;
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        if (node->list.children[i] != NULL
+            && node->list.children[i]->type == AST_NODE_ARRAY_LIT_ELEMENTS)
+        {
+            elements_node = node->list.children[i];
+            break;
+        }
+    }
+    if (elements_node == NULL)
+        return result; // empty literal: return undef (zero-init by caller)
+
+    TypeDescriptor const * elem_type = array_type->element_type;
+    LLVMTypeRef elem_llvm_type = elem_type ? elem_type->llvm_type : NULL;
+
+    unsigned idx = 0;
+    for (size_t i = 0; i < elements_node->list.count && idx < array_type->as.array.count; i++)
+    {
+        odin_grammar_node_t * elem = elements_node->list.children[i];
+        if (elem == NULL)
+            continue;
+        LLVMValueRef val = ir_gen_node(ctx, elem);
+        if (val == NULL)
+            continue;
+
+        // If element is a composite-typed identifier (array/struct/slice),
+        // ir_gen_node returns the alloca pointer; load it.
+        if (elem_type != NULL && elem_llvm_type != NULL
+            && LLVMGetTypeKind(LLVMTypeOf(val)) == LLVMPointerTypeKind
+            && LLVMTypeOf(val) != elem_llvm_type
+            && (elem_type->kind == TD_KIND_ARRAY
+                || elem_type->kind == TD_KIND_STRUCT
+                || elem_type->kind == TD_KIND_SLICE))
+        {
+            val = LLVMBuildLoad2(ctx->builder, elem_llvm_type, val, "arrlit.load");
+        }
+
+        // Coerce scalar types when needed.
+        if (elem_llvm_type != NULL && LLVMTypeOf(val) != elem_llvm_type)
+        {
+            bool src_unsigned = (elem_type && elem_type->kind == TD_KIND_BASIC
+                                 && elem_type->as.basic.is_unsigned);
+            val = coerce_value_to_type(ctx, val, elem_llvm_type,
+                                       src_unsigned, "arrlit.elem");
+        }
+
+        result = LLVMBuildInsertValue(ctx->builder, result, val, idx, "arrlit.elem");
+        idx++;
+    }
+
+    return result;
+}
+
 static LLVMValueRef
 ir_gen_soa_zip_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -2418,6 +2489,9 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_STRUCT_LIT_EXPR:
         return ir_gen_struct_lit_expr(ctx, node);
+
+    case AST_NODE_ARRAY_LIT_EXPR:
+        return ir_gen_array_lit_expr(ctx, node);
 
     case AST_NODE_NIL:
     case AST_NODE_NONE:

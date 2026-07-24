@@ -41,6 +41,7 @@ static TypeDescriptor const * sem_evaluate_compress_values_expr(SemContext * ctx
 static TypeDescriptor const * sem_evaluate_soa_zip_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_soa_unzip_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_evaluate_array_lit_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_incl_excl_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_size_align_of_expr(SemContext * ctx, odin_grammar_node_t * node);
@@ -92,6 +93,7 @@ static TypeDescriptor const * (* const sem_evaluate_dispatch[])(SemContext *, od
     [AST_NODE_SOA_ZIP_EXPR] = sem_evaluate_soa_zip_expr,
     [AST_NODE_SOA_UNZIP_EXPR] = sem_evaluate_soa_unzip_expr,
     [AST_NODE_STRUCT_LIT_EXPR] = sem_evaluate_struct_lit_expr,
+    [AST_NODE_ARRAY_LIT_EXPR] = sem_evaluate_array_lit_expr,
     [AST_NODE_INCL_EXPR] = sem_evaluate_incl_excl_expr,
     [AST_NODE_EXCL_EXPR] = sem_evaluate_incl_excl_expr,
     [AST_NODE_COMPLEX_EXPR] = sem_evaluate_complex_quaternion_expr,
@@ -872,6 +874,69 @@ sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     node->resolved_type = (TypeDescriptor *)struct_type;
     return struct_type;
+}
+
+// --- ArrayLitExpr: [3]int{10, 20, 30} ---
+// Children: [ArrayType, ArrayLitElements?]
+static TypeDescriptor const *
+sem_evaluate_array_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1)
+    {
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
+    // First child is the ArrayType (e.g. [3]int)
+    odin_grammar_node_t * type_node = node->list.children[0];
+    if (type_node == NULL || type_node->type != AST_NODE_ARRAY_TYPE)
+    {
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
+    // Resolve the array type to get element type + count
+    TypeDescriptor const * array_type = sem_resolve_type_expr(ctx, type_node);
+    if (array_type == NULL)
+    {
+        sem_error_list_add(&ctx->errors, ctx->source_file_path, type_node,
+            "array literal: could not resolve array type");
+        node->resolved_type = NULL;
+        return NULL;
+    }
+    if (array_type->kind != TD_KIND_ARRAY)
+    {
+        sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+            "array literal: type is not an array");
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
+    // Find the optional ArrayLitElements child
+    odin_grammar_node_t * elements_node = NULL;
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        if (node->list.children[i] != NULL
+            && node->list.children[i]->type == AST_NODE_ARRAY_LIT_ELEMENTS)
+        {
+            elements_node = node->list.children[i];
+            break;
+        }
+    }
+
+    // Evaluate each element expression so IR gen has resolved_type on each
+    if (elements_node != NULL)
+    {
+        for (size_t i = 0; i < elements_node->list.count; i++)
+        {
+            odin_grammar_node_t * elem = elements_node->list.children[i];
+            if (elem != NULL)
+                sem_evaluate_expr(ctx, elem);
+        }
+    }
+
+    node->resolved_type = (TypeDescriptor *)array_type;
+    return array_type;
 }
 
 static TypeDescriptor const *
