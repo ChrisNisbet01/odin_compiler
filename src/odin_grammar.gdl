@@ -381,7 +381,9 @@ StructLitFields = delimited_flex(StructLitField, Comma) Comma? @AST_ACTION_STRUC
 
 // Array literal: [N]T{val0, val1, ...}
 ArrayLitExpr = ArrayType LBrace ArrayLitElements? RBrace @AST_ACTION_ARRAY_LIT_EXPR;
-ArrayLitElements = delimited_flex(AssignExpression, Comma) Comma? @AST_ACTION_ARRAY_LIT_ELEMENTS;
+// ArrayLitElement: allows struct literals, array literals, or plain expressions as elements
+ArrayLitElement = StructLitExpr | ArrayLitExpr | AssignExpression;
+ArrayLitElements = delimited_flex(ArrayLitElement, Comma) Comma? @AST_ACTION_ARRAY_LIT_ELEMENTS;
 
 // ExpressionOrStructLit: tries compound literals first (for positions where { is unambiguous),
 // falls back to plain expression.
