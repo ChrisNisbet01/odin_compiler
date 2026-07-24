@@ -268,6 +268,12 @@ print_value :: proc(fd: int, v: any) {
         print_f64(fd, v.(f64))
     } else if type_of(v) == type_of(f32) {
         print_f64(fd, f64(v.(f32)))
+    } else if type_of(v) == type_of(bool) {
+        if v.(bool) {
+            print_string(fd, "true")
+        } else {
+            print_string(fd, "false")
+        }
     } else {
         print_string(fd, "<?>")
     }
