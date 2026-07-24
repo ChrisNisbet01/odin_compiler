@@ -893,12 +893,26 @@ sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
     if (field_list == NULL || field_list->list.count == 0)
         return NULL;
 
-    // Count struct fields
+    // Count struct fields (multi-name fields like "x, y: int" count as multiple)
     int field_count = 0;
     for (size_t i = 0; i < field_list->list.count; i++)
     {
-        if (field_list->list.children[i] && field_list->list.children[i]->type == AST_NODE_STRUCT_FIELD)
-            field_count++;
+        odin_grammar_node_t * field = field_list->list.children[i];
+        if (field == NULL || field->type != AST_NODE_STRUCT_FIELD)
+            continue;
+        // Count Identifier children that are field names (appear before the type node)
+        for (size_t ci = 0; ci < field->list.count; ci++)
+        {
+            odin_grammar_node_t * child = field->list.children[ci];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_IDENTIFIER)
+                field_count++;
+            else if (child->type == AST_NODE_DIRECTIVE)
+                continue; // skip directives like #align
+            else
+                break; // first type node — stop counting names
+        }
     }
     if (field_count == 0)
         return NULL;
@@ -930,8 +944,11 @@ sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
         // Detect "using" keyword (stored as text by the struct field action)
         bool is_using = (field->text != NULL && strcmp(field->text, "using") == 0);
 
-        // Find field name (first Identifier child) and type (first type node child)
-        odin_grammar_node_t * name_node = NULL;
+        // Collect all identifier names and find the type node.
+        // Pattern: Identifier* (possibly multiple names like "x, y") followed by a type.
+        // If all children are Identifiers, the last one is the type (e.g. "val: T").
+        odin_grammar_node_t * name_nodes[32];
+        int name_count = 0;
         odin_grammar_node_t * type_node = NULL;
         uint32_t field_alignment = 0;
         for (size_t ci = 0; ci < field->list.count; ci++)
@@ -939,12 +956,10 @@ sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
             odin_grammar_node_t * child = field->list.children[ci];
             if (child == NULL)
                 continue;
-            if (child->type == AST_NODE_IDENTIFIER && name_node == NULL)
-                name_node = child;
-            else if (is_type_node(child))
-                type_node = child;
-            else if (child->type == AST_NODE_IDENTIFIER && name_node != NULL)
-                type_node = child;
+            if (child->type == AST_NODE_IDENTIFIER && type_node == NULL)
+            {
+                name_nodes[name_count++] = child;
+            }
             else if (child->type == AST_NODE_DIRECTIVE && child->text
                      && strcmp(child->text, "#align") == 0)
             {
@@ -953,34 +968,50 @@ sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
                     odin_grammar_node_t * align_val = field->list.children[ci + 1];
                     if (align_val && align_val->type == AST_NODE_INTEGER_VALUE && align_val->text)
                         field_alignment = (uint32_t)strtoull(align_val->text, NULL, 0);
+                    ci++; // skip the integer value child
                 }
             }
+            else
+            {
+                // First non-Identifier, non-directive child is the type
+                type_node = child;
+            }
+        }
+        // If all children were identifiers, the last one is the type (e.g. "val: T")
+        if (type_node == NULL && name_count > 1)
+        {
+            type_node = name_nodes[name_count - 1];
+            name_count--;
         }
 
-        if (name_node == NULL || name_node->text == NULL || type_node == NULL)
+        if (name_count == 0 || type_node == NULL)
             continue;
 
         TypeDescriptor const * ftype = sem_resolve_type_expr(ctx, type_node);
         if (ftype == NULL)
             continue;
 
-        if (is_soa)
+        // Register each name as a separate field with the same type
+        for (int ni = 0; ni < name_count && fi < field_count; ni++)
         {
-            TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, ftype);
-            if (slice_type == NULL)
-                continue;
-            field_types[fi] = slice_type;
-            llvm_field_types[fi] = slice_type->llvm_type;
+            if (is_soa)
+            {
+                TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, ftype);
+                if (slice_type == NULL)
+                    continue;
+                field_types[fi] = slice_type;
+                llvm_field_types[fi] = slice_type->llvm_type;
+            }
+            else
+            {
+                field_types[fi] = ftype;
+                llvm_field_types[fi] = ftype->llvm_type;
+            }
+            field_names[fi] = name_nodes[ni]->text;
+            field_is_using[fi] = is_using;
+            field_alignments[fi] = field_alignment;
+            fi++;
         }
-        else
-        {
-            field_types[fi] = ftype;
-            llvm_field_types[fi] = ftype->llvm_type;
-        }
-        field_names[fi] = name_node->text;
-        field_is_using[fi] = is_using;
-        field_alignments[fi] = field_alignment;
-        fi++;
     }
 
     if (fi == 0)
