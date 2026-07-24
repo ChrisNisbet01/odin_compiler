@@ -1535,6 +1535,23 @@ collect_parameters_from_param_list(odin_grammar_node_t * param_list,
     return count;
 }
 
+// --- Poly struct instantiation cache ---
+// Maps (origin AST pointer, type/int args) → TypeDescriptor so that
+// identical instantiations (e.g. Box(int) in a signature and in the body)
+// share the same TypeDescriptor pointer, enabling pointer comparison.
+#define POLY_STRUCT_CACHE_MAX 256
+
+typedef struct {
+    odin_grammar_node_t * origin;
+    TypeDescriptor const * type_args[16];  // for type params
+    long long int_args[16];                // for int params
+    int arg_count;
+    TypeDescriptor const * result;
+} PolyStructCacheEntry;
+
+static PolyStructCacheEntry poly_struct_cache[POLY_STRUCT_CACHE_MAX];
+static int poly_struct_cache_count = 0;
+
 static TypeDescriptor const *
 sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node)
 {
@@ -1678,10 +1695,56 @@ sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
+    // Check the cache for an identical previous instantiation
+    for (int ci = 0; ci < poly_struct_cache_count; ci++)
+    {
+        PolyStructCacheEntry * e = &poly_struct_cache[ci];
+        if (e->origin != origin || e->arg_count != env.count)
+            continue;
+        bool match = true;
+        for (int ai = 0; ai < env.count; ai++)
+        {
+            if (env.entries[ai].kind == POLY_SLOT_TYPE)
+            {
+                if (e->type_args[ai] != env.entries[ai].bound_type)
+                { match = false; break; }
+            }
+            else
+            {
+                if (e->int_args[ai] != env.entries[ai].bound_int_value)
+                { match = false; break; }
+            }
+        }
+        if (match)
+        {
+            // poly_env_pop won't run, so free the strdup'd names here
+            for (int ai = 0; ai < env.count; ai++)
+                free((void *)env.entries[ai].name);
+            node->resolved_type = (TypeDescriptor *)e->result;
+            return e->result;
+        }
+    }
+
     // Push env and resolve the struct type
     poly_env_push(ctx, &env);
     TypeDescriptor const * result = sem_resolve_struct_type(ctx, struct_type);
     poly_env_pop(ctx);
+
+    // Store in cache
+    if (result != NULL && poly_struct_cache_count < POLY_STRUCT_CACHE_MAX)
+    {
+        PolyStructCacheEntry * e = &poly_struct_cache[poly_struct_cache_count++];
+        e->origin = origin;
+        e->arg_count = env.count;
+        e->result = result;
+        for (int ai = 0; ai < env.count; ai++)
+        {
+            if (env.entries[ai].kind == POLY_SLOT_TYPE)
+                e->type_args[ai] = env.entries[ai].bound_type;
+            else
+                e->int_args[ai] = env.entries[ai].bound_int_value;
+        }
+    }
 
     if (result != NULL)
         node->resolved_type = (TypeDescriptor *)result;

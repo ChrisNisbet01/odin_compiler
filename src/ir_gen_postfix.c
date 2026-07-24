@@ -1234,6 +1234,28 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             ir_gen_postfix_member(ctx, op, &val, &cur_type);
             break;
         case AST_NODE_POSTFIX_DEREF:
+            // Auto-load: if the previous postfix op was a MEMBER that produced
+            // a GEP to a pointer-typed field, we need to load the pointer
+            // value before dereffing through it. ir_gen_identifier already
+            // loads non-composite types, so we only preload after MEMBER.
+            if (i > 0 && val != NULL && cur_type != NULL
+                && LLVMGetTypeKind(LLVMTypeOf(val)) == LLVMPointerTypeKind)
+            {
+                odin_grammar_node_t * prev_op = postfix_ops->list.children[i - 1];
+                if (prev_op != NULL && prev_op->type == AST_NODE_POSTFIX_MEMBER)
+                {
+                    bool is_ptr_valued_basic = (cur_type->kind == TD_KIND_BASIC
+                        && LLVMGetTypeKind(cur_type->llvm_type) == LLVMPointerTypeKind);
+                    bool is_composite = (cur_type->kind == TD_KIND_STRUCT || cur_type->kind == TD_KIND_SOA
+                        || cur_type->kind == TD_KIND_ARRAY || cur_type->kind == TD_KIND_SLICE
+                        || cur_type->kind == TD_KIND_PROC || cur_type->kind == TD_KIND_DYNAMIC_ARRAY
+                        || cur_type->kind == TD_KIND_MAP || cur_type->kind == TD_KIND_BIT_FIELD
+                        || cur_type->kind == TD_KIND_BIT_SET || cur_type->kind == TD_KIND_UNION
+                        || cur_type->kind == TD_KIND_MULTI_POINTER);
+                    if (!is_composite && !is_ptr_valued_basic)
+                        val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "deref.preload");
+                }
+            }
             ir_gen_postfix_deref(ctx, op, &val, &cur_type);
             break;
         case AST_NODE_POSTFIX_ASSERTION:

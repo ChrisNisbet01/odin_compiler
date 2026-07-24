@@ -109,6 +109,19 @@ ir_gen_return_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         if (vals[i] == NULL && expr_count > 0)
             return NULL;
 
+        // If the value is an alloca pointer to a composite type, load it.
+        // ir_gen_identifier returns alloca pointers for composites (needed
+        // for GEP/subscript/member), but return values need the actual value.
+        if (vals[i] != NULL
+            && exprs[i]->resolved_type != NULL
+            && LLVMGetTypeKind(LLVMTypeOf(vals[i])) == LLVMPointerTypeKind
+            && exprs[i]->resolved_type->llvm_type != NULL
+            && LLVMTypeOf(vals[i]) != exprs[i]->resolved_type->llvm_type)
+        {
+            vals[i] = LLVMBuildLoad2(ctx->builder, exprs[i]->resolved_type->llvm_type,
+                                      vals[i], "ret.load");
+        }
+
         // Coerce return value to match expected function return type
         if (expr_count == 1 && vals[i] != NULL && LLVMTypeOf(vals[i]) != ret_llvm_type)
         {
