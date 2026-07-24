@@ -423,6 +423,10 @@ main(int argc, char * argv[])
         parsed_file_free(pf);
 
         printf("Parse successful!\n");
+        // Debug: dump AST
+        extern void debug_print_ast(odin_grammar_node_t const * node);
+        if (getenv("ODINC_DUMP_AST"))
+            debug_print_ast(ast_root);
     }
 
     r.ast_root = ast_root;

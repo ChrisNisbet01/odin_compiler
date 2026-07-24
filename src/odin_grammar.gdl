@@ -370,6 +370,19 @@ TypeName = TypePrefix (PipeInType TypePrefix)* @AST_ACTION_TYPE_NAME;
 
 // --- Expressions (precedence hierarchy, lowest first) ---
 
+// Struct literal: Vec{x = 1, y = 2} or Box(int){val = 42}
+// NOTE: StructLitExpr is NOT in PrimaryExpression because it causes ambiguity
+// with CompoundStatement in if/for/switch (e.g. "if n != m { ... }" would greedily
+// consume the '{' as part of a struct literal on 'm'). Instead, struct literals
+// are handled at the VariableDecl, AssignStatement, and ReturnStatement levels.
+StructLitExpr = (TypeApplication | Identifier) LBrace StructLitFields RBrace @AST_ACTION_STRUCT_LIT_EXPR;
+StructLitField = Identifier Assign AssignExpression @AST_ACTION_STRUCT_LIT_FIELD;
+StructLitFields = delimited_flex(StructLitField, Comma) Comma? @AST_ACTION_STRUCT_LIT_FIELDS;
+
+// ExpressionOrStructLit: tries struct literal first (for positions where { is unambiguous),
+// falls back to plain expression.
+ExpressionOrStructLit = StructLitExpr | Expression;
+
 PrimaryExpression = StringLiteral | RawStringLiteral | RuneLiteral
                   | FloatLiteral | IntegerLiteral
                   | BoolLiteral | NilLiteral | NoneLiteral
@@ -470,7 +483,7 @@ AssignOp = Assign | PlusAssign | MinusAssign | MulAssign | DivAssign | ModAssign
 AssignExpression = SuffixExpression (AssignOp SuffixExpression)? @AST_ACTION_ASSIGN_EXPRESSION;
 
 Expression = chainl1(AssignExpression, Comma) @AST_ACTION_EXPRESSION;
-ArgumentList = Expression? @AST_ACTION_ARGUMENT_LIST;
+ArgumentList = ExpressionOrStructLit? @AST_ACTION_ARGUMENT_LIST;
 
 // --- Statements ---
 
@@ -507,7 +520,7 @@ BreakStatement = KwBreak @AST_ACTION_BREAK_STATEMENT;
 ContinueStatement = KwContinue @AST_ACTION_CONTINUE_STATEMENT;
 FallthroughStatement = KwFallthrough @AST_ACTION_FALLTHROUGH_STATEMENT;
 
-AssignStatement = SuffixExpression (Comma SuffixExpression)* (AssignOp | ColonAssign) Expression @AST_ACTION_ASSIGN_STATEMENT;
+AssignStatement = SuffixExpression (Comma SuffixExpression)* (AssignOp | ColonAssign) ExpressionOrStructLit @AST_ACTION_ASSIGN_STATEMENT;
 ExpressionStatement = Expression @AST_ACTION_EXPRESSION_STATEMENT;
 
 ProcBody = CompoundStatement | TripleDash;
@@ -539,7 +552,7 @@ ImportSimple = KwImport StringLiteral @AST_ACTION_IMPORT;
 ImportDecl = ImportNamed | ImportUsing | ImportSimple;
 
 IdentifierList = delimited_flex(Identifier, Comma) Comma? @AST_ACTION_IDENTIFIER_LIST;
-VariableDecl = IdentifierList (Colon TypePrefix (Assign Expression)? | ColonAssign Expression) @AST_ACTION_VARIABLE_DECL;
+VariableDecl = IdentifierList (Colon TypePrefix (Assign ExpressionOrStructLit)? | ColonAssign ExpressionOrStructLit) @AST_ACTION_VARIABLE_DECL;
 
 ConstantDecl = Attribute? Identifier DoubleColon (ProcedureLiteral | Expression | TypePrefix) @AST_ACTION_CONSTANT_DECL;
 

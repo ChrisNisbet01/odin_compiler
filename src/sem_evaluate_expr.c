@@ -40,6 +40,7 @@ static TypeDescriptor const * sem_evaluate_expand_values_expr(SemContext * ctx, 
 static TypeDescriptor const * sem_evaluate_compress_values_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_soa_zip_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_soa_unzip_expr(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_incl_excl_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_size_align_of_expr(SemContext * ctx, odin_grammar_node_t * node);
@@ -90,6 +91,7 @@ static TypeDescriptor const * (* const sem_evaluate_dispatch[])(SemContext *, od
     [AST_NODE_COMPRESS_VALUES_EXPR] = sem_evaluate_compress_values_expr,
     [AST_NODE_SOA_ZIP_EXPR] = sem_evaluate_soa_zip_expr,
     [AST_NODE_SOA_UNZIP_EXPR] = sem_evaluate_soa_unzip_expr,
+    [AST_NODE_STRUCT_LIT_EXPR] = sem_evaluate_struct_lit_expr,
     [AST_NODE_INCL_EXPR] = sem_evaluate_incl_excl_expr,
     [AST_NODE_EXCL_EXPR] = sem_evaluate_incl_excl_expr,
     [AST_NODE_COMPLEX_EXPR] = sem_evaluate_complex_quaternion_expr,
@@ -502,6 +504,109 @@ sem_evaluate_soa_unzip_expr(SemContext * ctx, odin_grammar_node_t * node)
     node->resolved_type = (TypeDescriptor *)tuple_type;
     return tuple_type;
     
+}
+
+// --- StructLitExpr: Vec{x = 1, y = 2} or Box(int){val = 42} ---
+// Children: [TypeNode (Identifier | TypeApplication), StructLitFields?]
+static TypeDescriptor const *
+sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1)
+    {
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
+    // First child is the type prefix (Identifier or TypeApplication).
+    odin_grammar_node_t * type_node = node->list.children[0];
+    if (type_node == NULL)
+    {
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
+    // Resolve the struct type via the type resolver (handles regular
+    // structs, poly struct template lookups, and TypeApplication
+    // instantiation, e.g. Box(int)).
+    TypeDescriptor const * struct_type = sem_resolve_type_expr(ctx, type_node);
+    if (struct_type == NULL)
+    {
+        sem_error_list_add(&ctx->errors, ctx->source_file_path, type_node,
+            "struct literal: could not resolve struct type");
+        node->resolved_type = NULL;
+        return NULL;
+    }
+    if (struct_type->kind != TD_KIND_STRUCT)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "struct literal: type is not a struct (got kind %d)", struct_type->kind);
+        sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
+    // Find the optional StructLitFields child (2nd child).
+    odin_grammar_node_t * fields_node = NULL;
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        if (node->list.children[i] != NULL
+            && node->list.children[i]->type == AST_NODE_STRUCT_LIT_FIELDS)
+        {
+            fields_node = node->list.children[i];
+            break;
+        }
+    }
+
+    if (fields_node != NULL)
+    {
+        // Validate each StructLitField against the struct's declared fields.
+        for (size_t i = 0; i < fields_node->list.count; i++)
+        {
+            odin_grammar_node_t * field = fields_node->list.children[i];
+            if (field == NULL || field->type != AST_NODE_STRUCT_LIT_FIELD)
+                continue;
+            // StructLitField children: [Identifier, AssignExpression]
+            odin_grammar_node_t * name_node = NULL;
+            odin_grammar_node_t * value_expr = NULL;
+            for (size_t ci = 0; ci < field->list.count; ci++)
+            {
+                odin_grammar_node_t * child = field->list.children[ci];
+                if (child == NULL)
+                    continue;
+                if (child->type == AST_NODE_IDENTIFIER && name_node == NULL)
+                    name_node = child;
+                else
+                    value_expr = child;
+            }
+            if (name_node == NULL || name_node->text == NULL)
+            {
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, field,
+                    "struct literal: field is missing name");
+                node->resolved_type = NULL;
+                return NULL;
+            }
+            int field_idx = type_descriptor_find_struct_field_index(struct_type, name_node->text);
+            if (field_idx < 0)
+            {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "struct literal: struct has no field '%s'", name_node->text);
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, name_node, buf);
+                node->resolved_type = NULL;
+                return NULL;
+            }
+            // Evaluate the field value expression so it has a resolved_type
+            // for IR generation. We do not strictly enforce type-matching
+            // here — IR-gen will coerce where possible. (Future: add
+            // sem_check_assignment for value vs declared field type.)
+            if (value_expr != NULL)
+                sem_evaluate_expr(ctx, value_expr);
+        }
+    }
+
+    node->resolved_type = (TypeDescriptor *)struct_type;
+    return struct_type;
 }
 
 static TypeDescriptor const *

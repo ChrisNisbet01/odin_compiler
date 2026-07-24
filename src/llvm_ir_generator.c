@@ -1920,6 +1920,97 @@ ir_gen_compress_values_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 }
 
 static LLVMValueRef
+ir_gen_struct_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->resolved_type == NULL)
+        return NULL;
+    TypeDescriptor const * struct_type = node->resolved_type;
+    if (struct_type->kind != TD_KIND_STRUCT)
+        return NULL;
+    LLVMTypeRef llvm_type = struct_type->llvm_type;
+    if (llvm_type == NULL)
+        return NULL;
+
+    // Start with an undef struct, then insert each named field.
+    LLVMValueRef result = LLVMGetUndef(llvm_type);
+
+    // Find the optional StructLitFields child.
+    odin_grammar_node_t * fields_node = NULL;
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        if (node->list.children[i] != NULL
+            && node->list.children[i]->type == AST_NODE_STRUCT_LIT_FIELDS)
+        {
+            fields_node = node->list.children[i];
+            break;
+        }
+    }
+    if (fields_node == NULL)
+        return result; // empty literal: return undef (zero-init by caller)
+
+    for (size_t i = 0; i < fields_node->list.count; i++)
+    {
+        odin_grammar_node_t * field = fields_node->list.children[i];
+        if (field == NULL || field->type != AST_NODE_STRUCT_LIT_FIELD)
+            continue;
+        // StructLitField children: [Identifier, AssignExpression]
+        odin_grammar_node_t * name_node = NULL;
+        odin_grammar_node_t * value_expr = NULL;
+        for (size_t ci = 0; ci < field->list.count; ci++)
+        {
+            odin_grammar_node_t * child = field->list.children[ci];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_IDENTIFIER && name_node == NULL)
+                name_node = child;
+            else
+                value_expr = child;
+        }
+        if (name_node == NULL || name_node->text == NULL || value_expr == NULL)
+            continue;
+
+        int field_idx = type_descriptor_find_struct_field_index(struct_type, name_node->text);
+        if (field_idx < 0)
+            continue;
+
+        LLVMValueRef val = ir_gen_node(ctx, value_expr);
+        if (val == NULL)
+            return NULL;
+
+        // If the value expression is a composite-typed identifier (array,
+        // struct, slice, etc.), ir_gen_node returns the alloca pointer;
+        // load the aggregate value so InsertValue receives the right type.
+        struct_field_t const * sf = type_descriptor_get_struct_field(struct_type, field_idx);
+        if (sf != NULL && sf->type_desc != NULL && sf->type_desc->llvm_type != NULL)
+        {
+            LLVMTypeRef val_type = LLVMTypeOf(val);
+            if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind
+                && val_type != sf->type_desc->llvm_type
+                && (sf->type_desc->kind == TD_KIND_ARRAY
+                    || sf->type_desc->kind == TD_KIND_STRUCT
+                    || sf->type_desc->kind == TD_KIND_SLICE))
+            {
+                val = LLVMBuildLoad2(ctx->builder, sf->type_desc->llvm_type,
+                                     val, "structlit.load");
+            }
+            // Coerce scalar types when needed.
+            if (LLVMTypeOf(val) != sf->type_desc->llvm_type)
+            {
+                bool src_unsigned = (sf->type_desc->kind == TD_KIND_BASIC
+                                     && sf->type_desc->as.basic.is_unsigned);
+                val = coerce_value_to_type(ctx, val, sf->type_desc->llvm_type,
+                                           src_unsigned, "structlit.field");
+            }
+        }
+
+        result = LLVMBuildInsertValue(ctx->builder, result, val,
+                                      (unsigned)field_idx, "structlit.field");
+    }
+
+    return result;
+}
+
+static LLVMValueRef
 ir_gen_soa_zip_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     if (node->list.count < 1 || node->resolved_type == NULL)
@@ -2324,6 +2415,9 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_SOA_UNZIP_EXPR:
         return ir_gen_soa_unzip_expr(ctx, node);
+
+    case AST_NODE_STRUCT_LIT_EXPR:
+        return ir_gen_struct_lit_expr(ctx, node);
 
     case AST_NODE_NIL:
     case AST_NODE_NONE:

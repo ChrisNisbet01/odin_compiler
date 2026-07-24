@@ -325,6 +325,12 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "SoaZipExpr";
     case AST_NODE_SOA_UNZIP_EXPR:
         return "SoaUnzipExpr";
+    case AST_NODE_STRUCT_LIT_EXPR:
+        return "StructLitExpr";
+    case AST_NODE_STRUCT_LIT_FIELD:
+        return "StructLitField";
+    case AST_NODE_STRUCT_LIT_FIELDS:
+        return "StructLitFields";
     }
     return "Unknown";
 }

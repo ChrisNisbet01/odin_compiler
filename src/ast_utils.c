@@ -2,7 +2,7 @@
 
 #include "odin_grammar_ast.h"
 
-#define AST_NODE_TYPE_COUNT (AST_NODE_TYPE_APPLICATION + 1)
+#define AST_NODE_TYPE_COUNT (AST_NODE_STRUCT_LIT_FIELDS + 1)
 
 static bool const is_type_node_table[AST_NODE_TYPE_COUNT] = {
     [AST_NODE_BASIC_TYPE] = true,
