@@ -39,7 +39,8 @@
 - **Tests**: Existing tests pass. Verified multi-name fields with two names (`x, y: int`), three names (`x, y, z: f64`), poly struct multi-name (`Pair(int){first, second: T}`), mixed multi+single-name fields, assignment form, and single-name regression.
 
 ### Known bugs to fix later
-- **`test_poly_explicit_params.odin` output bug**: The `r3` variable prints `<false>` or `<<?>` where `true` is expected. Not yet investigated.
+
+- **Matrix support**: Matrix type syntax (`[N][M]T`) and operations are completely unsupported. Investigation needed to determine scope and implementation approach.
 
 ## Accomplishments (session 2026-07-24, continued)
 
