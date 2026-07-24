@@ -506,6 +506,262 @@ sem_evaluate_soa_unzip_expr(SemContext * ctx, odin_grammar_node_t * node)
     
 }
 
+// --- Poly struct type inference from struct literal field values ---
+// When `Box{val=42}` is used without explicit type arguments, infer the
+// poly type parameters by matching the field values against the struct
+// definition's field types.
+static TypeDescriptor const *
+sem_infer_poly_struct_type(
+    SemContext * ctx,
+    odin_grammar_node_t * type_node,  // the bare Identifier (e.g. "Box")
+    odin_grammar_node_t * lit_node     // the StructLitExpr node
+)
+{
+    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), type_node->text);
+    if (sym == NULL || !sym->is_polymorphic || sym->kind != SYMBOL_TYPE)
+        return NULL;
+
+    odin_grammar_node_t * origin = poly_get_origin(sym);
+    if (origin == NULL)
+        return NULL;
+
+    // Extract the StructType from the ConstantDecl
+    odin_grammar_node_t * struct_type = NULL;
+    for (size_t i = 0; i < origin->list.count; i++)
+    {
+        odin_grammar_node_t * child = origin->list.children[i];
+        if (child != NULL && child->type == AST_NODE_STRUCT_TYPE)
+        {
+            struct_type = child;
+            break;
+        }
+    }
+    if (struct_type == NULL)
+        return NULL;
+
+    // Extract the ParameterList
+    odin_grammar_node_t * param_list = node_find_child(struct_type, AST_NODE_PARAMETER_LIST);
+    if (param_list == NULL)
+        return NULL;
+
+    // Collect individual PARAMETER nodes
+    odin_grammar_node_t * params[32];
+    int param_count = collect_parameters_from_param_list(param_list, params, 32);
+    if (param_count == 0)
+        return NULL;
+
+    // Collect struct field definitions from the StructType body.
+    // StructRawBody contains StructFieldList → StructField children.
+    // Each StructField has: Identifier(s), TypePrefix (the field type)
+    odin_grammar_node_t * field_list = node_find_child(struct_type, AST_NODE_STRUCT_FIELD_LIST);
+    if (field_list == NULL)
+        return NULL;
+
+    // Collect (field_name, field_type_node) pairs from the struct definition.
+    // For multi-name fields like `x, y: int`, each name gets its own entry.
+    char const * field_names[64];
+    odin_grammar_node_t * field_type_nodes[64];
+    int field_def_count = 0;
+
+    for (size_t i = 0; i < field_list->list.count && field_def_count < 64; i++)
+    {
+        odin_grammar_node_t * field = field_list->list.children[i];
+        if (field == NULL || field->type != AST_NODE_STRUCT_FIELD)
+            continue;
+
+        odin_grammar_node_t * names[16];
+        int name_count = 0;
+        odin_grammar_node_t * ftype = NULL;
+
+        for (size_t ci = 0; ci < field->list.count; ci++)
+        {
+            odin_grammar_node_t * child = field->list.children[ci];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_IDENTIFIER && name_count < 16)
+                names[name_count++] = child;
+            else if (is_type_node(child) || child->type == AST_NODE_DIRECTIVE)
+            {
+                if (child->type == AST_NODE_DIRECTIVE && child->text
+                    && strcmp(child->text, "#align") == 0)
+                {
+                    ci++; // skip #align's integer argument
+                    continue;
+                }
+                ftype = child;
+            }
+            else if (child->type == AST_NODE_IDENTIFIER && name_count > 0 && ftype == NULL)
+            {
+                // Bare identifier type (e.g. T in poly struct) — only if no
+                // other type node was found, the last identifier is the type
+                ftype = child;
+            }
+        }
+
+        // If all children were identifiers, the last one is the type
+        if (ftype == NULL && name_count > 1)
+        {
+            ftype = names[name_count - 1];
+            name_count--;
+        }
+
+        for (int n = 0; n < name_count && field_def_count < 64; n++)
+        {
+            field_names[field_def_count] = names[n]->text;
+            field_type_nodes[field_def_count] = ftype;
+            field_def_count++;
+        }
+    }
+
+    // Collect field values from the struct literal.
+    // StructLitFields → StructLitField children: [Identifier, AssignExpression]
+    odin_grammar_node_t * lit_fields = NULL;
+    for (size_t i = 1; i < lit_node->list.count; i++)
+    {
+        if (lit_node->list.children[i] != NULL
+            && lit_node->list.children[i]->type == AST_NODE_STRUCT_LIT_FIELDS)
+        {
+            lit_fields = lit_node->list.children[i];
+            break;
+        }
+    }
+
+    // Evaluate each field value and store its resolved type
+    char const * lit_field_names[64];
+    TypeDescriptor const * lit_field_types[64];
+    int lit_field_count = 0;
+
+    if (lit_fields != NULL)
+    {
+        for (size_t i = 0; i < lit_fields->list.count && lit_field_count < 64; i++)
+        {
+            odin_grammar_node_t * field = lit_fields->list.children[i];
+            if (field == NULL || field->type != AST_NODE_STRUCT_LIT_FIELD)
+                continue;
+            odin_grammar_node_t * name_node = NULL;
+            odin_grammar_node_t * value_expr = NULL;
+            for (size_t ci = 0; ci < field->list.count; ci++)
+            {
+                odin_grammar_node_t * child = field->list.children[ci];
+                if (child == NULL)
+                    continue;
+                if (child->type == AST_NODE_IDENTIFIER && name_node == NULL)
+                    name_node = child;
+                else
+                    value_expr = child;
+            }
+            if (name_node == NULL || name_node->text == NULL)
+                continue;
+            TypeDescriptor const * val_type = NULL;
+            if (value_expr != NULL)
+                val_type = sem_evaluate_expr(ctx, value_expr);
+            lit_field_names[lit_field_count] = name_node->text;
+            lit_field_types[lit_field_count] = val_type;
+            lit_field_count++;
+        }
+    }
+
+    // Build the poly environment by matching struct definition fields
+    // against literal field values. For each field whose type is a bare
+    // Identifier matching a poly param name, bind that param to the
+    // literal field value's type.
+    PolyEnv env = {0};
+
+    for (int p = 0; p < param_count; p++)
+    {
+        odin_grammar_node_t * param = params[p];
+        // Extract param name (PolyIdent child)
+        char const * pname = NULL;
+        for (size_t ci = 0; ci < param->list.count; ci++)
+        {
+            odin_grammar_node_t * child = param->list.children[ci];
+            if (child != NULL && child->type == AST_NODE_POLY_IDENT)
+            {
+                pname = child->text;
+                break;
+            }
+        }
+        if (pname == NULL)
+            continue;
+        // Strip $ prefix
+        if (pname[0] == '$')
+            pname++;
+
+        // Skip int params (can't infer int params from field value types)
+        bool is_int_param = false;
+        for (size_t ci = 0; ci < param->list.count; ci++)
+        {
+            odin_grammar_node_t * child = param->list.children[ci];
+            if (child != NULL && child->text
+                && (strcmp(child->text, "int") == 0 || strcmp(child->text, "i8") == 0
+                    || strcmp(child->text, "i16") == 0 || strcmp(child->text, "i32") == 0
+                    || strcmp(child->text, "i64") == 0 || strcmp(child->text, "i128") == 0
+                    || strcmp(child->text, "u8") == 0 || strcmp(child->text, "u16") == 0
+                    || strcmp(child->text, "u32") == 0 || strcmp(child->text, "u64") == 0
+                    || strcmp(child->text, "u128") == 0))
+            {
+                is_int_param = true;
+                break;
+            }
+        }
+        if (is_int_param)
+            continue;
+
+        // Find a struct definition field whose type is this poly param name
+        for (int f = 0; f < field_def_count; f++)
+        {
+            if (field_type_nodes[f] == NULL)
+                continue;
+            // The field type must be a bare Identifier matching the param name
+            if (field_type_nodes[f]->type != AST_NODE_IDENTIFIER
+                || field_type_nodes[f]->text == NULL)
+                continue;
+            char const * ftype_text = field_type_nodes[f]->text;
+            if (strcmp(ftype_text, pname) != 0)
+                continue;
+
+            // Find the matching literal field value
+            for (int v = 0; v < lit_field_count; v++)
+            {
+                if (strcmp(lit_field_names[v], field_names[f]) == 0
+                    && lit_field_types[v] != NULL)
+                {
+                    // Bind the poly param to this value's type
+                    if (env.count < 16)
+                    {
+                        env.entries[env.count].name = strdup(pname);
+                        env.entries[env.count].kind = POLY_SLOT_TYPE;
+                        env.entries[env.count].bound_type = lit_field_types[v];
+                        env.count++;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    if (env.count == 0)
+        return NULL;
+
+    // Push env and resolve the struct type
+    poly_env_push(ctx, &env);
+    TypeDescriptor const * result = sem_resolve_struct_type(ctx, struct_type);
+    poly_env_pop(ctx);
+
+    // Also check the poly struct dedup cache: if the same instantiation
+    // was already resolved via sem_resolve_type_application, reuse it.
+    // sem_resolve_struct_type creates a new TypeDescriptor via register_struct_type,
+    // but the dedup cache in sem_resolve_type_application maps (origin, args) → TypeDescriptor.
+    // For struct literals without explicit type args, the dedup cache won't help because
+    // the TypeApplication node doesn't exist in the AST. The new TypeDescriptor will
+    // have a different pointer from the one created by sem_resolve_type_application.
+    // However, LLVM struct types are deduplicated by layout, so the llvm_type will match.
+
+    if (result != NULL)
+        type_node->resolved_type = (TypeDescriptor *)result;
+    return result;
+}
+
 // --- StructLitExpr: Vec{x = 1, y = 2} or Box(int){val = 42} ---
 // Children: [TypeNode (Identifier | TypeApplication), StructLitFields?]
 static TypeDescriptor const *
@@ -529,6 +785,15 @@ sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
     // structs, poly struct template lookups, and TypeApplication
     // instantiation, e.g. Box(int)).
     TypeDescriptor const * struct_type = sem_resolve_type_expr(ctx, type_node);
+    if (struct_type == NULL
+        && type_node->type == AST_NODE_IDENTIFIER
+        && type_node->text != NULL)
+    {
+        // Fallback: poly struct type inference from field values.
+        // e.g. `b := Box{val=42}` infers T=int (Box is polymorphic,
+        // no explicit type arguments provided).
+        struct_type = sem_infer_poly_struct_type(ctx, type_node, node);
+    }
     if (struct_type == NULL)
     {
         sem_error_list_add(&ctx->errors, ctx->source_file_path, type_node,

@@ -38,7 +38,7 @@ static TypeDescriptor const * sem_resolve_pointer_type(SemContext * ctx, odin_gr
 static TypeDescriptor const * sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_slice_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_soa_type(SemContext * ctx, odin_grammar_node_t * node);
-static TypeDescriptor const * sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node);
+TypeDescriptor const * sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_tuple_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_poly_ident_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node);
@@ -852,7 +852,7 @@ sem_resolve_enum_type(SemContext * ctx, odin_grammar_node_t * node)
     
 }
 
-static TypeDescriptor const *
+TypeDescriptor const *
 sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
 {
 
@@ -1515,7 +1515,7 @@ sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node)
 // The AST nesting is: PARAMETER_LIST -> PARAMETERS -> PARAMETER* (optionally
 // trailing ELLIPSIS).  Returns the count and fills `out` (capacity
 // `max_params`).
-static int
+int
 collect_parameters_from_param_list(odin_grammar_node_t * param_list,
                                    odin_grammar_node_t ** out, int max_params)
 {
