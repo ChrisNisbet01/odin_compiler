@@ -1,5 +1,16 @@
 ## Accomplishments (session 2026-07-24)
 
+### Implemented struct literal construction (Phase 14B — grammar fix)
+- **Grammar** (`odin_grammar.gdl`): Removed `StructLitExpr` from `PrimaryExpression` to fix a greedy-parsing regression — the PEG parser consumed `{` after any identifier in if/for/switch conditions as part of struct literals (e.g. `if n != m { ... }` matched `m { result = 1 }` as struct literal). Created transparent PEG alternative rule `ExpressionOrStructLit = StructLitExpr | Expression;` (no `@AST_ACTION` — passes child node directly to parent). Used in `VariableDecl`, `AssignStatement`, and `ArgumentList` where `{` is unambiguous.
+- **Key learning**: Adding `@AST_ACTION_EXPRESSION_OR_STRUCT_LIT` created a wrapper AST node (`AST_NODE_EXPRESSION_OR_STRUCT_LIT`) that broke downstream code reading `resolved_type` directly off child nodes (e.g. assignment type checking, variable decl init). The wrapper was inserted between the expression and its parent, causing `resolved_type` to be NULL on the parent's expected child. Fix: use **no action** so GDL transparently passes the matched child to the parent.
+- **Tests**: `test_struct_lit3.odin` (regular `Vec{x=1,y=2}`, poly `Box(int){val=42}`, assignment form `v = Vec{x=10,y=20}`). **All 183 tests pass** (no regressions).
+
+### Known bugs to fix later
+- **Multi-field struct syntax**: `Vec :: struct { x, y: int }` parses correctly (grammar rule `StructField = KwUsing? Identifier (Comma Identifier)* Colon TypePrefix ...`) and fields are registered, but member access `v.y` fails with "struct has no field named". The bug is likely in `register_struct_type` / `type_descriptor_find_struct_field_index` — the multi-name `StructField` AST node produces multiple identifiers but the field registration may only register the first. Workaround: use `x: int; y: int;`. Needs investigation.
+- **`test_poly_explicit_params.odin` output bug**: The `r3` variable prints `<false>` or `<<?>` where `true` is expected. Not yet investigated.
+
+## Accomplishments (session 2026-07-24, continued)
+
 ### Implemented polymorphic struct types with $N int params (Stage 14b)
 - **Grammar** (`odin_grammar.gdl`): Extended `TypeApplication` rule to accept `IntegerLiteral` as an argument in addition to `TypePrefix`: `TypeApplication = Identifier LParen ((TypePrefix | IntegerLiteral) (Comma (TypePrefix | IntegerLiteral))*)? RParen`. Enables `IntBox(int, 3)` syntax for poly structs with `$N: int` parameters.
 - **Type resolution** (`sem_type_resolver.c`): Updated `sem_resolve_type_application()` to detect whether each param is a type param (`$T: typeid`) or int param (`$N: int`/`$N: u32`/etc) by checking the param's declared type text. For int params, evaluates the argument via `sem_evaluate_constant_int` and binds it with `POLY_SLOT_INT` instead of `POLY_SLOT_TYPE`. The existing `sem_resolve_array_type` already looks up `$N` via `poly_env_lookup_int`, so `[$N]T` field types resolve correctly with the int binding.
