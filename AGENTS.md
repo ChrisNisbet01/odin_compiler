@@ -1,3 +1,9 @@
+## Future work
+
+### More complete support for core:fmt
+
+### More complete support for core:os
+
 ## Accomplishments (session 2026-07-24)
 
 ### Implemented array literal syntax (`[N]T{...}`)
@@ -19,14 +25,14 @@
 - **Return type loading for composite types** (`ir_gen_statement.c`): `ir_gen_return_statement` now loads from alloca pointers for composite types (struct/array/slice) before returning. Mirrors the pattern in `ir_gen_collect_single_arg` for function call arguments. Without this, `return b` where `b: Box(int)` returned the alloca pointer instead of the struct value, causing LLVM type mismatch (`ret ptr` vs `ret { i64 }`).
 - **Postfix deref auto-load fix** (`ir_gen_postfix.c`): Fixed `s.ptr^` (struct member deref) — the postfix loop auto-loads only at the END of the loop, but `POSTFIX_DEREF` inside the loop needs the loaded pointer value from `POSTFIX_MEMBER`'s GEP. Added auto-load before deref in the switch case, guarded by `i > 0 && prev_op->type == AST_NODE_POSTFIX_MEMBER` to avoid double-loading when `ir_gen_identifier` already loaded the value (e.g. standalone `p^` where `p: ^int`).
 - **Tests**: `test_poly_struct_extended.odin` (8 subtests: `^T` field + deref, `len()` on `[$N]T` field, poly struct as function arg, poly struct return from function, `^Box(int)` pointer arg, `PtrBox(f64)` with `^T` deref, `[]T` slice field with `make()`/`len()`, for-range accumulation through `[$N]T` field). **All 186 tests pass** (185 previous + 1 new).
-- **Pre-existing limitation confirmed**: Array literal syntax `[3]int{10, 20, 30}` is not supported by the grammar (parse error). Not related to poly structs.
 
 ### Implemented array literal syntax (`[N]T{...}`)
-- **Grammar** (`odin_grammar.gdl`): Added `ArrayLitExpr = ArrayType LBrace ArrayLitElements? RBrace @AST_ACTION_ARRAY_LIT_EXPR` and `ArrayLitElements = delimited_flex(AssignExpression, Comma) Comma? @AST_ACTION_ARRAY_LIT_ELEMENTS`. Created `ExpressionOrCompoundLit = StructLitExpr | ArrayLitExpr | Expression;` to replace `ExpressionOrStructLit` at VariableDecl, AssignStatement, and ArgumentList sites.
+- **Grammar** (`odin_grammar.gdl`): Added `ArrayLitExpr = ArrayType LBrace ArrayLitElements? RBrace @AST_ACTION_ARRAY_LIT_EXPR` and `ArrayLitElements = delimited_flex(AssignExpression, Comma) Comma? @AST_ACTION_ARRAY_LIT_ELEMENTS`. Added `ArrayLitElement = StructLitExpr | ArrayLitExpr | AssignExpression` to allow nested array/struct literals.
 - **AST**: Added `AST_NODE_ARRAY_LIT_EXPR` and `AST_NODE_ARRAY_LIT_ELEMENTS` to `odin_grammar_ast.h`, with corresponding action functions in `odin_grammar_ast_actions.c` and node name strings in `ast_node_name.c`.
 - **Semantic analysis** (`sem_evaluate_expr.c`): Added `sem_evaluate_array_lit_expr()` — resolves the ArrayType, evaluates each element expression, stores the array type on the node's `resolved_type`.
 - **IR generation** (`llvm_ir_generator.c`): Added `ir_gen_array_lit_expr()` — creates undef array value, then uses `LLVMBuildInsertValue` to insert each evaluated element at the correct index.
 - **Tests**: `test_array_literal.odin` (4 subtests: basic `[3]int{...}`, `[4]f64{...}`, empty `[0]int{}`, expressions in elements). **All 187 tests pass**.
+- **Matrix support**: Verified that `[N][M]T` syntax works via nested `ArrayType` parsing, and nested array literals like `[2][3]int{[3]int{1,2,3}, [3]int{4,5,6}}` work correctly.
 
 ### Implemented struct literal construction (Phase 14B — grammar fix)
 - **Grammar** (`odin_grammar.gdl`): Removed `StructLitExpr` from `PrimaryExpression` to fix a greedy-parsing regression — the PEG parser consumed `{` after any identifier in if/for/switch conditions as part of struct literals (e.g. `if n != m { ... }` matched `m { result = 1 }` as struct literal). Created transparent PEG alternative rule `ExpressionOrStructLit = StructLitExpr | Expression;` (no `@AST_ACTION` — passes child node directly to parent). Used in `VariableDecl`, `AssignStatement`, and `ArgumentList` where `{` is unambiguous.
@@ -39,8 +45,6 @@
 - **Tests**: Existing tests pass. Verified multi-name fields with two names (`x, y: int`), three names (`x, y, z: f64`), poly struct multi-name (`Pair(int){first, second: T}`), mixed multi+single-name fields, assignment form, and single-name regression.
 
 ### Known bugs to fix later
-
-- **Matrix support**: Matrix type syntax (`[N][M]T`) and operations are completely unsupported. Investigation needed to determine scope and implementation approach.
 
 ## Accomplishments (session 2026-07-24, continued)
 
