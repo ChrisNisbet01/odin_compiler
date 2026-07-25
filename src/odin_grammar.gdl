@@ -40,6 +40,7 @@ KwCast = lexeme("cast" IdBoundary);
 KwMake = lexeme("make" IdBoundary);
 KwNew = lexeme("new" IdBoundary);
 KwDelete = lexeme("delete" IdBoundary);
+KwAppend = lexeme("append" IdBoundary);
 KwLen = lexeme("len" IdBoundary);
 KwCap = lexeme("cap" IdBoundary);
 KwSizeOf = lexeme("size_of" IdBoundary);
@@ -146,7 +147,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
     | KwUsing | KwConst
     | KwStruct | KwUnion | KwEnum | KwMap | KwDynamic
     | KwDistinct | KwTransmute | KwCast
-    | KwMake | KwNew | KwDelete | KwLen | KwCap | KwSizeOf | KwAlignOf | KwOffsetOf | KwRawData | KwMin | KwMax | KwTypeOf
+    | KwMake | KwNew | KwDelete | KwAppend | KwLen | KwCap | KwSizeOf | KwAlignOf | KwOffsetOf | KwRawData | KwMin | KwMax | KwTypeOf
     | KwTrue | KwFalse | KwNil | KwNone
     | KwContext | KwAsm | KwAutoCast
     | KwOrElse | KwOrReturn | KwNot | KwAnd | KwOr | KwNotIn
@@ -312,7 +313,7 @@ SoaType = (DirectiveWithArgs | Directive) TypePrefix @AST_ACTION_SOA_TYPE;
 
 Enumerators = delimited_flex(Enumerator, Comma) Comma? @AST_ACTION_ENUMERATOR_LIST;
 Enumerator = Identifier (Assign Expression)? @AST_ACTION_ENUMERATOR;
-EnumType = KwEnum (Directive IntegerLiteral?)? ParameterList? LBrace Enumerators? RBrace @AST_ACTION_ENUM_TYPE;
+EnumType = KwEnum BasicType? ParameterList? LBrace Enumerators? RBrace @AST_ACTION_ENUM_TYPE;
 EnumTypeRef = KwEnum Identifier @AST_ACTION_ENUM_TYPE_REF;
 
 UnionField = KwUsing? Identifier Colon TypePrefix @AST_ACTION_UNION_FIELD;
@@ -375,7 +376,7 @@ TypeName = TypePrefix (PipeInType TypePrefix)* @AST_ACTION_TYPE_NAME;
 // with CompoundStatement in if/for/switch (e.g. "if n != m { ... }" would greedily
 // consume the '{' as part of a struct literal on 'm'). Instead, struct literals
 // are handled at the VariableDecl, AssignStatement, and ReturnStatement levels.
-StructLitExpr = (TypeApplication | Identifier) LBrace StructLitFields RBrace @AST_ACTION_STRUCT_LIT_EXPR;
+StructLitExpr = (TypeApplication | Identifier) LBrace StructLitFields? RBrace @AST_ACTION_STRUCT_LIT_EXPR;
 StructLitField = Identifier Assign AssignExpression @AST_ACTION_STRUCT_LIT_FIELD;
 StructLitFields = delimited_flex(StructLitField, Comma) Comma? @AST_ACTION_STRUCT_LIT_FIELDS;
 
@@ -437,6 +438,7 @@ TypeInfoOfExpr = KwTypeInfoOf LParen TypeName RParen @AST_ACTION_TYPE_INFO_OF_EX
 MakeExpr = KwMake LParen TypePrefix Comma Expression RParen @AST_ACTION_MAKE_EXPR;
 NewExpr = KwNew LParen TypePrefix RParen @AST_ACTION_NEW_EXPR;
 DeleteExpr = KwDelete LParen Expression RParen @AST_ACTION_DELETE_EXPR;
+AppendExpr = KwAppend LParen AssignExpression (Comma AssignExpression)+ RParen @AST_ACTION_APPEND_EXPR;
 InclExpr = KwIncl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_INCL_EXPR;
 ExclExpr = KwExcl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_EXCL_EXPR;
 ComplexExpr = KwComplex LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_COMPLEX_EXPR;
@@ -446,7 +448,7 @@ CompressValuesExpr = KwCompressValues LParen TypePrefix (Comma AssignExpression)
 SoaZipExpr = KwSoaZip LParen ArgumentList RParen @AST_ACTION_SOA_ZIP_EXPR;
 SoaUnzipExpr = KwSoaUnzip LParen Expression RParen @AST_ACTION_SOA_UNZIP_EXPR;
 TypeCastByJuxtaposition = TypeName LParen Expression RParen @AST_ACTION_CAST_EXPR;
-UnaryExpression = MakeExpr | NewExpr | DeleteExpr | LenExpr | CapExpr | SizeOfExpr | AlignOfExpr | OffsetOfExpr | RawDataExpr | MinExpr | MaxExpr | TypeOfExpr | TypeidOfExpr | TypeInfoOfExpr | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | ComplexExpr | QuaternionExpr | ExpandValuesExpr | CompressValuesExpr | SoaZipExpr | SoaUnzipExpr | UnaryPrefix | PostfixExpression | TypeCastByJuxtaposition;
+UnaryExpression = MakeExpr | NewExpr | DeleteExpr | AppendExpr | LenExpr | CapExpr | SizeOfExpr | AlignOfExpr | OffsetOfExpr | RawDataExpr | MinExpr | MaxExpr | TypeOfExpr | TypeidOfExpr | TypeInfoOfExpr | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | ComplexExpr | QuaternionExpr | ExpandValuesExpr | CompressValuesExpr | SoaZipExpr | SoaUnzipExpr | UnaryPrefix | PostfixExpression | TypeCastByJuxtaposition;
 
 MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
 MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;
@@ -521,7 +523,8 @@ SwitchDefaultClause = KwCase Colon (Semicolon? Statement)* Semicolon? @AST_ACTIO
 SwitchBody = LBrace (SwitchCaseClause | SwitchDefaultClause)* RBrace;
 SwitchStatement = KwSwitch Directive? Expression? SwitchBody @AST_ACTION_SWITCH_STATEMENT;
 
-ReturnStatement = KwReturn (AssignExpression (Comma AssignExpression)*)? @AST_ACTION_RETURN_STATEMENT;
+ReturnExpr = StructLitExpr | ArrayLitExpr | AssignExpression;
+ReturnStatement = KwReturn (ReturnExpr (Comma ReturnExpr)*)? @AST_ACTION_RETURN_STATEMENT;
 BreakStatement = KwBreak @AST_ACTION_BREAK_STATEMENT;
 ContinueStatement = KwContinue @AST_ACTION_CONTINUE_STATEMENT;
 FallthroughStatement = KwFallthrough @AST_ACTION_FALLTHROUGH_STATEMENT;

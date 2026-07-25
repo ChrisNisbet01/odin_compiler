@@ -36,6 +36,7 @@ static TypeDescriptor const * sem_evaluate_len_cap_expr(SemContext * ctx, odin_g
 static TypeDescriptor const * sem_evaluate_make_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_new_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_delete_expr(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_evaluate_append_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_expand_values_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_compress_values_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_soa_zip_expr(SemContext * ctx, odin_grammar_node_t * node);
@@ -88,6 +89,7 @@ static TypeDescriptor const * (* const sem_evaluate_dispatch[])(SemContext *, od
     [AST_NODE_MAKE_EXPR] = sem_evaluate_make_expr,
     [AST_NODE_NEW_EXPR] = sem_evaluate_new_expr,
     [AST_NODE_DELETE_EXPR] = sem_evaluate_delete_expr,
+    [AST_NODE_APPEND_EXPR] = sem_evaluate_append_expr,
     [AST_NODE_EXPAND_VALUES_EXPR] = sem_evaluate_expand_values_expr,
     [AST_NODE_COMPRESS_VALUES_EXPR] = sem_evaluate_compress_values_expr,
     [AST_NODE_SOA_ZIP_EXPR] = sem_evaluate_soa_zip_expr,
@@ -346,6 +348,41 @@ sem_evaluate_delete_expr(SemContext * ctx, odin_grammar_node_t * node)
     node->resolved_type = NULL;
     return NULL;
     
+}
+
+static TypeDescriptor const *
+sem_evaluate_append_expr(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2)
+    {
+        sem_error_list_add(&ctx->errors, NULL, node, "append requires at least 2 arguments");
+        return NULL;
+    }
+    odin_grammar_node_t * arr_node = node->list.children[0];
+    sem_evaluate_expr(ctx, arr_node);
+    TypeDescriptor const * arr_type = arr_node->resolved_type;
+    if (arr_type == NULL)
+    {
+        sem_error_list_add(&ctx->errors, NULL, node, "append: first argument has no type");
+        return NULL;
+    }
+    if (arr_type->kind != TD_KIND_DYNAMIC_ARRAY)
+    {
+        sem_error_list_add(&ctx->errors, NULL, node, "append: first argument must be a [dynamic] array");
+        return NULL;
+    }
+    TypeDescriptor const * elem_type = arr_type->element_type;
+    if (elem_type == NULL)
+    {
+        sem_error_list_add(&ctx->errors, NULL, node, "append: element type is NULL");
+        return NULL;
+    }
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        sem_evaluate_expr(ctx, node->list.children[i]);
+    }
+    node->resolved_type = (TypeDescriptor *)arr_type;
+    return arr_type;
 }
 
 static TypeDescriptor const *

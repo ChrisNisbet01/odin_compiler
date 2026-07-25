@@ -416,6 +416,7 @@ DEFINE_ACTION(ast_action_type_info_of_expr_action, AST_NODE_TYPE_INFO_OF_EXPR, f
 DEFINE_ACTION(ast_action_make_expr_action, AST_NODE_MAKE_EXPR, false)
 DEFINE_ACTION(ast_action_new_expr_action, AST_NODE_NEW_EXPR, false)
 DEFINE_ACTION(ast_action_delete_expr_action, AST_NODE_DELETE_EXPR, false)
+DEFINE_ACTION(ast_action_append_expr_action, AST_NODE_APPEND_EXPR, false)
 DEFINE_ACTION(ast_action_incl_expr_action, AST_NODE_INCL_EXPR, false)
 DEFINE_ACTION(ast_action_excl_expr_action, AST_NODE_EXCL_EXPR, false)
 DEFINE_ACTION(ast_action_complex_expr_action, AST_NODE_COMPLEX_EXPR, false)
@@ -618,6 +619,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_MAKE_EXPR, ast_action_make_expr_action);
     REGISTER(AST_ACTION_NEW_EXPR, ast_action_new_expr_action);
     REGISTER(AST_ACTION_DELETE_EXPR, ast_action_delete_expr_action);
+    REGISTER(AST_ACTION_APPEND_EXPR, ast_action_append_expr_action);
     REGISTER(AST_ACTION_INCL_EXPR, ast_action_incl_expr_action);
     REGISTER(AST_ACTION_EXCL_EXPR, ast_action_excl_expr_action);
     REGISTER(AST_ACTION_COMPLEX_EXPR, ast_action_complex_expr_action);

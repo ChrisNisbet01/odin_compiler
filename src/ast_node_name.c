@@ -291,6 +291,8 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "NewExpr";
     case AST_NODE_DELETE_EXPR:
         return "DeleteExpr";
+    case AST_NODE_APPEND_EXPR:
+        return "AppendExpr";
     case AST_NODE_INCL_EXPR:
         return "InclExpr";
     case AST_NODE_EXCL_EXPR:

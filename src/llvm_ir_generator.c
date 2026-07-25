@@ -1796,6 +1796,172 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 }
 
 static LLVMValueRef
+ir_gen_append_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2)
+        return NULL;
+
+    TypeDescriptor const * arr_type = node->resolved_type;
+    if (arr_type == NULL || arr_type->kind != TD_KIND_DYNAMIC_ARRAY)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "append: first argument must be a [dynamic] array");
+        return NULL;
+    }
+
+    TypeDescriptor const * elem_type = arr_type->element_type;
+    if (elem_type == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "append: element type is NULL");
+        return NULL;
+    }
+
+    LLVMValueRef arr_val = ir_gen_node(ctx, node->list.children[0]);
+    if (arr_val == NULL)
+        return NULL;
+
+    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, arr_type->llvm_type, "append.result");
+    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->context);
+
+    LLVMValueRef idx0 = LLVMConstInt(i32t, 0, false);
+    LLVMValueRef idx1 = LLVMConstInt(i32t, 1, false);
+    LLVMValueRef idx2 = LLVMConstInt(i32t, 2, false);
+    LLVMValueRef one_i64 = LLVMConstInt(i64t, 1, false);
+
+    // arr_val from ir_gen_node is an alloca pointer for composite types, load it first
+    LLVMValueRef arr_loaded = LLVMBuildLoad2(ctx->builder, arr_type->llvm_type, arr_val, "append.arr.val");
+    LLVMBuildStore(ctx->builder, arr_loaded, result_ptr);
+
+    // Load current data, len, cap
+    LLVMValueRef gep_data = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
+        (LLVMValueRef[]){idx0, idx0}, 2, "append.data.gep");
+    LLVMValueRef data_ptr = LLVMBuildLoad2(ctx->builder, LLVMPointerType(elem_type->llvm_type, 0), gep_data, "append.data");
+
+    LLVMValueRef gep_len = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
+        (LLVMValueRef[]){idx0, idx1}, 2, "append.len.gep");
+    LLVMValueRef cur_len = LLVMBuildLoad2(ctx->builder, i64t, gep_len, "append.len");
+
+    LLVMValueRef gep_cap = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
+        (LLVMValueRef[]){idx0, idx2}, 2, "append.cap.gep");
+    LLVMValueRef cur_cap = LLVMBuildLoad2(ctx->builder, i64t, gep_cap, "append.cap");
+
+    // For each element to append
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        LLVMValueRef elem_val = ir_gen_node(ctx, node->list.children[i]);
+        if (elem_val == NULL)
+            return NULL;
+
+        // Coerce element type if needed
+        if (elem_val != NULL && elem_type->llvm_type != NULL)
+        {
+            LLVMTypeRef val_type = LLVMTypeOf(elem_val);
+            if (val_type != elem_type->llvm_type && LLVMGetTypeKind(val_type) != LLVMPointerTypeKind)
+            {
+                elem_val = coerce_value_to_type(ctx, elem_val, elem_type->llvm_type, false, "append.elem.coerce");
+            }
+        }
+
+        // Check if len == cap (need to grow)
+        LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(ctx->builder);
+        LLVMBasicBlockRef grow_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.grow");
+        LLVMBasicBlockRef noGrow_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.nogrow");
+        LLVMBasicBlockRef store_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.store");
+
+        // Capture values that will be PHI'd in store_bb (valid in entry_bb)
+        LLVMValueRef pre_data_ptr = data_ptr;
+        LLVMValueRef pre_cap = cur_cap;
+
+        LLVMValueRef needs_grow = LLVMBuildICmp(ctx->builder, LLVMIntEQ, cur_len, cur_cap, "append.needs_grow");
+        LLVMBuildCondBr(ctx->builder, needs_grow, grow_bb, noGrow_bb);
+
+        // Grow block: realloc to 2x capacity (or 4 if 0)
+        LLVMPositionBuilderAtEnd(ctx->builder, grow_bb);
+        LLVMValueRef new_cap = LLVMBuildMul(ctx->builder, cur_cap, LLVMConstInt(i64t, 2, false), "append.new_cap");
+        LLVMValueRef is_zero = LLVMBuildICmp(ctx->builder, LLVMIntEQ, cur_cap, LLVMConstInt(i64t, 0, false), "append.cap.zero");
+        new_cap = LLVMBuildSelect(ctx->builder, is_zero, LLVMConstInt(i64t, 4, false), new_cap, "append.new_cap.sel");
+        LLVMValueRef elem_size = LLVMSizeOf(elem_type->llvm_type);
+        LLVMValueRef new_total = LLVMBuildMul(ctx->builder, elem_size, new_cap, "append.new_total");
+        LLVMValueRef raw_new = ir_gen_call_malloc(ctx, new_total);
+        if (raw_new == NULL)
+            return NULL;
+        LLVMTypeRef elem_ptr_t = LLVMPointerType(elem_type->llvm_type, 0);
+        LLVMValueRef new_data = LLVMBuildPointerCast(ctx->builder, raw_new, elem_ptr_t, "append.new_data");
+        // Copy old data element by element
+        LLVMBasicBlockRef copy_loop_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.copy.loop");
+        LLVMBasicBlockRef copy_done_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.copy.done");
+        LLVMValueRef copy_idx_ptr = LLVMBuildAlloca(ctx->builder, i64t, "append.copy.idx");
+        LLVMBuildStore(ctx->builder, LLVMConstInt(i64t, 0, false), copy_idx_ptr);
+        LLVMBuildBr(ctx->builder, copy_loop_bb);
+        LLVMPositionBuilderAtEnd(ctx->builder, copy_loop_bb);
+        LLVMValueRef copy_i = LLVMBuildLoad2(ctx->builder, i64t, copy_idx_ptr, "append.copy.i");
+        LLVMValueRef copy_done = LLVMBuildICmp(ctx->builder, LLVMIntUGE, copy_i, cur_len, "append.copy.done");
+        LLVMBuildCondBr(ctx->builder, copy_done, copy_done_bb, copy_loop_bb);
+        // Body: new_data[i] = data_ptr[i]
+        LLVMValueRef src_idx[] = {copy_i};
+        LLVMValueRef src_elem = LLVMBuildGEP2(ctx->builder, elem_type->llvm_type, data_ptr, src_idx, 1, "append.copy.src");
+        LLVMValueRef dst_idx[] = {copy_i};
+        LLVMValueRef dst_elem = LLVMBuildGEP2(ctx->builder, elem_type->llvm_type, new_data, dst_idx, 1, "append.copy.dst");
+        LLVMValueRef copy_val = LLVMBuildLoad2(ctx->builder, elem_type->llvm_type, src_elem, "append.copy.val");
+        LLVMBuildStore(ctx->builder, copy_val, dst_elem);
+        LLVMValueRef copy_next = LLVMBuildAdd(ctx->builder, copy_i, one_i64, "append.copy.next");
+        LLVMBuildStore(ctx->builder, copy_next, copy_idx_ptr);
+        LLVMBuildBr(ctx->builder, copy_loop_bb);
+        LLVMPositionBuilderAtEnd(ctx->builder, copy_done_bb);
+        // Free old data (if non-null)
+        LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+        LLVMValueRef is_null = LLVMBuildICmp(ctx->builder, LLVMIntEQ, data_ptr, LLVMConstNull(elem_ptr_t), "append.old_null");
+        LLVMBasicBlockRef free_check_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.free.check");
+        LLVMBasicBlockRef free_done_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.free.done");
+        LLVMBuildCondBr(ctx->builder, is_null, free_done_bb, free_check_bb);
+        LLVMPositionBuilderAtEnd(ctx->builder, free_check_bb);
+        ir_gen_call_free(ctx, LLVMBuildPointerCast(ctx->builder, data_ptr, i8ptr, "append.free.ptr"));
+        LLVMBuildBr(ctx->builder, free_done_bb);
+        LLVMPositionBuilderAtEnd(ctx->builder, free_done_bb);
+        LLVMBuildBr(ctx->builder, store_bb);
+        // Values from grow path for PHI nodes
+        LLVMValueRef grow_data_ptr = new_data;
+        LLVMValueRef grow_cap = new_cap;
+
+        // NoGrow block: just continue
+        LLVMPositionBuilderAtEnd(ctx->builder, noGrow_bb);
+        LLVMBuildBr(ctx->builder, store_bb);
+
+        // Store block: store element at data[len]
+        LLVMPositionBuilderAtEnd(ctx->builder, store_bb);
+        // PHI node to merge data_ptr from grow and nogrow paths
+        LLVMValueRef data_phi = LLVMBuildPhi(ctx->builder, LLVMPointerType(elem_type->llvm_type, 0), "append.data.phi");
+        LLVMAddIncoming(data_phi, &grow_data_ptr, &free_done_bb, 1);
+        LLVMAddIncoming(data_phi, &pre_data_ptr, &noGrow_bb, 1);
+        data_ptr = data_phi;
+        // PHI node to merge cur_cap from grow and nogrow paths
+        LLVMValueRef cap_phi = LLVMBuildPhi(ctx->builder, i64t, "append.cap.phi");
+        LLVMAddIncoming(cap_phi, &grow_cap, &free_done_bb, 1);
+        LLVMAddIncoming(cap_phi, &pre_cap, &noGrow_bb, 1);
+        cur_cap = cap_phi;
+        LLVMValueRef store_idx[] = {cur_len};
+        LLVMValueRef store_ptr = LLVMBuildGEP2(ctx->builder, elem_type->llvm_type, data_ptr, store_idx, 1, "append.store.ptr");
+        LLVMBuildStore(ctx->builder, elem_val, store_ptr);
+        cur_len = LLVMBuildAdd(ctx->builder, cur_len, one_i64, "append.len.next");
+    }
+
+    // Store updated data, len, cap back to result
+    LLVMValueRef out_gep_data = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
+        (LLVMValueRef[]){idx0, idx0}, 2, "append.out.data.gep");
+    LLVMBuildStore(ctx->builder, data_ptr, out_gep_data);
+
+    LLVMValueRef out_gep_len = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
+        (LLVMValueRef[]){idx0, idx1}, 2, "append.out.len.gep");
+    LLVMBuildStore(ctx->builder, cur_len, out_gep_len);
+
+    LLVMValueRef out_gep_cap = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
+        (LLVMValueRef[]){idx0, idx2}, 2, "append.out.cap.gep");
+    LLVMBuildStore(ctx->builder, cur_cap, out_gep_cap);
+
+    return LLVMBuildLoad2(ctx->builder, arr_type->llvm_type, result_ptr, "append.result");
+}
+
+static LLVMValueRef
 ir_gen_delete_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     if (node->list.count < 1)
@@ -2419,6 +2585,9 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_MAKE_EXPR:
         return ir_gen_make_expr(ctx, node);
+
+    case AST_NODE_APPEND_EXPR:
+        return ir_gen_append_expr(ctx, node);
 
     case AST_NODE_NEW_EXPR:
     {
