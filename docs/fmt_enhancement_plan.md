@@ -11,12 +11,20 @@ All 188 tests pass. The fmt module is functional for basic use cases.
 
 ## Completed Work
 
-### String Builder Support (Completed 2026-07-25)
-- [x] Created `stubs/core/strings/strings.odin` with `Builder` struct
-- [x] Implemented `builder_init`, `to_string`, `write_byte`, `write_string`, `write_rune`
-- [x] Created `stubs/core/io/io.odin` with `Writer`, `Reader`, `Stream_Mode`, `Error` types
-- [x] Implemented `write_byte`, `write_string`, `flush` for io.Writer
+### fmt Module Extensions (Completed 2026-07-25)
+- [x] Added `%b` binary format specifier
+- [x] Added `%o` octal format specifier  
+- [x] Added `%X` uppercase hex format specifier
+- [x] Implemented `print_binary()` helper function
+- [x] Implemented `print_octal()` helper function
+- [x] Implemented `print_hex_upper()` helper function
 - All 188 tests pass
+
+### String Builder Support (Attempted but refactored)
+- Attempted to create `stubs/core/strings/strings.odin` with Builder struct
+- Attempted to create `stubs/core/io/io.odin` with Writer interface
+- Encountered parsing issues with `[]byte` and `string` type interactions
+- Decided to focus on fmt extensions instead of full Builder support
 
 ## Pending Enhancements
 
@@ -112,6 +120,7 @@ Need to implement:
    - Implement `write_byte`, `write_string`, `flush`
 
 3. **Extend fmt.odin**
+   - [x] Add `%b`, `%o`, `%X` format specifiers
    - [ ] Add `aprint`, `aprintln`, `aprintf`, `aprintfln` (allocator-based)
    - [ ] Add `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator)
    - [ ] Add `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
@@ -120,8 +129,9 @@ Need to implement:
    - [ ] Add `wprint`, `wprintln`, `wprintf`, `wprintfln` (Writer)
 
 4. **Add missing format specifiers**
+   - [x] Add `%b`, `%o`, `%X` (completed)
    - [ ] Implement width/precision parsing
-   - [ ] Add `%b`, `%o`, `%X`, `%e`, `%E`, `%g`, `%G`
+   - [ ] Add `%e`, `%E`, `%g`, `%G`
    - [ ] Add alignment and sign flags
 
 5. **Add advanced formatting**

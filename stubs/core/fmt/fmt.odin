@@ -34,9 +34,39 @@ printf :: proc(format: string, args: ..any) {
                         print_value(1, args[arg_idx])
                     }
                     arg_idx += 1
+                } else if spec == 'X' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_hex_upper(1, v.(int))
+                        } else {
+                            print_value(1, args[arg_idx])
+                        }
+                    }
+                    arg_idx += 1
                 } else if spec == 'u' {
                     if arg_idx < len(args) {
                         print_value(1, args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'b' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_binary(1, v.(int))
+                        } else {
+                            print_value(1, args[arg_idx])
+                        }
+                    }
+                    arg_idx += 1
+                } else if spec == 'o' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_octal(1, v.(int))
+                        } else {
+                            print_value(1, args[arg_idx])
+                        }
                     }
                     arg_idx += 1
                 } else if spec == 'f' {
@@ -84,9 +114,39 @@ printfln :: proc(format: string, args: ..any) {
                         print_value(1, args[arg_idx])
                     }
                     arg_idx += 1
+                } else if spec == 'X' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_hex_upper(1, v.(int))
+                        } else {
+                            print_value(1, args[arg_idx])
+                        }
+                    }
+                    arg_idx += 1
                 } else if spec == 'u' {
                     if arg_idx < len(args) {
                         print_value(1, args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'b' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_binary(1, v.(int))
+                        } else {
+                            print_value(1, args[arg_idx])
+                        }
+                    }
+                    arg_idx += 1
+                } else if spec == 'o' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_octal(1, v.(int))
+                        } else {
+                            print_value(1, args[arg_idx])
+                        }
                     }
                     arg_idx += 1
                 } else if spec == 'f' {
@@ -111,7 +171,6 @@ printfln :: proc(format: string, args: ..any) {
     print_string(1, "\n")
 }
 
-// eprint variants — write to stderr (fd=2)
 eprintln :: proc(args: ..any) {
     for i in 0..<len(args) {
         if i > 0 {
@@ -146,9 +205,39 @@ eprintf :: proc(format: string, args: ..any) {
                         print_value(2, args[arg_idx])
                     }
                     arg_idx += 1
+                } else if spec == 'X' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_hex_upper(2, v.(int))
+                        } else {
+                            print_value(2, args[arg_idx])
+                        }
+                    }
+                    arg_idx += 1
                 } else if spec == 'u' {
                     if arg_idx < len(args) {
                         print_value(2, args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'b' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_binary(2, v.(int))
+                        } else {
+                            print_value(2, args[arg_idx])
+                        }
+                    }
+                    arg_idx += 1
+                } else if spec == 'o' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_octal(2, v.(int))
+                        } else {
+                            print_value(2, args[arg_idx])
+                        }
                     }
                     arg_idx += 1
                 } else if spec == 'f' {
@@ -196,9 +285,39 @@ eprintfln :: proc(format: string, args: ..any) {
                         print_value(2, args[arg_idx])
                     }
                     arg_idx += 1
+                } else if spec == 'X' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_hex_upper(2, v.(int))
+                        } else {
+                            print_value(2, args[arg_idx])
+                        }
+                    }
+                    arg_idx += 1
                 } else if spec == 'u' {
                     if arg_idx < len(args) {
                         print_value(2, args[arg_idx])
+                    }
+                    arg_idx += 1
+                } else if spec == 'b' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_binary(2, v.(int))
+                        } else {
+                            print_value(2, args[arg_idx])
+                        }
+                    }
+                    arg_idx += 1
+                } else if spec == 'o' {
+                    if arg_idx < len(args) {
+                        v := args[arg_idx]
+                        if type_of(v) == type_of(int) {
+                            print_octal(2, v.(int))
+                        } else {
+                            print_value(2, args[arg_idx])
+                        }
                     }
                     arg_idx += 1
                 } else if spec == 'f' {
@@ -223,7 +342,6 @@ eprintfln :: proc(format: string, args: ..any) {
     print_string(2, "\n")
 }
 
-// print_value — dispatch by runtime type
 print_value :: proc(fd: int, v: any) {
     if type_of(v) == type_of(int) {
         s := int_to_string(v.(int))
@@ -280,17 +398,14 @@ print_value :: proc(fd: int, v: any) {
 }
 
 print_f64 :: proc(fd: int, v: f64) {
-    // Handle negative
     if v < 0 {
         print_byte(fd, '-')
         v = -v
     }
-    // Integer part
     int_part := int(v)
     s := int_to_string(int_part)
     print_string(fd, s)
     print_byte(fd, '.')
-    // Fractional part: extract 6 digits
     frac_part := v - f64(int_part)
     for i in 0..<6 {
         frac_part *= 10.0
@@ -311,4 +426,61 @@ print_hex :: proc(fd: int, v: int) {
         print_hex(fd, v / 16)
     }
     print_byte(fd, hex_digits[v % 16])
+}
+
+print_hex_upper :: proc(fd: int, v: int) {
+    hex_digits := "0123456789ABCDEF"
+    is_neg := v < 0
+    if is_neg {
+        print_byte(fd, '-')
+        v = -v
+    }
+    if v >= 16 {
+        print_hex_upper(fd, v / 16)
+    }
+    print_byte(fd, hex_digits[v % 16])
+}
+
+print_binary :: proc(fd: int, v: int) {
+    if v == 0 {
+        print_byte(fd, '0')
+        return
+    }
+    if v < 0 {
+        print_byte(fd, '-')
+        v = -v
+    }
+    bits: [64]u8
+    i := 0
+    for v > 0 {
+        bits[i] = u8('0' + (v & 1))
+        v = v >> 1
+        i += 1
+    }
+    for i > 0 {
+        i -= 1
+        print_byte(fd, bits[i])
+    }
+}
+
+print_octal :: proc(fd: int, v: int) {
+    if v == 0 {
+        print_byte(fd, '0')
+        return
+    }
+    if v < 0 {
+        print_byte(fd, '-')
+        v = -v
+    }
+    digits: [22]u8
+    i := 0
+    for v > 0 {
+        digits[i] = u8('0' + (v & 7))
+        v = v >> 3
+        i += 1
+    }
+    for i > 0 {
+        i -= 1
+        print_byte(fd, digits[i])
+    }
 }
