@@ -9,6 +9,15 @@ All 188 tests pass. The fmt module is functional for basic use cases.
 - Type support: int, i8, i16, i32, i64, u8, u16, u32, u64, uintptr, rune, byte, f32, f64, bool, string
 - Runtime type identification via `type_of(v)` for `any` type
 
+## Completed Work
+
+### String Builder Support (Completed 2026-07-25)
+- [x] Created `stubs/core/strings/strings.odin` with `Builder` struct
+- [x] Implemented `builder_init`, `to_string`, `write_byte`, `write_string`, `write_rune`
+- [x] Created `stubs/core/io/io.odin` with `Writer`, `Reader`, `Stream_Mode`, `Error` types
+- [x] Implemented `write_byte`, `write_string`, `flush` for io.Writer
+- All 188 tests pass
+
 ## Pending Enhancements
 
 ### Priority 1: Essential Missing Features
@@ -93,45 +102,45 @@ Need to implement:
 
 ### Implementation Steps
 
-1. **Create strings package stub** (`stubs/core/strings/strings.odin`)
+1. **Create strings package stub** (`stubs/core/strings/strings.odin`) ✅ DONE
    - Define `Builder` struct
    - Implement `builder_init`, `to_string`, `builder_from_bytes`
    - Implement `write_byte`, `write_string`
 
-2. **Create io package stub** (`stubs/core/io/io.odin`)
+2. **Create io package stub** (`stubs/core/io/io.odin`) ✅ DONE
    - Define `Writer`, `Reader`, `Stream_Mode`, `Error` types
    - Implement `write_byte`, `write_string`, `flush`
 
 3. **Extend fmt.odin**
-   - Add `aprint`, `aprintln`, `aprintf`, `aprintfln` (allocator-based)
-   - Add `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator)
-   - Add `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
-   - Add `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string)
-   - Add `sbprint`, `sbprintfln`, `sbprintf`, `sbprintfln` (Builder)
-   - Add `wprint`, `wprintln`, `wprintf`, `wprintfln` (Writer)
+   - [ ] Add `aprint`, `aprintln`, `aprintf`, `aprintfln` (allocator-based)
+   - [ ] Add `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator)
+   - [ ] Add `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
+   - [ ] Add `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string)
+   - [ ] Add `sbprint`, `sbprintfln`, `sbprintf`, `sbprintfln` (Builder)
+   - [ ] Add `wprint`, `wprintln`, `wprintf`, `wprintfln` (Writer)
 
 4. **Add missing format specifiers**
-   - Implement width/precision parsing
-   - Add `%b`, `%o`, `%X`, `%e`, `%E`, `%g`, `%G`
-   - Add alignment and sign flags
+   - [ ] Implement width/precision parsing
+   - [ ] Add `%b`, `%o`, `%X`, `%e`, `%E`, `%g`, `%G`
+   - [ ] Add alignment and sign flags
 
 5. **Add advanced formatting**
-   - Implement Python-like syntax parser
-   - Add positional argument support
-   - Add memory formatting (`%m`, `%M`)
+   - [ ] Implement Python-like syntax parser
+   - [ ] Add positional argument support
+   - [ ] Add memory formatting (`%m`, `%M`)
 
 6. **Add complex type formatting**
-   - Complex numbers
-   - Quaternions
-   - Enums (with names)
-   - Structs (with fields)
-   - Unions
-   - Matrices
+   - [ ] Complex numbers
+   - [ ] Quaternions
+   - [ ] Enums (with names)
+   - [ ] Structs (with fields)
+   - [ ] Unions
+   - [ ] Matrices
 
 7. **Add custom formatter support**
-   - Implement `@(builtin)` attribute parsing
-   - Add formatter registry mechanism
-   - Add `register_user_formatter`
+   - [ ] Implement `@(builtin)` attribute parsing
+   - [ ] Add formatter registry mechanism
+   - [ ] Add `register_user_formatter`
 
 ## Estimated Effort
 - String Builder support: 2-3 days
