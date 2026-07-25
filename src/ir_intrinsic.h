@@ -6,8 +6,20 @@
 
 #include <llvm-c/Core.h>
 
+typedef void (*intrinsic_handler_fn)(IrGenContext * ctx, char const * func_name,
+                                      TypeDescriptor const * proc_type);
+
 void ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
                                    TypeDescriptor const * proc_type);
+
+LLVMValueRef ir_gen_intrinsic_print_string(IrGenContext * ctx);
+LLVMValueRef ir_gen_intrinsic_print_byte(IrGenContext * ctx);
+LLVMValueRef ir_gen_intrinsic_int_to_string(IrGenContext * ctx);
+LLVMValueRef ir_gen_intrinsic_os_exit(IrGenContext * ctx);
+LLVMValueRef ir_gen_intrinsic_sys_write(IrGenContext * ctx);
+LLVMValueRef ir_gen_intrinsic_sys_close(IrGenContext * ctx);
+LLVMValueRef ir_gen_intrinsic_sys_open(IrGenContext * ctx);
+LLVMValueRef ir_gen_intrinsic_sys_read(IrGenContext * ctx);
 
 LLVMValueRef ir_gen_call_malloc(IrGenContext * ctx, LLVMValueRef size);
 void ir_gen_call_free(IrGenContext * ctx, LLVMValueRef ptr);
