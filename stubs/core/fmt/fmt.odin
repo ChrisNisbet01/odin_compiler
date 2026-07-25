@@ -302,6 +302,11 @@ print_f64 :: proc(fd: int, v: f64) {
 
 print_hex :: proc(fd: int, v: int) {
     hex_digits := "0123456789abcdef"
+    is_neg := v < 0
+    if is_neg {
+        print_byte(fd, '-')
+        v = -v
+    }
     if v >= 16 {
         print_hex(fd, v / 16)
     }
