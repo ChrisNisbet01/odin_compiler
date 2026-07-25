@@ -32,9 +32,6 @@ All 188 tests pass. The fmt module is functional for basic use cases.
 - [ ] Width and precision formatting (e.g., `%10d`, `%.2f`)
 - [ ] Left/right alignment (`-` for left, `0` for zero padding)
 - [ ] Sign flags (`+` for always show sign, ` ` for space)
-- [ ] Binary format (`%b`)
-- [ ] Octal format (`%o`)
-- [ ] Uppercase hex (`%X`)
 - [ ] Scientific notation (`%e`, `%E`)
 - [ ] General format (`%g`, `%G`)
 
