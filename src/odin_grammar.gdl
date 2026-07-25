@@ -310,14 +310,14 @@ MultiPointerType = LBracket PointerCaret RBracket TypePrefix @AST_ACTION_MULTI_P
 MapType = KwMap LBracket TypePrefix RBracket TypePrefix @AST_ACTION_MAP_TYPE;
 SoaType = (DirectiveWithArgs | Directive) TypePrefix @AST_ACTION_SOA_TYPE;
 
+Enumerators = delimited_flex(Enumerator, Comma) Comma? @AST_ACTION_ENUMERATOR_LIST;
 Enumerator = Identifier (Assign Expression)? @AST_ACTION_ENUMERATOR;
-EnumeratorList = delimited_flex(Enumerator, Comma) Comma? @AST_ACTION_ENUMERATOR_LIST;
-EnumType = KwEnum Directive? Identifier? LBrace EnumeratorList RBrace @AST_ACTION_ENUM_TYPE;
+EnumType = KwEnum (Directive IntegerLiteral?)? ParameterList? LBrace Enumerators? RBrace @AST_ACTION_ENUM_TYPE;
 EnumTypeRef = KwEnum Identifier @AST_ACTION_ENUM_TYPE_REF;
 
 UnionField = KwUsing? Identifier Colon TypePrefix @AST_ACTION_UNION_FIELD;
 UnionFieldList = delimited_flex(UnionField, Semicolon) Semicolon? @AST_ACTION_UNION_FIELD_LIST;
-UnionType = KwUnion Directive? LBrace UnionFieldList RBrace @AST_ACTION_UNION_TYPE;
+UnionType = KwUnion (Directive IntegerLiteral?)? ParameterList? LBrace UnionFieldList RBrace @AST_ACTION_UNION_TYPE;
 
 BitFieldField = Identifier Colon TypePrefix PipeInType IntegerLiteral @AST_ACTION_BIT_FIELD_FIELD;
 BitFieldFieldList = delimited_flex(BitFieldField, Comma) Comma? @AST_ACTION_BIT_FIELD_FIELD_LIST;

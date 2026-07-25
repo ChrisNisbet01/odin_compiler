@@ -894,6 +894,34 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
             }
         }
 
+        // Mark the symbol as polymorphic if its enum type uses any
+        // $T / $N poly identifiers in its parameter list.
+        if (value_node != NULL && value_node->type == AST_NODE_ENUM_TYPE
+            && poly_type_has_type_params(value_node))
+        {
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            if (sym)
+            {
+                sym->is_polymorphic = true;
+                sym->kind = SYMBOL_TYPE;
+                poly_register_origin(sym, node);
+            }
+        }
+
+        // Mark the symbol as polymorphic if its union type uses any
+        // $T / $N poly identifiers in its parameter list.
+        if (value_node != NULL && value_node->type == AST_NODE_UNION_TYPE
+            && poly_type_has_type_params(value_node))
+        {
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            if (sym)
+            {
+                sym->is_polymorphic = true;
+                sym->kind = SYMBOL_TYPE;
+                poly_register_origin(sym, node);
+            }
+        }
+
         // Try to evaluate as a compile-time integer constant
         if (value_node != NULL && value_node->type != AST_NODE_PROCEDURE_DEFINITION && value_node->type != AST_NODE_PROC_OVERLOAD_BUNDLE)
         {
@@ -1802,6 +1830,54 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 break;
             }
             // Non-poly struct: resolve normally
+            TypeDescriptor const * td = sem_resolve_type_expr(ctx, value_node);
+            if (td != NULL)
+            {
+                value_node->resolved_type = (TypeDescriptor *)td;
+                TypedValue tv = create_typed_value(NULL, td, false);
+                scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+                symbol_t * s = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+                if (s)
+                    s->kind = SYMBOL_TYPE;
+                break;
+            }
+            sem_evaluate_expr(ctx, value_node);
+        }
+        else if (value_node->type == AST_NODE_ENUM_TYPE)
+        {
+            // Check if this is a poly enum type — skip resolution
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            if (sym && sym->is_polymorphic)
+            {
+                // Poly enum template — skip resolution. Type will be
+                // instantiated at usage sites via TypeApplication.
+                break;
+            }
+            // Non-poly enum: resolve normally
+            TypeDescriptor const * td = sem_resolve_type_expr(ctx, value_node);
+            if (td != NULL)
+            {
+                value_node->resolved_type = (TypeDescriptor *)td;
+                TypedValue tv = create_typed_value(NULL, td, false);
+                scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
+                symbol_t * s = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+                if (s)
+                    s->kind = SYMBOL_TYPE;
+                break;
+            }
+            sem_evaluate_expr(ctx, value_node);
+        }
+        else if (value_node->type == AST_NODE_UNION_TYPE)
+        {
+            // Check if this is a poly union type — skip resolution
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            if (sym && sym->is_polymorphic)
+            {
+                // Poly union template — skip resolution. Type will be
+                // instantiated at usage sites via TypeApplication.
+                break;
+            }
+            // Non-poly union: resolve normally
             TypeDescriptor const * td = sem_resolve_type_expr(ctx, value_node);
             if (td != NULL)
             {

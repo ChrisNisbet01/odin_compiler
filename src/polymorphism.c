@@ -341,6 +341,30 @@ poly_struct_has_type_params(odin_grammar_node_t const * struct_node)
     return false;
 }
 
+bool
+poly_type_has_type_params(odin_grammar_node_t const * type_node)
+{
+    if (type_node == NULL)
+        return false;
+
+    // Check if this type node has a ParameterList child (for poly enum/union)
+    for (size_t i = 0; i < type_node->list.count; i++)
+    {
+        odin_grammar_node_t * child = type_node->list.children[i];
+        if (child != NULL && child->type == AST_NODE_PARAMETER_LIST)
+        {
+            // Check if any parameter has a PolyIdent in its type
+            for (size_t j = 0; j < child->list.count; j++)
+            {
+                odin_grammar_node_t * param = child->list.children[j];
+                if (param != NULL && poly_walk_has_ident(param))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
 // =========================================================================
 // Side table: symbol_t* -> ConstantDecl AST node (origin tracking)
 // =========================================================================

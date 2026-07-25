@@ -960,12 +960,12 @@ beyond procedures to type declarations.
 - Tests: `test_poly_struct.odin`, `test_poly_struct_multi_param.odin`,
   `test_poly_struct_int_param.odin`,
   `expected_to_fail/test_poly_struct_type_mismatch.odin`.
-  **183/183 tests passing**.
+  **187/187 tests passing** (including poly enum test).
 
-### Remaining poly struct phases (future):
-- Phase 14B: Struct literal construction `Box(int){val = 42}`
-- Phase 14C: Type inference `b := Box{val = 42}` (requires untyped literals)
-- Phase 14D: Polymorphic enum/union types (`Result(T,E) :: union{...}`)
+### Remaining (deferred):
+- **Phase 14D: Polymorphic enum/union types** — Basic syntax support implemented.
+  Full member access support for poly enums/unions requires additional work
+  (union field symbol registration, enum member access).
 
 ## Estimated Scope
 

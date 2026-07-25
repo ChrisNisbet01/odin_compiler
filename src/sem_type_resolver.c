@@ -30,7 +30,7 @@ static TypeDescriptor const * sem_resolve_bit_field_type(SemContext * ctx, odin_
 static TypeDescriptor const * sem_resolve_bit_set_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_distinct_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_dynamic_array_type(SemContext * ctx, odin_grammar_node_t * node);
-static TypeDescriptor const * sem_resolve_enum_type(SemContext * ctx, odin_grammar_node_t * node);
+TypeDescriptor const * sem_resolve_enum_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_map_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_maybe_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_multi_pointer_type(SemContext * ctx, odin_grammar_node_t * node);
@@ -41,9 +41,9 @@ static TypeDescriptor const * sem_resolve_soa_type(SemContext * ctx, odin_gramma
 TypeDescriptor const * sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_tuple_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_poly_ident_type(SemContext * ctx, odin_grammar_node_t * node);
-static TypeDescriptor const * sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node);
-static TypeDescriptor const * sem_resolve_union_type(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node);
+TypeDescriptor const * sem_resolve_union_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_vector_type(SemContext * ctx, odin_grammar_node_t * node);
 
 static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *, odin_grammar_node_t *) = {
@@ -738,7 +738,7 @@ sem_resolve_bit_set_type(SemContext * ctx, odin_grammar_node_t * node)
     
 }
 
-static TypeDescriptor const *
+TypeDescriptor const *
 sem_resolve_enum_type(SemContext * ctx, odin_grammar_node_t * node)
 {
 
@@ -1096,7 +1096,7 @@ sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
     
 }
 
-static TypeDescriptor const *
+TypeDescriptor const *
 sem_resolve_union_type(SemContext * ctx, odin_grammar_node_t * node)
 {
 
@@ -1575,21 +1575,25 @@ sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node)
 
     // Extract the StructType from the ConstantDecl
     // ConstantDecl children: [Identifier("Box"), StructType]
-    odin_grammar_node_t * struct_type = NULL;
+    // Also handle EnumType and UnionType for polymorphic enum/union declarations
+    odin_grammar_node_t * type_node = NULL;
     for (size_t i = 0; i < origin->list.count; i++)
     {
         odin_grammar_node_t * child = origin->list.children[i];
-        if (child != NULL && child != name_node && child->type == AST_NODE_STRUCT_TYPE)
+        if (child != NULL && child != name_node &&
+            (child->type == AST_NODE_STRUCT_TYPE ||
+             child->type == AST_NODE_ENUM_TYPE ||
+             child->type == AST_NODE_UNION_TYPE))
         {
-            struct_type = child;
+            type_node = child;
             break;
         }
     }
-    if (struct_type == NULL)
+    if (type_node == NULL)
         return NULL;
 
-    // Extract the ParameterList from the StructType
-    odin_grammar_node_t * param_list = node_find_child(struct_type, AST_NODE_PARAMETER_LIST);
+    // Extract the ParameterList from the type node
+    odin_grammar_node_t * param_list = node_find_child(type_node, AST_NODE_PARAMETER_LIST);
     if (param_list == NULL)
         return NULL;
 
@@ -1725,9 +1729,15 @@ sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-    // Push env and resolve the struct type
+    // Push env and resolve the type
     poly_env_push(ctx, &env);
-    TypeDescriptor const * result = sem_resolve_struct_type(ctx, struct_type);
+    TypeDescriptor const * result = NULL;
+    if (type_node->type == AST_NODE_STRUCT_TYPE)
+        result = sem_resolve_struct_type(ctx, type_node);
+    else if (type_node->type == AST_NODE_ENUM_TYPE)
+        result = sem_resolve_enum_type(ctx, type_node);
+    else if (type_node->type == AST_NODE_UNION_TYPE)
+        result = sem_resolve_union_type(ctx, type_node);
     poly_env_pop(ctx);
 
     // Store in cache

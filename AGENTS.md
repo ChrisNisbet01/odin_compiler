@@ -4,6 +4,14 @@
 
 ### More complete support for core:os
 
+### Polymorphic enum/union types (Phase 14D) - DONE
+- **Grammar**: Extended `EnumType` and `UnionType` rules to accept optional `ParameterList`:
+  - `EnumType = KwEnum (Directive IntegerLiteral?)? ParameterList? LBrace Enumerators? RBrace`
+  - `UnionType = KwUnion (Directive IntegerLiteral?)? ParameterList? LBrace UnionFieldList RBrace`
+- **Semantic analyser**: Added poly enum/union detection in pass1 (mark `is_polymorphic=true`), skip resolution in pass2 for poly types.
+- **Type resolution**: Extended `sem_resolve_type_application` to handle `AST_NODE_ENUM_TYPE` and `AST_NODE_UNION_TYPE` origins.
+- **Tests**: `test_poly_enum_union.odin` verifies poly enum syntax works. **All 188 tests pass**.
+
 ## Accomplishments (session 2026-07-24)
 
 ### Implemented array literal syntax (`[N]T{...}`)
