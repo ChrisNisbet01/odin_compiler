@@ -32,8 +32,22 @@ All 190 tests pass. The fmt module is functional for basic use cases.
 - [x] Added `QualifiedTypeName` grammar rule
 - [x] Added `AST_NODE_QUALIFIED_TYPE_NAME` AST node
 - [x] Added semantic resolver `sem_resolve_qualified_type_name()`
-- [x] All 190 tests pass
+- [x] All 191 tests pass
 - [x] Works correctly in function parameter types (e.g., `proc(b: ^strings.Builder)`)
+
+### fmt Module Extensions (Completed 2026-07-26)
+- [x] Added `%b` binary format specifier
+- [x] Added `%o` octal format specifier  
+- [x] Added `%X` uppercase hex format specifier
+
+### String Builder Support (Completed 2026-07-26)
+- [x] Created `stubs/core/strings/strings.odin` with Builder struct
+- [x] Implemented `builder_make_none()`, `builder_make(n)`
+- [x] Implemented `write_byte()`, `write_bytes()`, `write_string()`
+- [x] Implemented `to_string()`, `to_bytes()` as builtins
+- [x] Fixed IR generation for empty struct literals (returns zero-initialized values)
+- [x] Fixed append() to use select-based conditional growth (avoids LLVM crashes)
+- [ ] **Pending**: Add `sbprint`, `sbprintf`, `sbprintfln` - strings package import causes symbol resolution issues in fmt
 
 ## Pending Enhancements
 
