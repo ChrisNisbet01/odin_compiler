@@ -1,69 +1,132 @@
 # Core:fmt Enhancement Plan
 
 ## Current Status
-All 191 tests pass. The fmt module supports basic printing, format specifiers, strings.Builder-based output, and cross-package imports.
+All 193 tests pass. The fmt module supports basic printing, full format specifier handling with flags/width/precision (via `sb_format_parsed`), strings.Builder-based output, cross-package imports, and `..any` variadic forwarding.
+
+## Compiler Bugs Fixed During This Work
+
+### AST_NODE_QUALIFIED_TYPE_NAME Missing from `is_type_node_table` (Fixed)
+- **Root cause**: `b: strings.Builder` (uninitialized qualified type) failed with "undeclared identifier" because the `AST_NODE_QUALIFIED_TYPE_NAME` AST node wasn't in `is_type_node_table`, so the semantic analyser didn't recognize it as a type. It fell through to `init_node`, the variable was never registered in scope, and taking `&b` later produced a NULL pointee crash in `get_or_create_pointer_type`.
+- **Fix**: Added `[AST_NODE_QUALIFIED_TYPE_NAME] = true` in `src/ast_utils.c`.
+- **Additional fix**: Added NULL bundle in `get_or_create_pointer_type` (`src/type_descriptors.c`) for safety against future similar bugs.
+
+### `..any` → `..any` Variadic Forwarding (Fixed)
+- **Root cause**: When a `..any` parameter was forwarded to another `..any` callee, the IR generator re-packed the existing `[]any` slice itself as a single element of a NEW `[]any` (wrapping the slice struct `{ptr, len}` inside an `any`). So `len(args)==1` (correct on the surface) but `type_of(args[0]) != int` — it was `[]any`. Any type assertion `args[0].(int)` failed.
+- **Fix** (`src/ir_gen_postfix.c`): Added forwarding shortcut. When `variadic_count==1` and the single argument's evaluated type is `[]any` (slice of `any`), pass the slice directly instead of re-packing.
+- **Test**: `tests/test_variadic_forwarding.odin` (5 subtests: direct, single-forward len, single-forward int, multi-hop, two-hop multi).
+
+### Pre-existing Limitations (Still Open)
+
+- **`if cond break` without `do` or braces**: Causes parser failure. Must use `if cond do break` or `if cond { break }`.
+- **Two-step Builder init pattern**: `b: pkg.Type` then `b = expr` was previously broken due to AST_NODE_QUALIFIED_TYPE_NAME bug. Now fixed. The one-step form (`b := expr`) also works and is preferred.
+- **Pre-existing `append` codegen bug**: `append` on pre-allocated dynamic arrays (`make([dynamic]T, N)` followed by `append`) miscomputes the buffer pointer. Workaround: use `builder_make_none()` instead of `builder_make(N)`.
+- **String equality comparison**: Strings (`{ptr, i64}` aggregate) cannot be compared with `==`. Must compare `len()` and individual characters.
+- **`rawptr` not usable in source code**: The internal `ptr_type` isn't in the `BasicType` grammar rule, so `rawptr` can't be used as a variable type.
+- **`if cond do break` requires `do`**: PEG parser may not handle `if cond break` (without `do`).
 
 ## Implemented Features
-- `println`, `printf`, `printfln`, `eprintln`, `eprintf`, `eprintfln`
-- Format specifiers: `%d`, `%s`, `%x`, `%u`, `%f`, `%v`, `%%`, `%b`, `%o`, `%X`
-- Type support: int, i8, i16, i32, i64, u8, u16, u32, u64, uintptr, rune, byte, f32, f64, bool, string
+
+### Core Print Functions
+- `println`, `printf`, `printfln`, `eprintln`, `eprintf`, `eprintfln` — basic versions with ad-hoc format parsing
+- All handle: `%d`, `%s`, `%x`, `%u`, `%f`, `%v`, `%%`, `%b`, `%o`, `%X` (no width/precision/flags yet)
+
+### Builder-based Output (`sb*` family)
+- `sbprint`, `sbprintf`, `sbprintln`, `sbprintfln` — Builder variants of the print family
+- `sb_print_string`, `sb_print_byte`, `sb_print_value`, `sb_print_int`, `sb_print_f64`, `sb_print_hex`, `sb_print_hex_upper`, `sb_print_binary`, `sb_print_octal`
+- `sb_print_padded_string`, `sb_print_padded_char`, `sb_print_hex_lower_padded`, `sb_print_repeat`
+- `flush_to_fd` — write builder contents to a file descriptor
+
+### Allocate-based Print
+- `aprint`, `aprintln` — return allocated string (uses `builder_make_none()` to avoid pre-existing append codegen bug)
+- `aprintf`, `aprintfln` — formatted versions that forward `..any` to `sb_format_parsed` (was broken by `..any`→`..any` forwarding bug, now fixed)
+
+### Format Flag Constants
+- `FLAG_LEFT_ALIGN=1`, `FLAG_ALWAYS_SIGN=2`, `FLAG_SPACE_SIGN=4`, `FLAG_ZERO_PAD=8`, `FLAG_ALTERNATE=16`
+
+### Comprehensive Format Parser: `sb_format_parsed`
+- **Public API**: `sb_format_parsed(b: ^Builder, format: string, args: ..any) -> int` — direct caller, auto-packs `..any` args via compiler magic.
+- **Internal**: `sb_format_parsed_inner(b: ^Builder, format: string, args: []any) -> int`. Direct `[]any` form lets `..any` callers forward `args` (a slice) directly without re-packing.
+- **Supported format specifiers**:
+  - `%d` — signed decimal integer
+  - `%s` — string (with width/flags padding)
+  - `%x` / `%X` — hex (lowercase / uppercase; supports FLAG_ALTERNATE for 0x/0X prefix)
+  - `%u` — unsigned decimal
+  - `%b` — binary (FLAG_ALTERNATE adds 0b/0B prefix)
+  - `%o` — octal (FLAG_ALTERNATE adds 0 prefix)
+  - `%c` — single character (byte/u8/int/rune; with width/flags padding)
+  - `%f` / `%F` — float with fixed-point notation (default precision 6)
+  - `%e` / `%E` — scientific notation (mantissa.e±XX form)
+  - `%g` / `%G` — general format (auto-selects between %f and %e)
+  - `%p` — pointer (0x + lower-hex of int/uintptr/u64)
+  - `%v` — generic value (delegates to `sb_print_value`)
+  - `%%` — literal percent
+  - Unknown specifiers are printed literally
+- **Flags**: `-` (left align), `+` (always sign), ` ` (space sign), `0` (zero pad), `#` (alternate form)
+- **Width**: decimal integer (e.g. `%5d`)
+- **Precision**: `.` followed by decimal (e.g. `%.2f`; default -1 meaning "use spec default")
+
+### Helper Formatters
+- `sb_format_int(b, v: any, base, upper, width, precision, flags, is_unsigned)` — comprehensive integer formatting with sign/zero padding, base prefixes, precision
+- `sb_format_f64(b, v: any, width, precision, flags)` — float with sign/precision
+- `sb_format_scientific(b, v: any, upper, width, precision, flags)` — scientific notation
+- `sb_format_general(b, v: any, upper, width, precision, flags)` — general float format
+- `sb_print_f64_raw(b, v: f64, precision)` — raw float printing without padding (used by other helpers)
+
+### Type Support
+- int, i8, i16, i32, i64, u8, u16, u32, u64, uintptr, rune, byte, f32, f64, bool, string
 - Runtime type identification via `type_of(v)` for `any` type
-- `strings.Builder` support in `core:strings` (builder_make, write_byte, write_string, to_string, to_bytes)
-- Builder-based formatted output: `sbprint`, `sbprintf`, `sbprintln`, `sbprintfln`
-- Cross-package `core:strings` import from `core:fmt`
 
-## Completed Work
+### Strings.Builder Support
+- `Builder` struct in `core:strings`
+- `builder_make_none()`, `builder_make(n)`, `builder_cap`, `builder_space`, `reset`, `grow`
+- `write_byte`, `write_bytes`, `write_string`
+- `to_string`, `to_bytes` (builtins)
+- `destroy` (frees the dynamic-array buffer)
+- Cross-package import working; package-qualified type names work in declarations (`b: strings.Builder`)
 
-### fmt Module Extensions (Completed 2026-07-25)
-- [x] Added `%b` binary format specifier
-- [x] Added `%o` octal format specifier  
-- [x] Added `%X` uppercase hex format specifier
-- [x] Implemented `print_binary()` helper function
-- [x] Implemented `print_octal()` helper function
-- [x] Implemented `print_hex_upper()` helper function
+## Pending Refactoring Work
 
-### String Builder Support (Completed 2026-07-25)
-- [x] Created `stubs/core/strings/strings.odin` with Builder struct
-- [x] Implemented `builder_make_none()`, `builder_make(n)`
-- [x] Implemented `write_byte()`, `write_bytes()`, `write_string()`
-- [x] Implemented `to_string()`, `to_bytes()` as builtins
-- [x] Fixed IR generation for empty struct literals (returns zero-initialized values)
-- [x] Fixed append() to use select-based conditional growth (avoids LLVM crashes)
+### HIGH: Migrate `printf`/`printfln`/`eprintf`/`eprintfln`/`sbprintf`/`sbprintfln` to `sb_format_parsed`
+**Status**: not started; previously blocked by `..any`→`..any` forwarding bug (now fixed).
+**Plan**:
+- [ ] Replace each ~80-line ad-hoc parser in `printf`/`printfln`/`eprintf`/`eprintfln` with:
+  ```odin
+  printf :: proc(format: string, args: ..any) {
+      b := strings.builder_make_none()
+      sb_format_parsed(&b, format, args)
+      flush_to_fd(&b, 1)
+  }
+  ```
+  (Use `flush_to_fd` to write the built-up string; or inline `strings.to_string` + `print_string`.)
+- [ ] Same for `sbprintf`/`sbprintfln` — they already use a builder:
+  ```odin
+  sbprintf :: proc(b: ^Builder, format: string, args: ..any) -> int {
+      return sb_format_parsed(b, format, args)
+  }
+  ```
+- [ ] Verify all existing tests still pass with the once only 7 format specifiers (`%d`, `%s`, `%x`, `%u`, `%f`, `%v`, `%%`); then verify new specifiers/flags work transparently in `printf`.
+- [ ] Delete the now-redundant ad-hoc parser bodies (saves ~480 lines of duplicate code).
 
-### Qualified Type Name Support (Completed 2026-07-26)
-- [x] Added `QualifiedTypeName` grammar rule
-- [x] Added `AST_NODE_QUALIFIED_TYPE_NAME` AST node
-- [x] Added semantic resolver `sem_resolve_qualified_type_name()`
-- [x] All 191 tests pass
-- [x] Works correctly in function parameter types (e.g., `proc(b: ^strings.Builder)`)
+### MEDIUM: Add tests for new format specifiers/flags using the migrated `printf`
+- [ ] Test `printf("%c\n", 'A')`, `printf("%.3f\n", 3.14159)`, `printf("%05d\n", 42)`, `printf("%-10s|\n", "hi")`, `printf("%e\n", 123.456)`, `printf("%#x\n", 255)`.
+- [ ] Test edge cases: empty args forwarded, multi-arg mixed types, precision on strings (`%.3s` truncation).
 
-### Nested Import IR Gen Fix (Completed 2026-07-27)
-- [x] Fixed `sem_evaluate_expr.c:1734`: Non-polymorphic package-qualified CALL nodes now propagate `resolved_symbol` from the preceding MEMBER node
-- [x] Fixed `ir_gen_postfix.c:604-624`: Forward-declare cross-package procedures via `LLVMGetNamedFunction`/`LLVMAddFunction` when `symbol->value.value` is NULL
-- [x] `fmt.odin` can now `import "core:strings"` and call `strings.write_string()` internally
-- [x] Detailed analysis in `notes/nested_import_ir_gen_bug.md`
+### LOW: Tag unused printf-side helpers for cleanup
+- `print_value`, `print_f64`, `print_hex`, `print_hex_upper`, `print_binary`, `print_octal` — used by existing `println`/`eprintln`. After `printf` migration these may become dead code (verify; possibly remove or keep for the no-format-string value-paths).
 
-### Builder-based fmt Functions (Completed 2026-07-27)
-- [x] Implemented `sbprint(b: ^Builder, args: ..any) -> int` — space-separated args into builder
-- [x] Implemented `sbprintf(b: ^Builder, format: string, args: ..any) -> int` — formatted output into builder
-- [x] Implemented `sbprintln(b: ^Builder, args: ..any) -> int` — space-separated args + trailing newline
-- [x] Implemented `sbprintfln(b: ^Builder, format: string, args: ..any) -> int` — formatted output + trailing newline
-- [x] Builder-aware helpers: `sb_print_string`, `sb_print_byte`, `sb_print_value`, `sb_print_int`, `sb_print_f64`, `sb_print_hex`, `sb_print_hex_upper`, `sb_print_binary`, `sb_print_octal`
-- [x] All 191 tests pass (test_fmt_sb.odin covers all 4 functions with 15 subtests)
+## Pending New Features
 
-## Pending Enhancements
+### Priority 1: Remaining Format Features
+- [ ] Precision-only specifier `%.5s` for string truncation (slicing required — easy).
+- [ ] `%q` — Quoted string ("...").
+- [ ] `%m` — Quotient-remainder format (`a mod b = r`).
+- [ ] Field/access position argument: `%[1]d` / `%[2]s` — requires AST_NODE for spec parsing.
 
-### Priority 1: Essential Missing Features
-- [ ] Width and precision formatting (e.g., `%10d`, `%.2f`)
-- [ ] Left/right alignment (`-` for left, `0` for zero padding)
-- [ ] Sign flags (`+` for always show sign, ` ` for space)
-- [ ] Scientific notation (`%e`, `%E`)
-- [ ] General format (`%g`, `%G`)
-
-### Priority 2: Advanced Format Features
-- [ ] Python-like syntax (`{}`, `{0:d}`, `{:6.2f}`)
-- [ ] Positional arguments (`%[0]d`, `%[1]s`)
-- [ ] Named arguments (`{name}`)
+### Priority 2: Builder Variants
+- [ ] `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator) — needs temp allocator support in compiler first
+- [ ] `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
+- [ ] `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string)
+- [ ] `wprint`, `wprintln`, `wprintf`, `wprintfln` (io.Writer) — needs io.Writer abstraction
 
 ### Priority 3: Complex Type Support
 - [ ] Memory formatting (`%m`, `%M`)
@@ -77,25 +140,13 @@ All 191 tests pass. The fmt module supports basic printing, format specifiers, s
 ### Priority 4: Extensibility
 - [ ] Custom formatter registration (`@(builtin)` attribute support)
 
-## Remaining Builder Variants
-
-### Priority 2: Builder Variants
-- [ ] `aprint`, `aprintln`, `aprintf`, `aprintfln` (allocate string)
-- [ ] `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator)
-- [ ] `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
-- [ ] `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string)
-- [ ] `wprint`, `wprintln`, `wprintf`, `wprintfln` (io.Writer)
-
-### Priority 3: IO Writer Support
-- [ ] Create `stubs/core/io/io.odin`
-- [ ] Define `Writer`, `Reader`, `Stream_Mode`, `Error` types
-- [ ] Implement `write_byte`, `write_string`, `flush`
-
 ## Estimated Effort
-- Remaining format specifiers: 1-2 days
-- Builder variants: 1 day
-- IO Writer support: 1-2 days
+- printf/printfln refactoring: 2-3 hours
+- Test additions for new specifiers in printf: 1 day
+- String truncation (`%.5s`), `%q`, `%m`: 1 day
+- Positional/named arguments: 2-3 days (AST grammar changes)
+- Builder variants: 1-2 days (blocked by temp allocator / io.Writer)
 - Complex type formatting: 2-3 days
 - Custom formatters: 1-2 days
 
-Total: 6-10 days for complete implementation
+Total rest: 8-12 days for complete implementation.

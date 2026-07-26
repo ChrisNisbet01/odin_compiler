@@ -13,164 +13,18 @@ println :: proc(args: ..any) {
 }
 
 printf :: proc(format: string, args: ..any) {
-    arg_idx := 0
-    i := 0
-    for i < len(format) {
-        if format[i] == '%' {
-            i += 1
-            if i < len(format) {
-                spec := format[i]
-                if spec == 'd' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 's' {
-                    if arg_idx < len(args) {
-                        s := args[arg_idx].(string)
-                        print_string(1, s)
-                    }
-                    arg_idx += 1
-                } else if spec == 'x' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'X' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_hex_upper(1, v.(int))
-                        } else {
-                            print_value(1, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'u' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'b' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_binary(1, v.(int))
-                        } else {
-                            print_value(1, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'o' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_octal(1, v.(int))
-                        } else {
-                            print_value(1, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'f' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'v' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == '%' {
-                    print_byte(1, '%')
-                }
-            }
-        } else {
-            print_byte(1, format[i])
-        }
-        i += 1
-    }
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    s := strings.to_string(b)
+    print_string(1, s)
 }
 
 printfln :: proc(format: string, args: ..any) {
-    arg_idx := 0
-    i := 0
-    for i < len(format) {
-        if format[i] == '%' {
-            i += 1
-            if i < len(format) {
-                spec := format[i]
-                if spec == 'd' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 's' {
-                    if arg_idx < len(args) {
-                        s := args[arg_idx].(string)
-                        print_string(1, s)
-                    }
-                    arg_idx += 1
-                } else if spec == 'x' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'X' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_hex_upper(1, v.(int))
-                        } else {
-                            print_value(1, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'u' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'b' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_binary(1, v.(int))
-                        } else {
-                            print_value(1, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'o' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_octal(1, v.(int))
-                        } else {
-                            print_value(1, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'f' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'v' {
-                    if arg_idx < len(args) {
-                        print_value(1, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == '%' {
-                    print_byte(1, '%')
-                }
-            }
-        } else {
-            print_byte(1, format[i])
-        }
-        i += 1
-    }
-    print_string(1, "\n")
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, '\n')
+    s := strings.to_string(b)
+    print_string(1, s)
 }
 
 eprintln :: proc(args: ..any) {
@@ -184,164 +38,18 @@ eprintln :: proc(args: ..any) {
 }
 
 eprintf :: proc(format: string, args: ..any) {
-    arg_idx := 0
-    i := 0
-    for i < len(format) {
-        if format[i] == '%' {
-            i += 1
-            if i < len(format) {
-                spec := format[i]
-                if spec == 'd' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 's' {
-                    if arg_idx < len(args) {
-                        s := args[arg_idx].(string)
-                        print_string(2, s)
-                    }
-                    arg_idx += 1
-                } else if spec == 'x' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'X' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_hex_upper(2, v.(int))
-                        } else {
-                            print_value(2, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'u' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'b' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_binary(2, v.(int))
-                        } else {
-                            print_value(2, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'o' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_octal(2, v.(int))
-                        } else {
-                            print_value(2, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'f' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'v' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == '%' {
-                    print_byte(2, '%')
-                }
-            }
-        } else {
-            print_byte(2, format[i])
-        }
-        i += 1
-    }
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    s := strings.to_string(b)
+    print_string(2, s)
 }
 
 eprintfln :: proc(format: string, args: ..any) {
-    arg_idx := 0
-    i := 0
-    for i < len(format) {
-        if format[i] == '%' {
-            i += 1
-            if i < len(format) {
-                spec := format[i]
-                if spec == 'd' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 's' {
-                    if arg_idx < len(args) {
-                        s := args[arg_idx].(string)
-                        print_string(2, s)
-                    }
-                    arg_idx += 1
-                } else if spec == 'x' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'X' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_hex_upper(2, v.(int))
-                        } else {
-                            print_value(2, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'u' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'b' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_binary(2, v.(int))
-                        } else {
-                            print_value(2, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'o' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            print_octal(2, v.(int))
-                        } else {
-                            print_value(2, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'f' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'v' {
-                    if arg_idx < len(args) {
-                        print_value(2, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == '%' {
-                    print_byte(2, '%')
-                }
-            }
-        } else {
-            print_byte(2, format[i])
-        }
-        i += 1
-    }
-    print_string(2, "\n")
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, '\n')
+    s := strings.to_string(b)
+    print_string(2, s)
 }
 
 print_value :: proc(fd: int, v: any) {
@@ -646,85 +354,7 @@ sbprint :: proc(b: ^strings.Builder, args: ..any) -> int {
 }
 
 sbprintf :: proc(b: ^strings.Builder, format: string, args: ..any) -> int {
-    start := b.count
-    arg_idx := 0
-    i := 0
-    for i < len(format) {
-        if format[i] == '%' {
-            i += 1
-            if i < len(format) {
-                spec := format[i]
-                if spec == 'd' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 's' {
-                    if arg_idx < len(args) {
-                        s := args[arg_idx].(string)
-                        sb_print_string(b, s)
-                    }
-                    arg_idx += 1
-                } else if spec == 'x' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'X' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            sb_print_hex_upper(b, v.(int))
-                        } else {
-                            sb_print_value(b, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'u' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'b' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            sb_print_binary(b, v.(int))
-                        } else {
-                            sb_print_value(b, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'o' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            sb_print_octal(b, v.(int))
-                        } else {
-                            sb_print_value(b, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'f' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'v' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == '%' {
-                    sb_print_byte(b, '%')
-                }
-            }
-        } else {
-            sb_print_byte(b, format[i])
-        }
-        i += 1
-    }
-    return b.count - start
+    return sb_format_parsed(b, format, args)
 }
 
 sbprintln :: proc(b: ^strings.Builder, args: ..any) -> int {
@@ -1417,83 +1047,7 @@ aprintfln :: proc(format: string, args: ..any) -> string {
 }
 sbprintfln :: proc(b: ^strings.Builder, format: string, args: ..any) -> int {
     start := b.count
-    arg_idx := 0
-    i := 0
-    for i < len(format) {
-        if format[i] == '%' {
-            i += 1
-            if i < len(format) {
-                spec := format[i]
-                if spec == 'd' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 's' {
-                    if arg_idx < len(args) {
-                        s := args[arg_idx].(string)
-                        sb_print_string(b, s)
-                    }
-                    arg_idx += 1
-                } else if spec == 'x' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'X' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            sb_print_hex_upper(b, v.(int))
-                        } else {
-                            sb_print_value(b, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'u' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'b' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            sb_print_binary(b, v.(int))
-                        } else {
-                            sb_print_value(b, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'o' {
-                    if arg_idx < len(args) {
-                        v := args[arg_idx]
-                        if type_of(v) == type_of(int) {
-                            sb_print_octal(b, v.(int))
-                        } else {
-                            sb_print_value(b, args[arg_idx])
-                        }
-                    }
-                    arg_idx += 1
-                } else if spec == 'f' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == 'v' {
-                    if arg_idx < len(args) {
-                        sb_print_value(b, args[arg_idx])
-                    }
-                    arg_idx += 1
-                } else if spec == '%' {
-                    sb_print_byte(b, '%')
-                }
-            }
-        } else {
-            sb_print_byte(b, format[i])
-        }
-        i += 1
-    }
+    sb_format_parsed(b, format, args)
     sb_print_string(b, "\n")
     return b.count - start
 }
