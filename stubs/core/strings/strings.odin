@@ -71,3 +71,8 @@ grow :: proc(b: ^Builder, n: int) {
         b.buf = new_buf;
     }
 }
+
+destroy :: proc(b: ^Builder) {
+    delete(b.buf);
+    b.count = 0;
+}

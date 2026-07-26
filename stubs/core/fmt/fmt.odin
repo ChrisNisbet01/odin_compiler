@@ -739,6 +739,488 @@ sbprintln :: proc(b: ^strings.Builder, args: ..any) -> int {
     return b.count - start
 }
 
+// --- Helper: f64 raw formatting (no width padding, no temp builder) ---
+
+sb_print_f64_raw :: proc(b: ^strings.Builder, v: f64, precision: int) {
+    is_neg := v < 0
+    if is_neg {
+        sb_print_byte(b, '-')
+        v = -v
+    }
+    int_part := int(v)
+    s := int_to_string(int_part)
+    sb_print_string(b, s)
+    if precision > 0 {
+        sb_print_byte(b, '.')
+        frac_part := v - f64(int_part)
+        for i in 0..<precision {
+            frac_part *= 10.0
+            digit := int(frac_part)
+            sb_print_byte(b, u8('0' + digit))
+            frac_part -= f64(digit)
+        }
+    }
+}
+
+// --- Helper: f64 format with width and precision ---
+
+sb_format_f64 :: proc(b: ^strings.Builder, v: any, width: int, precision: int, flags: int) {
+    val: f64
+    if type_of(v) == type_of(f64) {
+        val = v.(f64)
+    } else if type_of(v) == type_of(f32) {
+        val = f64(v.(f32))
+    } else if type_of(v) == type_of(int) {
+        val = f64(v.(int))
+    } else {
+        val = 0.0
+    }
+
+    is_neg := val < 0
+    if is_neg {
+        sb_print_byte(b, '-')
+        val = -val
+    } else if flags & FLAG_ALWAYS_SIGN != 0 {
+        sb_print_byte(b, '+')
+    } else if flags & FLAG_SPACE_SIGN != 0 {
+        sb_print_byte(b, ' ')
+    }
+
+    int_part := int(val)
+    s := int_to_string(int_part)
+    sb_print_string(b, s)
+    if precision > 0 {
+        sb_print_byte(b, '.')
+        frac_part := val - f64(int_part)
+        for i in 0..<precision {
+            frac_part *= 10.0
+            digit := int(frac_part)
+            sb_print_byte(b, u8('0' + digit))
+            frac_part -= f64(digit)
+        }
+    }
+
+    content_len := b.count
+
+    pad_total := 0
+    if width > content_len {
+        pad_total = width - content_len
+    }
+
+    if pad_total > 0 && flags & FLAG_LEFT_ALIGN != 0 {
+        sb_print_repeat(b, ' ', pad_total)
+    }
+}
+
+// --- Helper: scientific notation ---
+
+sb_format_scientific :: proc(b: ^strings.Builder, v: any, upper: bool, width: int, precision: int, flags: int) {
+    val: f64
+    if type_of(v) == type_of(f64) {
+        val = v.(f64)
+    } else if type_of(v) == type_of(f32) {
+        val = f64(v.(f32))
+    } else if type_of(v) == type_of(int) {
+        val = f64(v.(int))
+    } else {
+        val = 0.0
+    }
+
+    is_neg := val < 0
+    if is_neg {
+        sb_print_byte(b, '-')
+        val = -val
+    } else if flags & FLAG_ALWAYS_SIGN != 0 {
+        sb_print_byte(b, '+')
+    } else if flags & FLAG_SPACE_SIGN != 0 {
+        sb_print_byte(b, ' ')
+    }
+
+    if val == 0 {
+        sb_print_byte(b, '0')
+        if precision > 0 {
+            sb_print_byte(b, '.')
+            for i in 0..<precision {
+                sb_print_byte(b, '0')
+            }
+        }
+        if upper {
+            sb_print_string(b, "E+00")
+        } else {
+            sb_print_string(b, "e+00")
+        }
+        return
+    }
+
+    // Compute exponent
+    exp := 0
+    if val >= 10.0 {
+        for val >= 10.0 {
+            val /= 10.0
+            exp += 1
+        }
+    } else if val < 1.0 {
+        for val < 1.0 {
+            val *= 10.0
+            exp -= 1
+        }
+    }
+
+    // Mantissa: one digit before decimal, precision digits after
+    mant_digit := int(val)
+    sb_print_byte(b, u8('0' + mant_digit))
+    val -= f64(mant_digit)
+    if precision > 0 {
+        sb_print_byte(b, '.')
+        for i in 0..<precision {
+            val *= 10.0
+            d := int(val)
+            sb_print_byte(b, u8('0' + d))
+            val -= f64(d)
+        }
+    }
+
+    // Exponent
+    if upper {
+        sb_print_string(b, "E")
+    } else {
+        sb_print_string(b, "e")
+    }
+    if exp >= 0 {
+        sb_print_byte(b, '+')
+    } else {
+        sb_print_byte(b, '-')
+        exp = -exp
+    }
+    if exp < 10 {
+        sb_print_byte(b, '0')
+    }
+    sb_print_int(b, exp)
+}
+
+// --- Helper: general format (%g / %G) ---
+
+sb_format_general :: proc(b: ^strings.Builder, v: any, upper: bool, width: int, precision: int, flags: int) {
+    val: f64
+    if type_of(v) == type_of(f64) {
+        val = v.(f64)
+    } else if type_of(v) == type_of(f32) {
+        val = f64(v.(f32))
+    } else if type_of(v) == type_of(int) {
+        val = f64(v.(int))
+    } else {
+        val = 0.0
+    }
+
+    is_neg := val < 0
+    abs_val := val
+    if is_neg {
+        abs_val = -val
+    }
+
+    if abs_val == 0 {
+        sb_print_byte(b, '0')
+        return
+    }
+
+    exp := 0
+    tmp := abs_val
+    if tmp >= 10.0 {
+        for tmp >= 10.0 {
+            tmp /= 10.0
+            exp += 1
+        }
+    } else if tmp < 1.0 {
+        for tmp < 1.0 {
+            tmp *= 10.0
+            exp -= 1
+        }
+    }
+
+    // Use %e if exponent < -4 or >= precision, otherwise %f
+    if exp < -4 || exp >= precision {
+        sb_format_scientific(b, v, upper, 0, precision - 1, flags)
+    } else {
+        frac_digits := precision - 1 - exp
+        if frac_digits < 0 {
+            frac_digits = 0
+        }
+        sb_format_f64(b, v, 0, frac_digits, flags)
+    }
+}
+// --- Helper: hex lower with zero padding ---
+
+sb_print_hex_lower_padded :: proc(b: ^strings.Builder, v: int, min_digits: int, width: int, flags: int) {
+    hex_digits := "0123456789abcdef"
+    digits_buf: [16]u8
+    digit_count := 0
+    val := v
+    if val == 0 {
+        digits_buf[0] = '0'
+        digit_count = 1
+    } else {
+        for val > 0 && digit_count < 16 {
+            digits_buf[digit_count] = hex_digits[val & 15]
+            val >>= 4
+            digit_count += 1
+        }
+    }
+    pad_zeros := 0
+    if min_digits > digit_count {
+        pad_zeros = min_digits - digit_count
+    }
+    content_len := pad_zeros + digit_count
+    pad_total := 0
+    if width > content_len {
+        pad_total = width - content_len
+    }
+    if flags & FLAG_LEFT_ALIGN == 0 {
+        sb_print_repeat(b, ' ', pad_total)
+    }
+    if pad_zeros > 0 {
+        sb_print_repeat(b, '0', pad_zeros)
+    }
+    for i in 0..<digit_count {
+        sb_print_byte(b, digits_buf[digit_count - 1 - i])
+    }
+    if flags & FLAG_LEFT_ALIGN != 0 {
+        sb_print_repeat(b, ' ', pad_total)
+    }
+}
+
+// --- Helper: integer formatting with base/width/precision/flags ---
+
+sb_format_int :: proc(b: ^strings.Builder, v: any, base: int, upper: bool, width: int, precision: int, flags: int, is_unsigned: bool) {
+    val := 0
+    is_neg := false
+
+    if is_unsigned {
+        if type_of(v) == type_of(u8) {
+            val = int(v.(u8))
+        } else if type_of(v) == type_of(u16) {
+            val = int(v.(u16))
+        } else if type_of(v) == type_of(u32) {
+            val = int(v.(u32))
+        } else if type_of(v) == type_of(u64) {
+            val = int(v.(u64))
+        } else if type_of(v) == type_of(uintptr) {
+            val = int(v.(uintptr))
+        } else if type_of(v) == type_of(byte) {
+            val = int(v.(byte))
+        } else {
+            val = 0
+        }
+    } else {
+        if type_of(v) == type_of(int) {
+            val = v.(int)
+        } else if type_of(v) == type_of(i8) {
+            val = int(v.(i8))
+        } else if type_of(v) == type_of(i16) {
+            val = int(v.(i16))
+        } else if type_of(v) == type_of(i32) {
+            val = int(v.(i32))
+        } else if type_of(v) == type_of(i64) {
+            val = int(v.(i64))
+        } else if type_of(v) == type_of(u8) {
+            val = int(v.(u8))
+        } else if type_of(v) == type_of(u16) {
+            val = int(v.(u16))
+        } else if type_of(v) == type_of(u32) {
+            val = int(v.(u32))
+        } else if type_of(v) == type_of(u64) {
+            val = int(v.(u64))
+        } else if type_of(v) == type_of(uintptr) {
+            val = int(v.(uintptr))
+        } else if type_of(v) == type_of(byte) {
+            val = int(v.(byte))
+        } else {
+            val = 0
+        }
+        if !is_unsigned && val < 0 {
+            is_neg = true
+            val = -val
+        }
+    }
+
+    // Convert to string in given base (use temp, preserving val for prefix check)
+    digits_buf: [65]u8
+    digit_count := 0
+    tmp_val := val
+    if tmp_val == 0 {
+        digits_buf[0] = '0'
+        digit_count = 1
+    } else {
+        for tmp_val > 0 && digit_count < 65 {
+            d := tmp_val % base
+            if upper {
+                if d < 10 {
+                    digits_buf[digit_count] = u8('0' + d)
+                } else {
+                    digits_buf[digit_count] = u8('A' + d - 10)
+                }
+            } else {
+                if d < 10 {
+                    digits_buf[digit_count] = u8('0' + d)
+                } else {
+                    digits_buf[digit_count] = u8('a' + d - 10)
+                }
+            }
+            tmp_val = tmp_val / base
+            digit_count += 1
+        }
+    }
+
+    // Build prefix
+    prefix_len := 0
+    prefix_buf: [4]u8
+    if is_neg {
+        prefix_buf[0] = '-'
+        prefix_len = 1
+    } else if flags & FLAG_ALWAYS_SIGN != 0 {
+        prefix_buf[0] = '+'
+        prefix_len = 1
+    } else if flags & FLAG_SPACE_SIGN != 0 {
+        prefix_buf[0] = ' '
+        prefix_len = 1
+    }
+    if flags & FLAG_ALTERNATE != 0 && val != 0 {
+        if base == 16 {
+            prefix_buf[prefix_len] = '0'
+            if upper { prefix_buf[prefix_len + 1] = 'X' } else { prefix_buf[prefix_len + 1] = 'x' }
+            prefix_len += 2
+        } else if base == 8 {
+            prefix_buf[prefix_len] = '0'
+            prefix_len += 1
+        } else if base == 2 {
+            prefix_buf[prefix_len] = '0'
+            if upper { prefix_buf[prefix_len + 1] = 'B' } else { prefix_buf[prefix_len + 1] = 'b' }
+            prefix_len += 2
+        }
+    }
+
+    // Precision pads digits (minimum digits)
+    pad_zeros := 0
+    if precision > 0 && precision > digit_count {
+        pad_zeros = precision - digit_count
+    }
+
+    // Total content length
+    content_len := prefix_len + pad_zeros + digit_count
+
+    // Width padding
+    pad_total := 0
+    if width > content_len {
+        pad_total = width - content_len
+    }
+
+    if flags & FLAG_ZERO_PAD != 0 && flags & FLAG_LEFT_ALIGN == 0 && precision < 0 {
+        pad_zeros = pad_total
+        pad_total = 0
+    }
+
+    // Left padding
+    if flags & FLAG_LEFT_ALIGN == 0 {
+        sb_print_repeat(b, ' ', pad_total)
+    }
+
+    // Prefix
+    for pi in 0..<prefix_len {
+        sb_print_byte(b, prefix_buf[pi])
+    }
+
+    // Precision zeros
+    if pad_zeros > 0 {
+        sb_print_repeat(b, '0', pad_zeros)
+    }
+
+    // Digits (reversed)
+    for di in 0..<digit_count {
+        sb_print_byte(b, digits_buf[digit_count - 1 - di])
+    }
+
+    // Right padding
+    if flags & FLAG_LEFT_ALIGN != 0 {
+        sb_print_repeat(b, ' ', pad_total)
+    }
+}
+// --- Format flag constants ---
+FLAG_LEFT_ALIGN  :: 1
+FLAG_ALWAYS_SIGN :: 2
+FLAG_SPACE_SIGN  :: 4
+FLAG_ZERO_PAD    :: 8
+FLAG_ALTERNATE   :: 16
+
+// --- Helper: repeat character ---
+
+sb_print_repeat :: proc(b: ^strings.Builder, c: byte, count: int) {
+    for i in 0..<count {
+        sb_print_byte(b, c)
+    }
+}
+
+// --- Helper: padded char ---
+
+sb_print_padded_char :: proc(b: ^strings.Builder, c: byte, width: int, flags: int) {
+    pad_total := 0
+    if width > 1 {
+        pad_total = width - 1
+    }
+    if flags & FLAG_LEFT_ALIGN == 0 {
+        sb_print_repeat(b, ' ', pad_total)
+    }
+    sb_print_byte(b, c)
+    if flags & FLAG_LEFT_ALIGN != 0 {
+        sb_print_repeat(b, ' ', pad_total)
+    }
+}
+
+// --- Helper: padded string ---
+
+sb_print_padded_string :: proc(b: ^strings.Builder, s: string, width: int, flags: int) {
+    pad_total := 0
+    if width > len(s) {
+        pad_total = width - len(s)
+    }
+    if flags & FLAG_LEFT_ALIGN == 0 {
+        sb_print_repeat(b, ' ', pad_total)
+    }
+    sb_print_string(b, s)
+    if flags & FLAG_LEFT_ALIGN != 0 {
+        sb_print_repeat(b, ' ', pad_total)
+    }
+}
+
+// --- Helper: flush builder to fd ---
+
+flush_to_fd :: proc(b: ^strings.Builder, fd: int) {
+    s := strings.to_string(b^)
+    print_string(fd, s)
+}
+
+// --- Allocate-based print (returns allocated string) ---
+
+aprint :: proc(args: ..any) -> string {
+    b := strings.builder_make_none()
+    for i in 0..<len(args) {
+        if i > 0 {
+            sb_print_string(&b, " ")
+        }
+        sb_print_value(&b, args[i])
+    }
+    return strings.to_string(b)
+}
+
+aprintln :: proc(args: ..any) -> string {
+    b := strings.builder_make_none()
+    for i in 0..<len(args) {
+        if i > 0 {
+            sb_print_string(&b, " ")
+        }
+        sb_print_value(&b, args[i])
+    }
+    sb_print_byte(&b, '\n')
+    return strings.to_string(b)
+}
 sbprintfln :: proc(b: ^strings.Builder, format: string, args: ..any) -> int {
     start := b.count
     arg_idx := 0
