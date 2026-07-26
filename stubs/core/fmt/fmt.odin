@@ -1398,6 +1398,19 @@ aprintln :: proc(args: ..any) -> string {
     sb_print_byte(&b, '\n')
     return strings.to_string(b)
 }
+
+aprintf :: proc(format: string, args: ..any) -> string {
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    return strings.to_string(b)
+}
+
+aprintfln :: proc(format: string, args: ..any) -> string {
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, '\n')
+    return strings.to_string(b)
+}
 sbprintfln :: proc(b: ^strings.Builder, format: string, args: ..any) -> int {
     start := b.count
     arg_idx := 0
