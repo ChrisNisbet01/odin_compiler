@@ -1,11 +1,11 @@
 # Core:fmt Enhancement Plan
 
 ## Current Status
-All 188 tests pass. The fmt module is functional for basic use cases.
+All 190 tests pass. The fmt module is functional for basic use cases.
 
 ## Implemented Features
 - `println`, `printf`, `printfln`, `eprintln`, `eprintf`, `eprintfln`
-- Format specifiers: `%d`, `%s`, `%x`, `%u`, `%f`, `%v`, `%%`
+- Format specifiers: `%d`, `%s`, `%x`, `%u`, `%f`, `%v`, `%%`, `%b`, `%o`, `%X`
 - Type support: int, i8, i16, i32, i64, u8, u16, u32, u64, uintptr, rune, byte, f32, f64, bool, string
 - Runtime type identification via `type_of(v)` for `any` type
 
@@ -18,13 +18,22 @@ All 188 tests pass. The fmt module is functional for basic use cases.
 - [x] Implemented `print_binary()` helper function
 - [x] Implemented `print_octal()` helper function
 - [x] Implemented `print_hex_upper()` helper function
-- All 188 tests pass
 
-### String Builder Support (Attempted but refactored)
-- Attempted to create `stubs/core/strings/strings.odin` with Builder struct
-- Attempted to create `stubs/core/io/io.odin` with Writer interface
-- Encountered parsing issues with `[]byte` and `string` type interactions
-- Decided to focus on fmt extensions instead of full Builder support
+### String Builder Support (Completed 2026-07-25)
+- [x] Created `stubs/core/strings/strings.odin` with Builder struct
+- [x] Implemented `builder_make_none()`, `builder_make(n)`
+- [x] Implemented `write_byte()`, `write_bytes()`, `write_string()`
+- [x] Implemented `to_string()`, `to_bytes()` as builtins
+- [x] Fixed IR generation for empty struct literals (returns zero-initialized values)
+- [x] Fixed append() to use select-based conditional growth (avoids LLVM crashes)
+- [x] All 190 tests pass
+
+### Qualified Type Name Support (Completed 2026-07-26)
+- [x] Added `QualifiedTypeName` grammar rule
+- [x] Added `AST_NODE_QUALIFIED_TYPE_NAME` AST node
+- [x] Added semantic resolver `sem_resolve_qualified_type_name()`
+- [x] All 190 tests pass
+- [x] Works correctly in function parameter types (e.g., `proc(b: ^strings.Builder)`)
 
 ## Pending Enhancements
 
@@ -70,8 +79,8 @@ The official fmt implementation uses `strings.Builder` for efficient string cons
 Need to implement `strings.Builder` struct:
 ```odin
 Builder :: struct {
-    data: []byte,
-    count: int,
+    data: [dynamic]byte;
+    count: int;
 }
 ```
 

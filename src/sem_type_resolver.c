@@ -3,6 +3,7 @@
 #include "ast_utils.h"
 #include "polymorphism.h"
 #include "scope.h"
+#include "sem_error.h"
 #include "symbols.h"
 #include "typed_value.h"
 #include "semantic_analyser.h"
@@ -45,6 +46,7 @@ static TypeDescriptor const * sem_resolve_type_application(SemContext * ctx, odi
 static TypeDescriptor const * sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node);
 TypeDescriptor const * sem_resolve_union_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_vector_type(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_resolve_qualified_type_name(SemContext * ctx, odin_grammar_node_t * node);
 
 static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *, odin_grammar_node_t *) = {
     [AST_NODE_ARRAY_TYPE] = sem_resolve_array_type,
@@ -69,6 +71,7 @@ static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *
     [AST_NODE_TYPE_APPLICATION] = sem_resolve_type_application,
     [AST_NODE_UNION_TYPE] = sem_resolve_union_type,
     [AST_NODE_VECTOR_TYPE] = sem_resolve_vector_type,
+    [AST_NODE_QUALIFIED_TYPE_NAME] = sem_resolve_qualified_type_name,
 };
 
 TypeDescriptor const *
@@ -1759,4 +1762,40 @@ sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node)
     if (result != NULL)
         node->resolved_type = (TypeDescriptor *)result;
     return result;
+}
+
+static TypeDescriptor const *
+sem_resolve_qualified_type_name(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count != 2)
+        return NULL;
+    
+    odin_grammar_node_t * pkg_node = node->list.children[0];
+    odin_grammar_node_t * type_node = node->list.children[1];
+    
+    if (pkg_node == NULL || pkg_node->type != AST_NODE_IDENTIFIER ||
+        type_node == NULL || type_node->type != AST_NODE_IDENTIFIER)
+        return NULL;
+    
+    // Look up the package by name
+    for (int i = 0; i < ctx->import_count; i++)
+    {
+        ImportedPackage * pkg = ctx->imports[i];
+        if (pkg != NULL && pkg->package_name != NULL && 
+            strcmp(pkg->package_name, pkg_node->text) == 0)
+        {
+            // Found the package, now look up the type in its scope
+            symbol_t * sym = scope_find_symbol_entry(pkg->package_scope, type_node->text);
+            if (sym != NULL && sym->kind == SYMBOL_TYPE)
+            {
+                type_node->resolved_type = (TypeDescriptor *)sym->value.type_info;
+                return sym->value.type_info;
+            }
+            break;
+        }
+    }
+    
+    sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+                       "undeclared identifier");
+    return NULL;
 }

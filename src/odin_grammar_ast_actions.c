@@ -257,7 +257,7 @@ determine_operator_kind(odin_grammar_node_type_t node_type, char const * sem, si
         epc_ast_push(ctx, result);                                                                                     \
     }
 
-#define DEFINE_ACTION(name, node_type, capture_text)                                                                    \
+#define DEFINE_ACTION(name, node_type, capture_text)                                                                   \
     static void name(                                                                                                  \
         epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node, void ** children, int count, void * user_data              \
     )                                                                                                                  \
@@ -267,6 +267,30 @@ determine_operator_kind(odin_grammar_node_type_t node_type, char const * sem, si
     }
 
 #define DEFINE_TERMINAL_ACTION(name, node_type) DEFINE_ACTION(name, node_type, true)
+
+static void
+ast_action_struct_field_action(
+    epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node, void ** children, int count, void * user_data
+)
+{
+    (void)user_data;
+    odin_grammar_node_t * result = calloc(1, sizeof(odin_grammar_node_t));
+    result->source_data.view = epc_cpt_node_get_input_view(node);
+    result->type = AST_NODE_STRUCT_FIELD;
+    result->list.children = calloc((size_t)count, sizeof(odin_grammar_node_t *));
+    result->list.count = (size_t)count;
+    for (int i = 0; i < count; i++)
+    {
+        result->list.children[i] = (odin_grammar_node_t *)children[i];
+    }
+    // Detect "using" keyword from CPT content (stored as text on the struct field node)
+    char const * content = epc_cpt_node_get_content(node);
+    if (content != NULL && content[0] == 'u' && strncmp(content, "using", 5) == 0)
+    {
+        result->text = strdup("using");
+    }
+    epc_ast_push(ctx, result);
+}
 
 // --- Structural nodes (no text captured) ---
 DEFINE_ACTION(ast_action_program_action, AST_NODE_PROGRAM, false)
@@ -374,31 +398,7 @@ DEFINE_ACTION(ast_action_union_field_action, AST_NODE_UNION_FIELD, false)
 DEFINE_ACTION(ast_action_union_field_list_action, AST_NODE_UNION_FIELD_LIST, false)
 DEFINE_ACTION(ast_action_bit_field_field_action, AST_NODE_BIT_FIELD_FIELD, false)
 DEFINE_ACTION(ast_action_bit_field_field_list_action, AST_NODE_BIT_FIELD_FIELD_LIST, false)
-static void
-ast_action_struct_field_action(
-    epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node, void ** children, int count, void * user_data
-)
-{
-    (void)user_data;
-    odin_grammar_node_t * result = calloc(1, sizeof(odin_grammar_node_t));
-    result->source_data.view = epc_cpt_node_get_input_view(node);
-    result->type = AST_NODE_STRUCT_FIELD;
-    result->list.children = calloc((size_t)count, sizeof(odin_grammar_node_t *));
-    result->list.count = (size_t)count;
-    for (int i = 0; i < count; i++)
-    {
-        result->list.children[i] = (odin_grammar_node_t *)children[i];
-    }
-    // Detect "using" keyword from CPT content (stored as text on the struct field node)
-    char const * content = epc_cpt_node_get_content(node);
-    if (content != NULL && content[0] == 'u' && strncmp(content, "using", 5) == 0)
-    {
-        result->text = strdup("using");
-    }
-    epc_ast_push(ctx, result);
-}
 DEFINE_ACTION(ast_action_struct_field_list_action, AST_NODE_STRUCT_FIELD_LIST, false)
-
 DEFINE_ACTION(ast_action_auto_cast_expr_action, AST_NODE_AUTO_CAST_EXPR, false)
 DEFINE_ACTION(ast_action_cast_expr_action, AST_NODE_CAST_EXPR, false)
 DEFINE_ACTION(ast_action_transmute_expr_action, AST_NODE_TRANSMUTE_EXPR, false)
@@ -429,6 +429,7 @@ DEFINE_ACTION(ast_action_compress_values_expr_action, AST_NODE_COMPRESS_VALUES_E
 DEFINE_ACTION(ast_action_soa_zip_expr_action, AST_NODE_SOA_ZIP_EXPR, false)
 DEFINE_ACTION(ast_action_soa_unzip_expr_action, AST_NODE_SOA_UNZIP_EXPR, false)
 DEFINE_ACTION(ast_action_type_application_action, AST_NODE_TYPE_APPLICATION, false)
+DEFINE_ACTION(ast_action_qualified_type_name_action, AST_NODE_QUALIFIED_TYPE_NAME, false)
 DEFINE_ACTION(ast_action_struct_lit_expr_action, AST_NODE_STRUCT_LIT_EXPR, false)
 DEFINE_ACTION(ast_action_struct_lit_field_action, AST_NODE_STRUCT_LIT_FIELD, false)
 DEFINE_ACTION(ast_action_struct_lit_fields_action, AST_NODE_STRUCT_LIT_FIELDS, false)
@@ -576,6 +577,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_SOA_ZIP_EXPR, ast_action_soa_zip_expr_action);
     REGISTER(AST_ACTION_SOA_UNZIP_EXPR, ast_action_soa_unzip_expr_action);
     REGISTER(AST_ACTION_TYPE_APPLICATION, ast_action_type_application_action);
+    REGISTER(AST_ACTION_QUALIFIED_TYPE_NAME, ast_action_qualified_type_name_action);
     REGISTER(AST_ACTION_STRUCT_LIT_EXPR, ast_action_struct_lit_expr_action);
     REGISTER(AST_ACTION_STRUCT_LIT_FIELD, ast_action_struct_lit_field_action);
     REGISTER(AST_ACTION_STRUCT_LIT_FIELDS, ast_action_struct_lit_fields_action);
@@ -653,7 +655,8 @@ parse_odin_unsigned(char const * text, char ** endptr, int base)
 {
     if (text == NULL)
     {
-        if (endptr) *endptr = NULL;
+        if (endptr)
+            *endptr = NULL;
         return 0;
     }
     // Handle 0o/0O octal prefix — strtoull base 0 doesn't understand it
@@ -667,7 +670,8 @@ parse_odin_signed(char const * text, char ** endptr, int base)
 {
     if (text == NULL)
     {
-        if (endptr) *endptr = NULL;
+        if (endptr)
+            *endptr = NULL;
         return 0;
     }
     // Handle 0o/0O octal prefix

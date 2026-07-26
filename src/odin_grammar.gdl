@@ -357,13 +357,16 @@ TupleType = LBracket TypePrefix (Comma TypePrefix)+ RBracket @AST_ACTION_TUPLE_T
 // IntegerLiteral allows compile-time value args (e.g. for $N: int params).
 TypeApplication = Identifier LParen ((TypePrefix | IntegerLiteral) (Comma (TypePrefix | IntegerLiteral))*)? RParen @AST_ACTION_TYPE_APPLICATION;
 
+// Qualified type name: pkg.Type (e.g., strings.Builder)
+QualifiedTypeName = Identifier Dot Identifier @AST_ACTION_QUALIFIED_TYPE_NAME;
+
 // Base types for TypeName (no left recursion)
 TypePrefix = TupleType | PointerType | DynamicArrayType | SliceType | MultiPointerType | ArrayType
            | MapType | VectorType | ProcedureSignature
            | StructType | UnionType | EnumType | BitFieldType | BitSetType
            | DistinctType | BasicType | StructTypeRef | EnumTypeRef
            | TypeApplication
-           | Identifier | PolyIdent | MaybeType
+           | QualifiedTypeName | Identifier | PolyIdent | MaybeType
            | SoaType;
 
 // Full type with optional pipe-separated variants
