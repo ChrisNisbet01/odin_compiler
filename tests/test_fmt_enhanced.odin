@@ -118,6 +118,57 @@ test_aprintln_len :: proc() -> bool {
     return true
 }
 
+test_sb_print_f64_raw :: proc() -> bool {
+    b := strings.builder_make_none()
+    fmt.sb_print_f64_raw(&b, 3.14, 2)
+    if b.count != 4 do return false
+    return true
+}
+
+test_sb_format_f64 :: proc() -> bool {
+    b := strings.builder_make_none()
+    fmt.sb_format_f64(&b, 3.14, 0, 2, 0)
+    if b.count != 4 do return false
+    return true
+}
+
+test_sb_format_f64_negative :: proc() -> bool {
+    b := strings.builder_make_none()
+    fmt.sb_format_f64(&b, -1.5, 0, 1, 0)
+    if b.count != 4 do return false
+    return true
+}
+
+test_sb_format_scientific :: proc() -> bool {
+    b := strings.builder_make_none()
+    fmt.sb_format_scientific(&b, 123.456, false, 0, 2, 0)
+    // 1.23e+02 = 8 chars
+    if b.count != 8 do return false
+    return true
+}
+
+test_sb_format_scientific_zero :: proc() -> bool {
+    b := strings.builder_make_none()
+    fmt.sb_format_scientific(&b, 0.0, false, 0, 2, 0)
+    // 0.00e+00 = 8 chars
+    if b.count != 8 do return false
+    return true
+}
+
+test_sb_format_general_small :: proc() -> bool {
+    b := strings.builder_make_none()
+    fmt.sb_format_general(&b, 1.5, false, 0, 6, 0)
+    if b.count < 1 do return false
+    return true
+}
+
+test_sb_format_general_large :: proc() -> bool {
+    b := strings.builder_make_none()
+    fmt.sb_format_general(&b, 123456.0, false, 0, 6, 0)
+    if b.count < 1 do return false
+    return true
+}
+
 main :: proc() {
     if !test_sb_format_int() do os.exit(1)
     fmt.println("PASS: sb_format_int(42, base=10)")
@@ -151,5 +202,19 @@ main :: proc() {
     fmt.println("PASS: aprint(hello) len")
     if !test_aprintln_len() do os.exit(16)
     fmt.println("PASS: aprintln(hi) len")
+    if !test_sb_print_f64_raw() do os.exit(17)
+    fmt.println("PASS: sb_print_f64_raw(3.14, 2)")
+    if !test_sb_format_f64() do os.exit(18)
+    fmt.println("PASS: sb_format_f64(3.14, prec=2)")
+    if !test_sb_format_f64_negative() do os.exit(19)
+    fmt.println("PASS: sb_format_f64(-1.5, prec=1)")
+    if !test_sb_format_scientific() do os.exit(20)
+    fmt.println("PASS: sb_format_scientific(123.456, prec=2)")
+    if !test_sb_format_scientific_zero() do os.exit(21)
+    fmt.println("PASS: sb_format_scientific(0.0, prec=2)")
+    if !test_sb_format_general_small() do os.exit(22)
+    fmt.println("PASS: sb_format_general(1.5, prec=6)")
+    if !test_sb_format_general_large() do os.exit(23)
+    fmt.println("PASS: sb_format_general(123456.0, prec=6)")
     fmt.println("ALL fmt enhanced tests passed")
 }
