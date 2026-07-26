@@ -1550,10 +1550,13 @@ ir_gen_assign_store(
         return rhs_val;
 
     LLVMValueRef store_val = rhs_val;
-    TypeDescriptor const * lhs_type_desc = NULL;
-    odin_grammar_node_t * t = expression_chain_unwrap(lhs_node);
-    if (t)
-        lhs_type_desc = t->resolved_type;
+    TypeDescriptor const * lhs_type_desc = lhs_node->resolved_type;
+    if (lhs_type_desc == NULL)
+    {
+        odin_grammar_node_t * t = expression_chain_unwrap(lhs_node);
+        if (t)
+            lhs_type_desc = t->resolved_type;
+    }
     if (lhs_type_desc && lhs_type_desc->kind == TD_KIND_BASIC && lhs_type_desc->as.basic.name
         && strcmp(lhs_type_desc->as.basic.name, "any") == 0)
     {

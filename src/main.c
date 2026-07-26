@@ -29,12 +29,12 @@ run_linker(char const * ll_file, char const * output_file, IrGenContext * ir_ctx
     if (cc == NULL || cc[0] == '\0')
         cc = "clang";
 
-    size_t cmd_len = strlen(cc) + strlen(ll_file) + strlen(output_file) + 64;
+    size_t cmd_len = strlen(cc) + strlen(ll_file) + strlen(output_file) + 512;
     for (int i = 0; i < ir_ctx->foreign_library_count; i++)
     {
         cmd_len += strlen(ir_ctx->foreign_libraries[i]) + 6;
     }
-    cmd_len += 8;
+    cmd_len += 256;
 
     char * cmd = malloc(cmd_len);
     size_t pos = snprintf(cmd, cmd_len, "%s '%s' -o '%s'", cc, ll_file, output_file);

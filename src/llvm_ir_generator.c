@@ -1079,12 +1079,10 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 if (ctx_type)
                 {
                     LLVMValueRef context_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
-                    LLVMValueRef size_val = LLVMConstInt(
-                        LLVMInt64TypeInContext(ctx->context),
-                        (long long)LLVMABISizeOfType(ctx->data_layout, ctx_type->llvm_type),
-                        false
-                    );
-                    LLVMBuildMemCpy(ctx->builder, context_alloca, 0, context_param, 0, size_val);
+                    // Use aligned_load with explicit struct type to avoid movups/movaps stack slot collisions
+                    LLVMValueRef context_val = LLVMBuildLoad2(ctx->builder, ctx_type->llvm_type, context_param, "context.val");
+                    LLVMSetAlignment(context_val, 1);
+                    LLVMBuildStore(ctx->builder, context_val, context_alloca);
 
                     symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
                     if (ctx_sym)
@@ -1274,12 +1272,9 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         if (ctx_type)
         {
             LLVMValueRef context_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
-            LLVMValueRef size_val = LLVMConstInt(
-                LLVMInt64TypeInContext(ctx->context),
-                (long long)LLVMABISizeOfType(ctx->data_layout, ctx_type->llvm_type),
-                false
-            );
-            LLVMBuildMemCpy(ctx->builder, context_alloca, 0, context_param, 0, size_val);
+            LLVMValueRef context_val = LLVMBuildLoad2(ctx->builder, ctx_type->llvm_type, context_param, "context.val");
+            LLVMSetAlignment(context_val, 1);
+            LLVMBuildStore(ctx->builder, context_val, context_alloca);
 
             symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
             if (ctx_sym)
@@ -1819,7 +1814,6 @@ ir_gen_append_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     if (arr_val == NULL)
         return NULL;
 
-    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, arr_type->llvm_type, "append.result");
     LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
     LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->context);
 
@@ -1828,32 +1822,91 @@ ir_gen_append_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMValueRef idx2 = LLVMConstInt(i32t, 2, false);
     LLVMValueRef one_i64 = LLVMConstInt(i64t, 1, false);
 
-    // arr_val from ir_gen_node is an alloca pointer for composite types, load it first
+    // 1. Result alloca for the dynamic array descriptor
+    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, arr_type->llvm_type, "append.result");
     LLVMValueRef arr_loaded = LLVMBuildLoad2(ctx->builder, arr_type->llvm_type, arr_val, "append.arr.val");
     LLVMBuildStore(ctx->builder, arr_loaded, result_ptr);
 
-    // Load current data, len, cap
-    LLVMValueRef gep_data = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
-        (LLVMValueRef[]){idx0, idx0}, 2, "append.data.gep");
+    // 2. Load initial data, len, cap
+    LLVMValueRef gep_data = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr, (LLVMValueRef[]){idx0, idx0}, 2, "append.data.gep");
     LLVMValueRef data_ptr = LLVMBuildLoad2(ctx->builder, LLVMPointerType(elem_type->llvm_type, 0), gep_data, "append.data");
 
-    LLVMValueRef gep_len = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
-        (LLVMValueRef[]){idx0, idx1}, 2, "append.len.gep");
+    LLVMValueRef gep_len = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr, (LLVMValueRef[]){idx0, idx1}, 2, "append.len.gep");
     LLVMValueRef cur_len = LLVMBuildLoad2(ctx->builder, i64t, gep_len, "append.len");
 
-    LLVMValueRef gep_cap = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
-        (LLVMValueRef[]){idx0, idx2}, 2, "append.cap.gep");
+    LLVMValueRef gep_cap = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr, (LLVMValueRef[]){idx0, idx2}, 2, "append.cap.gep");
     LLVMValueRef cur_cap = LLVMBuildLoad2(ctx->builder, i64t, gep_cap, "append.cap");
 
-    // For each element to append
+    // elem_size constant for basic types
+    LLVMValueRef elem_size;
+    if (elem_type->kind == TD_KIND_BASIC)
+    {
+        elem_size = LLVMConstInt(i64t, (unsigned long long)(elem_type->as.basic.width / 8), false);
+    }
+    else
+    {
+        elem_size = LLVMSizeOf(elem_type->llvm_type);
+    }
+
+    // 3. Compute total elements to append
+    LLVMValueRef num_elements = LLVMConstInt(i64t, (unsigned long long)(node->list.count - 1), false);
+    LLVMValueRef new_len = LLVMBuildAdd(ctx->builder, cur_len, num_elements, "append.new.len");
+    
+    // 4. Check if we need to grow (before the loop)
+    LLVMValueRef needs_grow = LLVMBuildICmp(ctx->builder, LLVMIntSGE, new_len, cur_cap, "append.needs.grow");
+
+    // Compute new_cap = max(cur_cap * 2, 4, new_len)
+    LLVMValueRef doubled = LLVMBuildMul(ctx->builder, cur_cap, one_i64, "append.cap.doubled");
+    LLVMValueRef new_cap_select = LLVMBuildSelect(ctx->builder, 
+        LLVMBuildICmp(ctx->builder, LLVMIntSLT, doubled, new_len, "append.cap.need_more"),
+        new_len, doubled, "append.new.cap");
+    LLVMValueRef new_cap = LLVMBuildSelect(ctx->builder,
+        LLVMBuildICmp(ctx->builder, LLVMIntEQ, cur_cap, LLVMConstInt(i64t, 0, false), "append.cap.zero"),
+        LLVMConstInt(i64t, 4, false), new_cap_select, "append.final.cap");
+
+    // Grow if needed using select
+    LLVMValueRef should_grow = needs_grow;
+    LLVMValueRef final_cap = LLVMBuildSelect(ctx->builder, should_grow, new_cap, cur_cap, "append.final.cap.val");
+    
+    // Allocate new buffer if needed (using select to pick between old/new)
+    LLVMValueRef new_total = LLVMBuildMul(ctx->builder, final_cap, elem_size, "append.new.total");
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMValueRef malloc_fn = LLVMGetNamedFunction(ctx->module, "malloc");
+    if (malloc_fn == NULL)
+        malloc_fn = LLVMAddFunction(ctx->module, "malloc", LLVMFunctionType(i8ptr, (LLVMValueRef[]){i64t}, 1, false));
+    LLVMValueRef new_data = LLVMBuildCall2(ctx->builder, LLVMFunctionType(i8ptr, (LLVMValueRef[]){i64t}, 1, false), malloc_fn, (LLVMValueRef[]){new_total}, 1, "append.new.data");
+    
+    // Copy old data using memcpy if needed
+    LLVMValueRef copy_size = LLVMBuildMul(ctx->builder, cur_len, elem_size, "append.copy.size");
+    LLVMValueRef memcpy_fn = LLVMGetNamedFunction(ctx->module, "memcpy");
+    if (memcpy_fn == NULL)
+        memcpy_fn = LLVMAddFunction(ctx->module, "memcpy", LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr, i64t}, 3, false));
+    LLVMBuildCall2(ctx->builder, LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr, i64t}, 3, false), memcpy_fn, (LLVMValueRef[]){new_data, data_ptr, copy_size}, 3, "append.memcpy");
+    
+    // Free old data if needed (only if growing)
+    LLVMValueRef free_fn = LLVMGetNamedFunction(ctx->module, "free");
+    if (free_fn == NULL)
+        free_fn = LLVMAddFunction(ctx->module, "free", LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), (LLVMTypeRef[]){i8ptr}, 1, false));
+    LLVMValueRef data_to_free = LLVMBuildSelect(ctx->builder, should_grow, data_ptr, LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0)), "append.data.to.free");
+    LLVMBuildCall2(ctx->builder, LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), (LLVMTypeRef[]){i8ptr}, 1, false), free_fn, (LLVMValueRef[]){LLVMBuildPointerCast(ctx->builder, data_to_free, i8ptr, "")}, 1, "");
+
+    // Update data and cap in the struct
+    LLVMBuildStore(ctx->builder, new_data, gep_data);
+    LLVMBuildStore(ctx->builder, final_cap, gep_cap);
+    
+    // Reload data_ptr after potential grow
+    data_ptr = LLVMBuildLoad2(ctx->builder, LLVMPointerType(elem_type->llvm_type, 0), gep_data, "append.data.reload");
+    
+    // Don't reset cur_len - we append starting at the current len
+
+    // 5. For each element to append (no branches in loop)
     for (size_t i = 1; i < node->list.count; i++)
     {
         LLVMValueRef elem_val = ir_gen_node(ctx, node->list.children[i]);
         if (elem_val == NULL)
             return NULL;
 
-        // Coerce element type if needed
-        if (elem_val != NULL && elem_type->llvm_type != NULL)
+        if (elem_type->llvm_type != NULL)
         {
             LLVMTypeRef val_type = LLVMTypeOf(elem_val);
             if (val_type != elem_type->llvm_type && LLVMGetTypeKind(val_type) != LLVMPointerTypeKind)
@@ -1862,101 +1915,17 @@ ir_gen_append_expr(IrGenContext * ctx, odin_grammar_node_t * node)
             }
         }
 
-        // Check if len == cap (need to grow)
-        LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(ctx->builder);
-        LLVMBasicBlockRef grow_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.grow");
-        LLVMBasicBlockRef noGrow_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.nogrow");
-        LLVMBasicBlockRef store_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.store");
-
-        // Capture values that will be PHI'd in store_bb (valid in entry_bb)
-        LLVMValueRef pre_data_ptr = data_ptr;
-        LLVMValueRef pre_cap = cur_cap;
-
-        LLVMValueRef needs_grow = LLVMBuildICmp(ctx->builder, LLVMIntEQ, cur_len, cur_cap, "append.needs_grow");
-        LLVMBuildCondBr(ctx->builder, needs_grow, grow_bb, noGrow_bb);
-
-        // Grow block: realloc to 2x capacity (or 4 if 0)
-        LLVMPositionBuilderAtEnd(ctx->builder, grow_bb);
-        LLVMValueRef new_cap = LLVMBuildMul(ctx->builder, cur_cap, LLVMConstInt(i64t, 2, false), "append.new_cap");
-        LLVMValueRef is_zero = LLVMBuildICmp(ctx->builder, LLVMIntEQ, cur_cap, LLVMConstInt(i64t, 0, false), "append.cap.zero");
-        new_cap = LLVMBuildSelect(ctx->builder, is_zero, LLVMConstInt(i64t, 4, false), new_cap, "append.new_cap.sel");
-        LLVMValueRef elem_size = LLVMSizeOf(elem_type->llvm_type);
-        LLVMValueRef new_total = LLVMBuildMul(ctx->builder, elem_size, new_cap, "append.new_total");
-        LLVMValueRef raw_new = ir_gen_call_malloc(ctx, new_total);
-        if (raw_new == NULL)
-            return NULL;
-        LLVMTypeRef elem_ptr_t = LLVMPointerType(elem_type->llvm_type, 0);
-        LLVMValueRef new_data = LLVMBuildPointerCast(ctx->builder, raw_new, elem_ptr_t, "append.new_data");
-        // Copy old data element by element
-        LLVMBasicBlockRef copy_loop_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.copy.loop");
-        LLVMBasicBlockRef copy_done_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.copy.done");
-        LLVMValueRef copy_idx_ptr = LLVMBuildAlloca(ctx->builder, i64t, "append.copy.idx");
-        LLVMBuildStore(ctx->builder, LLVMConstInt(i64t, 0, false), copy_idx_ptr);
-        LLVMBuildBr(ctx->builder, copy_loop_bb);
-        LLVMPositionBuilderAtEnd(ctx->builder, copy_loop_bb);
-        LLVMValueRef copy_i = LLVMBuildLoad2(ctx->builder, i64t, copy_idx_ptr, "append.copy.i");
-        LLVMValueRef copy_done = LLVMBuildICmp(ctx->builder, LLVMIntUGE, copy_i, cur_len, "append.copy.done");
-        LLVMBuildCondBr(ctx->builder, copy_done, copy_done_bb, copy_loop_bb);
-        // Body: new_data[i] = data_ptr[i]
-        LLVMValueRef src_idx[] = {copy_i};
-        LLVMValueRef src_elem = LLVMBuildGEP2(ctx->builder, elem_type->llvm_type, data_ptr, src_idx, 1, "append.copy.src");
-        LLVMValueRef dst_idx[] = {copy_i};
-        LLVMValueRef dst_elem = LLVMBuildGEP2(ctx->builder, elem_type->llvm_type, new_data, dst_idx, 1, "append.copy.dst");
-        LLVMValueRef copy_val = LLVMBuildLoad2(ctx->builder, elem_type->llvm_type, src_elem, "append.copy.val");
-        LLVMBuildStore(ctx->builder, copy_val, dst_elem);
-        LLVMValueRef copy_next = LLVMBuildAdd(ctx->builder, copy_i, one_i64, "append.copy.next");
-        LLVMBuildStore(ctx->builder, copy_next, copy_idx_ptr);
-        LLVMBuildBr(ctx->builder, copy_loop_bb);
-        LLVMPositionBuilderAtEnd(ctx->builder, copy_done_bb);
-        // Free old data (if non-null)
-        LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
-        LLVMValueRef is_null = LLVMBuildICmp(ctx->builder, LLVMIntEQ, data_ptr, LLVMConstNull(elem_ptr_t), "append.old_null");
-        LLVMBasicBlockRef free_check_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.free.check");
-        LLVMBasicBlockRef free_done_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "append.free.done");
-        LLVMBuildCondBr(ctx->builder, is_null, free_done_bb, free_check_bb);
-        LLVMPositionBuilderAtEnd(ctx->builder, free_check_bb);
-        ir_gen_call_free(ctx, LLVMBuildPointerCast(ctx->builder, data_ptr, i8ptr, "append.free.ptr"));
-        LLVMBuildBr(ctx->builder, free_done_bb);
-        LLVMPositionBuilderAtEnd(ctx->builder, free_done_bb);
-        LLVMBuildBr(ctx->builder, store_bb);
-        // Values from grow path for PHI nodes
-        LLVMValueRef grow_data_ptr = new_data;
-        LLVMValueRef grow_cap = new_cap;
-
-        // NoGrow block: just continue
-        LLVMPositionBuilderAtEnd(ctx->builder, noGrow_bb);
-        LLVMBuildBr(ctx->builder, store_bb);
-
-        // Store block: store element at data[len]
-        LLVMPositionBuilderAtEnd(ctx->builder, store_bb);
-        // PHI node to merge data_ptr from grow and nogrow paths
-        LLVMValueRef data_phi = LLVMBuildPhi(ctx->builder, LLVMPointerType(elem_type->llvm_type, 0), "append.data.phi");
-        LLVMAddIncoming(data_phi, &grow_data_ptr, &free_done_bb, 1);
-        LLVMAddIncoming(data_phi, &pre_data_ptr, &noGrow_bb, 1);
-        data_ptr = data_phi;
-        // PHI node to merge cur_cap from grow and nogrow paths
-        LLVMValueRef cap_phi = LLVMBuildPhi(ctx->builder, i64t, "append.cap.phi");
-        LLVMAddIncoming(cap_phi, &grow_cap, &free_done_bb, 1);
-        LLVMAddIncoming(cap_phi, &pre_cap, &noGrow_bb, 1);
-        cur_cap = cap_phi;
+        // Store element at data[len]
         LLVMValueRef store_idx[] = {cur_len};
         LLVMValueRef store_ptr = LLVMBuildGEP2(ctx->builder, elem_type->llvm_type, data_ptr, store_idx, 1, "append.store.ptr");
         LLVMBuildStore(ctx->builder, elem_val, store_ptr);
+
+        // Increment len
         cur_len = LLVMBuildAdd(ctx->builder, cur_len, one_i64, "append.len.next");
     }
 
-    // Store updated data, len, cap back to result
-    LLVMValueRef out_gep_data = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
-        (LLVMValueRef[]){idx0, idx0}, 2, "append.out.data.gep");
-    LLVMBuildStore(ctx->builder, data_ptr, out_gep_data);
-
-    LLVMValueRef out_gep_len = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
-        (LLVMValueRef[]){idx0, idx1}, 2, "append.out.len.gep");
-    LLVMBuildStore(ctx->builder, cur_len, out_gep_len);
-
-    LLVMValueRef out_gep_cap = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr,
-        (LLVMValueRef[]){idx0, idx2}, 2, "append.out.cap.gep");
-    LLVMBuildStore(ctx->builder, cur_cap, out_gep_cap);
+    // 6. Final write-back of updated len
+    LLVMBuildStore(ctx->builder, cur_len, gep_len);
 
     return LLVMBuildLoad2(ctx->builder, arr_type->llvm_type, result_ptr, "append.result");
 }
@@ -2112,7 +2081,7 @@ ir_gen_struct_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         }
     }
     if (fields_node == NULL)
-        return result; // empty literal: return undef (zero-init by caller)
+        return LLVMConstNull(llvm_type); // empty literal: return zero-initialized
 
     for (size_t i = 0; i < fields_node->list.count; i++)
     {
@@ -3279,12 +3248,9 @@ ir_gen_pending_specialization(IrGenContext * ctx, PolySpecialization * spec)
         if (ctx_type)
         {
             LLVMValueRef context_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
-            LLVMValueRef size_val = LLVMConstInt(
-                LLVMInt64TypeInContext(ctx->context),
-                (long long)LLVMABISizeOfType(ctx->data_layout, ctx_type->llvm_type),
-                false
-            );
-            LLVMBuildMemCpy(ctx->builder, context_alloca, 0, context_param, 0, size_val);
+            LLVMValueRef context_val = LLVMBuildLoad2(ctx->builder, ctx_type->llvm_type, context_param, "context.val");
+            LLVMSetAlignment(context_val, 1);
+            LLVMBuildStore(ctx->builder, context_val, context_alloca);
 
             symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
             if (ctx_sym)

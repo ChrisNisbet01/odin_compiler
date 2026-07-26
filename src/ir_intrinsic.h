@@ -20,6 +20,9 @@ LLVMValueRef ir_gen_intrinsic_sys_write(IrGenContext * ctx);
 LLVMValueRef ir_gen_intrinsic_sys_close(IrGenContext * ctx);
 LLVMValueRef ir_gen_intrinsic_sys_open(IrGenContext * ctx);
 LLVMValueRef ir_gen_intrinsic_sys_read(IrGenContext * ctx);
+LLVMValueRef ir_gen_intrinsic_strings_to_string(IrGenContext * ctx);
+LLVMValueRef ir_gen_intrinsic_strings_to_bytes(IrGenContext * ctx);
+void ir_gen_intrinsic_builder_make_none(IrGenContext * ctx);
 
 LLVMValueRef ir_gen_call_malloc(IrGenContext * ctx, LLVMValueRef size);
 void ir_gen_call_free(IrGenContext * ctx, LLVMValueRef ptr);

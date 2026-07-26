@@ -44,6 +44,9 @@ init_intrinsic_handlers(void)
     generic_hash_table_insert(intrinsic_handlers, "sys_close", (void *)ir_gen_intrinsic_sys_close);
     generic_hash_table_insert(intrinsic_handlers, "sys_open", (void *)ir_gen_intrinsic_sys_open);
     generic_hash_table_insert(intrinsic_handlers, "sys_read", (void *)ir_gen_intrinsic_sys_read);
+    generic_hash_table_insert(intrinsic_handlers, "to_string", (void *)ir_gen_intrinsic_strings_to_string);
+    generic_hash_table_insert(intrinsic_handlers, "to_bytes", (void *)ir_gen_intrinsic_strings_to_bytes);
+    generic_hash_table_insert(intrinsic_handlers, "builder_make_none", (void *)ir_gen_intrinsic_builder_make_none);
 }
 
 LLVMValueRef
@@ -403,6 +406,84 @@ ir_gen_intrinsic_sys_read(IrGenContext * ctx)
     return NULL;
 }
 
+LLVMValueRef
+ir_gen_intrinsic_strings_to_string(IrGenContext * ctx)
+{
+    // to_string(b: Builder) -> string
+    // Builder = { { ptr, i64, i64 }, i64 }  (buf: [dynamic]byte, count: int)
+    // string  = { ptr, i64 }
+    LLVMValueRef builder_param = LLVMGetParam(func_current_function(ctx), 1);
+
+    LLVMValueRef buf = LLVMBuildExtractValue(ctx->builder, builder_param, 0, "ts.buf");
+    LLVMValueRef data_ptr = LLVMBuildExtractValue(ctx->builder, buf, 0, "ts.data");
+    LLVMValueRef count = LLVMBuildExtractValue(ctx->builder, builder_param, 1, "ts.count");
+
+    TypeDescriptor const * str_desc = get_basic_type_by_name(ctx->type_registry, "string");
+    LLVMTypeRef str_type = str_desc ? str_desc->llvm_type : NULL;
+    if (str_type == NULL)
+    {
+        LLVMBuildUnreachable(ctx->builder);
+        return NULL;
+    }
+    LLVMValueRef sv = LLVMGetUndef(str_type);
+    sv = LLVMBuildInsertValue(ctx->builder, sv, data_ptr, 0, "ts.sd");
+    sv = LLVMBuildInsertValue(ctx->builder, sv, count, 1, "ts.sl");
+    LLVMBuildRet(ctx->builder, sv);
+    return NULL;
+}
+
+LLVMValueRef
+ir_gen_intrinsic_strings_to_bytes(IrGenContext * ctx)
+{
+    // to_bytes(b: Builder) -> []byte
+    // Builder = { { ptr, i64, i64 }, i64 }  (buf: [dynamic]byte, count: int)
+    // []byte   = { ptr, i64 }
+    LLVMValueRef builder_param = LLVMGetParam(func_current_function(ctx), 1);
+
+    LLVMValueRef buf = LLVMBuildExtractValue(ctx->builder, builder_param, 0, "tb.buf");
+    LLVMValueRef data_ptr = LLVMBuildExtractValue(ctx->builder, buf, 0, "tb.data");
+    LLVMValueRef count = LLVMBuildExtractValue(ctx->builder, builder_param, 1, "tb.count");
+
+    TypeDescriptor const * byte_desc = get_basic_type_by_name(ctx->type_registry, "byte");
+    LLVMTypeRef byte_type = byte_desc ? byte_desc->llvm_type : NULL;
+    if (byte_type == NULL)
+        byte_type = LLVMInt8TypeInContext(ctx->context);
+    LLVMTypeRef slice_type = LLVMStructType(
+        (LLVMTypeRef[]){LLVMPointerType(byte_type, 0), LLVMInt64TypeInContext(ctx->context)}, 2, false);
+
+    LLVMValueRef sv = LLVMGetUndef(slice_type);
+    sv = LLVMBuildInsertValue(ctx->builder, sv, data_ptr, 0, "tb.sd");
+    sv = LLVMBuildInsertValue(ctx->builder, sv, count, 1, "tb.sl");
+    LLVMBuildRet(ctx->builder, sv);
+    return NULL;
+}
+
+void
+ir_gen_intrinsic_builder_make_none(IrGenContext * ctx)
+{
+    // Builder = { { ptr, i64, i64 }, i64 } (buf: [dynamic]byte, count: int)
+    // Return a zero-initialized Builder
+    LLVMValueRef builder = LLVMGetUndef(LLVMStructTypeInContext(ctx->context, 
+        (LLVMTypeRef[]){
+            LLVMStructTypeInContext(ctx->context, 
+                (LLVMTypeRef[]){LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), 
+                               LLVMInt64TypeInContext(ctx->context), 
+                               LLVMInt64TypeInContext(ctx->context)}, 3, false),
+            LLVMInt64TypeInContext(ctx->context)
+        }, 2, false));
+    
+    builder = LLVMBuildInsertValue(ctx->builder, builder, 
+        LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0)), 0, "builder.buf.data");
+    builder = LLVMBuildInsertValue(ctx->builder, builder, 
+        LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false), 1, "builder.buf.len");
+    builder = LLVMBuildInsertValue(ctx->builder, builder, 
+        LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false), 2, "builder.buf.cap");
+    builder = LLVMBuildInsertValue(ctx->builder, builder, 
+        LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false), 3, "builder.count");
+    
+    LLVMBuildRet(ctx->builder, builder);
+}
+
 void
 ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
                                 TypeDescriptor const * proc_type)
@@ -474,3 +555,11 @@ ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr)
     LLVMValueRef args[] = {str_ptr};
     return LLVMBuildCall2(ctx->builder, strlen_type, strlen_fn, args, 1, "strlen");
 }
+
+static void
+ir_gen_intrinsic_array_grow(IrGenContext * ctx, LLVMValueRef fn)
+{
+    (void)ctx;
+    (void)fn;
+}
+
