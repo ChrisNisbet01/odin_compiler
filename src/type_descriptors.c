@@ -802,6 +802,8 @@ get_or_create_pointer_type(TypeDescriptors * registry, TypeDescriptor const * po
             return t;
     }
 
+    if (pointee == NULL)
+        return NULL;
     TypeDescriptor * td = type_descriptor_alloc(registry);
     if (td == NULL)
         return NULL;

@@ -25,6 +25,7 @@ static bool const is_type_node_table[AST_NODE_COUNT] = {
     [AST_NODE_VECTOR_TYPE] = true,
     [AST_NODE_TUPLE_TYPE] = true,
     [AST_NODE_TYPE_APPLICATION] = true,
+    [AST_NODE_QUALIFIED_TYPE_NAME] = true,
     [AST_NODE_POLY_IDENT] = true,
 };
 
