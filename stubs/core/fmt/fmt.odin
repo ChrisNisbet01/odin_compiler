@@ -1150,9 +1150,7 @@ FLAG_SPACE_SIGN  :: 4
 FLAG_ZERO_PAD    :: 8
 FLAG_ALTERNATE   :: 16
 
-// --- Core format parser: parses flags/width/precision/spec and dispatches ---
-
-sb_format_parsed :: proc(b: ^strings.Builder, format: string, args: ..any) -> int {
+sb_format_parsed_inner :: proc(b: ^strings.Builder, format: string, args: []any) -> int {
     start := b.count
     arg_idx := 0
     i := 0
@@ -1325,6 +1323,12 @@ sb_format_parsed :: proc(b: ^strings.Builder, format: string, args: ..any) -> in
         }
     }
     return b.count - start
+}
+
+// --- Core format parser: parses flags/width/precision/spec and dispatches ---
+
+sb_format_parsed :: proc(b: ^strings.Builder, format: string, args: ..any) -> int {
+    return sb_format_parsed_inner(b, format, args)
 }
 
 // --- Helper: repeat character ---

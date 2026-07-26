@@ -327,6 +327,9 @@ main :: proc() {
     fmt.println("PASS: sb_format_parsed('100%%')")
     if !test_sb_format_parsed_multi() do os.exit(34)
     fmt.println("PASS: sb_format_parsed('%d-%d', 1, 2)")
-    // aprintf/aprintfln tests skipped: ..any forwarding bug (args not forwarded correctly)
+    if !test_aprintf() do os.exit(35)
+    fmt.println("PASS: aprintf('%d', 42)")
+    if !test_aprintfln() do os.exit(36)
+    fmt.println("PASS: aprintfln('%x', 255)")
     fmt.println("ALL fmt enhanced tests passed")
 }
