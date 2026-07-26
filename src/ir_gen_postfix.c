@@ -604,8 +604,25 @@ ir_gen_postfix_member(IrGenContext * ctx, odin_grammar_node_t * op, LLVMValueRef
     // Package-qualified access: pkg.member (resolved by semantic analyser)
     if (*cur_type == NULL && op->resolved_symbol != NULL)
     {
-        *val = op->resolved_symbol->value.value;
-        *cur_type = op->resolved_symbol->value.type_info;
+        symbol_t * sym = op->resolved_symbol;
+        if (sym->value.value)
+        {
+            *val = sym->value.value;
+        }
+        else if (sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
+        {
+            // Forward-declare: function not yet codegen'd (cross-package dependency)
+            *val = LLVMGetNamedFunction(ctx->module, sym->name);
+            if (*val == NULL)
+                *val = LLVMAddFunction(ctx->module, sym->name,
+                                       sym->value.type_info->proc_metadata.func_type);
+            sym->value.value = *val;
+        }
+        else
+        {
+            *val = NULL;
+        }
+        *cur_type = sym->value.type_info;
         return;
     }
 

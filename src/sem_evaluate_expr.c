@@ -1731,6 +1731,11 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             break;
                         }
 
+                        // Propagate resolved_symbol to the CALL node so IR gen
+                        // can create forward declarations for cross-package calls.
+                        if (pkg_callee_sym)
+                            op->resolved_symbol = pkg_callee_sym;
+
                         if (type && type->kind == TD_KIND_PROC)
                         {
                             if (op->list.count > 0 && op->list.children[0] != NULL)
