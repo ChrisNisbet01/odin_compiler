@@ -5,24 +5,12 @@ All 193 tests pass. The fmt module supports basic printing, full format specifie
 
 ## Compiler Bugs Fixed During This Work
 
-### AST_NODE_QUALIFIED_TYPE_NAME Missing from `is_type_node_table` (Fixed)
-- **Root cause**: `b: strings.Builder` (uninitialized qualified type) failed with "undeclared identifier" because the `AST_NODE_QUALIFIED_TYPE_NAME` AST node wasn't in `is_type_node_table`, so the semantic analyser didn't recognize it as a type. It fell through to `init_node`, the variable was never registered in scope, and taking `&b` later produced a NULL pointee crash in `get_or_create_pointer_type`.
-- **Fix**: Added `[AST_NODE_QUALIFIED_TYPE_NAME] = true` in `src/ast_utils.c`.
-- **Additional fix**: Added NULL bundle in `get_or_create_pointer_type` (`src/type_descriptors.c`) for safety against future similar bugs.
-
-### `..any` → `..any` Variadic Forwarding (Fixed)
-- **Root cause**: When a `..any` parameter was forwarded to another `..any` callee, the IR generator re-packed the existing `[]any` slice itself as a single element of a NEW `[]any` (wrapping the slice struct `{ptr, len}` inside an `any`). So `len(args)==1` (correct on the surface) but `type_of(args[0]) != int` — it was `[]any`. Any type assertion `args[0].(int)` failed.
-- **Fix** (`src/ir_gen_postfix.c`): Added forwarding shortcut. When `variadic_count==1` and the single argument's evaluated type is `[]any` (slice of `any`), pass the slice directly instead of re-packing.
-- **Test**: `tests/test_variadic_forwarding.odin` (5 subtests: direct, single-forward len, single-forward int, multi-hop, two-hop multi).
-
 ### Pre-existing Limitations (Still Open)
 
-- **`if cond break` without `do` or braces**: Causes parser failure. Must use `if cond do break` or `if cond { break }`.
 - **Two-step Builder init pattern**: `b: pkg.Type` then `b = expr` was previously broken due to AST_NODE_QUALIFIED_TYPE_NAME bug. Now fixed. The one-step form (`b := expr`) also works and is preferred.
 - **Pre-existing `append` codegen bug**: `append` on pre-allocated dynamic arrays (`make([dynamic]T, N)` followed by `append`) miscomputes the buffer pointer. Workaround: use `builder_make_none()` instead of `builder_make(N)`.
 - **String equality comparison**: Strings (`{ptr, i64}` aggregate) cannot be compared with `==`. Must compare `len()` and individual characters.
 - **`rawptr` not usable in source code**: The internal `ptr_type` isn't in the `BasicType` grammar rule, so `rawptr` can't be used as a variable type.
-- **`if cond do break` requires `do`**: PEG parser may not handle `if cond break` (without `do`).
 
 ## Implemented Features
 

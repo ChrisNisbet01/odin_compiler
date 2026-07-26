@@ -1,3 +1,7 @@
+## Syntax notes
+
+### 'if cond break' (without braces or 'do') is not valid Odin. Either use braces, or use 'if cond do break' .
+
 ## Future work
 
 ### More complete support for core:fmt
