@@ -169,6 +169,83 @@ test_sb_format_general_large :: proc() -> bool {
     return true
 }
 
+test_sb_format_parsed_simple :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "hello")
+    if n != 5 do return false
+    return true
+}
+
+test_sb_format_parsed_int :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "%d", 42)
+    if n != 2 do return false
+    return true
+}
+
+test_sb_format_parsed_width :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "%5d", 10)
+    if n != 5 do return false
+    return true
+}
+
+test_sb_format_parsed_zero_pad :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "%05d", 10)
+    if n != 5 do return false
+    return true
+}
+
+test_sb_format_parsed_left_align :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "%-5d", 10)
+    if n != 5 do return false
+    return true
+}
+
+test_sb_format_parsed_hex :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "%x", 255)
+    if n != 2 do return false
+    return true
+}
+
+test_sb_format_parsed_char :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "%c", 'A')
+    if n != 1 do return false
+    return true
+}
+
+test_sb_format_parsed_float :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "%.2f", 3.14)
+    if n != 4 do return false
+    return true
+}
+
+test_sb_format_parsed_scientific :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "%.2e", 123.456)
+    if n != 8 do return false
+    return true
+}
+
+test_sb_format_parsed_percent :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "100%%")
+    if n != 4 do return false
+    return true
+}
+
+test_sb_format_parsed_multi :: proc() -> bool {
+    b := strings.builder_make_none()
+    n := fmt.sb_format_parsed(&b, "%d-%d", 1, 2)
+    if n != 3 do return false
+    return true
+}
+
 main :: proc() {
     if !test_sb_format_int() do os.exit(1)
     fmt.println("PASS: sb_format_int(42, base=10)")
@@ -216,5 +293,27 @@ main :: proc() {
     fmt.println("PASS: sb_format_general(1.5, prec=6)")
     if !test_sb_format_general_large() do os.exit(23)
     fmt.println("PASS: sb_format_general(123456.0, prec=6)")
+    if !test_sb_format_parsed_simple() do os.exit(24)
+    fmt.println("PASS: sb_format_parsed('hello')")
+    if !test_sb_format_parsed_int() do os.exit(25)
+    fmt.println("PASS: sb_format_parsed('%d', 42)")
+    if !test_sb_format_parsed_width() do os.exit(26)
+    fmt.println("PASS: sb_format_parsed('%5d', 10)")
+    if !test_sb_format_parsed_zero_pad() do os.exit(27)
+    fmt.println("PASS: sb_format_parsed('%05d', 10)")
+    if !test_sb_format_parsed_left_align() do os.exit(28)
+    fmt.println("PASS: sb_format_parsed('%-5d', 10)")
+    if !test_sb_format_parsed_hex() do os.exit(29)
+    fmt.println("PASS: sb_format_parsed('%x', 255)")
+    if !test_sb_format_parsed_char() do os.exit(30)
+    fmt.println("PASS: sb_format_parsed('%c', 'A')")
+    if !test_sb_format_parsed_float() do os.exit(31)
+    fmt.println("PASS: sb_format_parsed('%.2f', 3.14)")
+    if !test_sb_format_parsed_scientific() do os.exit(32)
+    fmt.println("PASS: sb_format_parsed('%.2e', 123.456)")
+    if !test_sb_format_parsed_percent() do os.exit(33)
+    fmt.println("PASS: sb_format_parsed('100%%')")
+    if !test_sb_format_parsed_multi() do os.exit(34)
+    fmt.println("PASS: sb_format_parsed('%d-%d', 1, 2)")
     fmt.println("ALL fmt enhanced tests passed")
 }

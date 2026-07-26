@@ -1150,6 +1150,183 @@ FLAG_SPACE_SIGN  :: 4
 FLAG_ZERO_PAD    :: 8
 FLAG_ALTERNATE   :: 16
 
+// --- Core format parser: parses flags/width/precision/spec and dispatches ---
+
+sb_format_parsed :: proc(b: ^strings.Builder, format: string, args: ..any) -> int {
+    start := b.count
+    arg_idx := 0
+    i := 0
+    for i < len(format) {
+        if format[i] == '%' {
+            i += 1
+            if i >= len(format) do break
+
+            // Parse flags
+            flags := 0
+            for i < len(format) {
+                if format[i] == '-' {
+                    flags |= FLAG_LEFT_ALIGN
+                    i += 1
+                } else if format[i] == '+' {
+                    flags |= FLAG_ALWAYS_SIGN
+                    i += 1
+                } else if format[i] == ' ' {
+                    flags |= FLAG_SPACE_SIGN
+                    i += 1
+                } else if format[i] == '0' {
+                    flags |= FLAG_ZERO_PAD
+                    i += 1
+                } else if format[i] == '#' {
+                    flags |= FLAG_ALTERNATE
+                    i += 1
+                } else {
+                    break
+                }
+            }
+            if i >= len(format) do break
+
+            // Parse width
+            width := 0
+            has_width := false
+            for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+                width = width * 10 + int(format[i] - '0')
+                has_width = true
+                i += 1
+            }
+            if i >= len(format) do break
+
+            // Parse precision
+            precision := -1
+            if i < len(format) && format[i] == '.' {
+                i += 1
+                precision = 0
+                for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+                    precision = precision * 10 + int(format[i] - '0')
+                    i += 1
+                }
+            }
+            if i >= len(format) do break
+
+            // Parse spec
+            spec := format[i]
+            i += 1
+
+            if spec == 'd' {
+                if arg_idx < len(args) {
+                    sb_format_int(b, args[arg_idx], 10, false, width, precision, flags, false)
+                }
+                arg_idx += 1
+            } else if spec == 's' {
+                if arg_idx < len(args) {
+                    s := args[arg_idx].(string)
+                    sb_print_padded_string(b, s, width, flags)
+                }
+                arg_idx += 1
+            } else if spec == 'x' {
+                if arg_idx < len(args) {
+                    sb_format_int(b, args[arg_idx], 16, false, width, precision, flags, false)
+                }
+                arg_idx += 1
+            } else if spec == 'X' {
+                if arg_idx < len(args) {
+                    sb_format_int(b, args[arg_idx], 16, true, width, precision, flags, false)
+                }
+                arg_idx += 1
+            } else if spec == 'u' {
+                if arg_idx < len(args) {
+                    sb_format_int(b, args[arg_idx], 10, false, width, precision, flags, true)
+                }
+                arg_idx += 1
+            } else if spec == 'b' {
+                if arg_idx < len(args) {
+                    sb_format_int(b, args[arg_idx], 2, false, width, precision, flags, false)
+                }
+                arg_idx += 1
+            } else if spec == 'o' {
+                if arg_idx < len(args) {
+                    sb_format_int(b, args[arg_idx], 8, false, width, precision, flags, false)
+                }
+                arg_idx += 1
+            } else if spec == 'c' {
+                if arg_idx < len(args) {
+                    v := args[arg_idx]
+                    c := byte(0)
+                    if type_of(v) == type_of(byte) {
+                        c = v.(byte)
+                    } else if type_of(v) == type_of(u8) {
+                        c = v.(u8)
+                    } else if type_of(v) == type_of(int) {
+                        c = u8(v.(int))
+                    } else if type_of(v) == type_of(rune) {
+                        c = u8(v.(rune))
+                    }
+                    sb_print_padded_char(b, c, width, flags)
+                }
+                arg_idx += 1
+            } else if spec == 'f' || spec == 'F' {
+                if arg_idx < len(args) {
+                    prec := precision
+                    if prec < 0 {
+                        prec = 6
+                    }
+                    sb_format_f64(b, args[arg_idx], width, prec, flags)
+                }
+                arg_idx += 1
+            } else if spec == 'e' || spec == 'E' {
+                if arg_idx < len(args) {
+                    prec := precision
+                    if prec < 0 {
+                        prec = 6
+                    }
+                    upper := spec == 'E'
+                    sb_format_scientific(b, args[arg_idx], upper, width, prec, flags)
+                }
+                arg_idx += 1
+            } else if spec == 'g' || spec == 'G' {
+                if arg_idx < len(args) {
+                    prec := precision
+                    if prec < 0 {
+                        prec = 6
+                    }
+                    upper := spec == 'G'
+                    sb_format_general(b, args[arg_idx], upper, width, prec, flags)
+                }
+                arg_idx += 1
+            } else if spec == 'p' {
+                if arg_idx < len(args) {
+                    v := args[arg_idx]
+                    ptr_val := 0
+                    if type_of(v) == type_of(int) {
+                        ptr_val = v.(int)
+                    } else if type_of(v) == type_of(uintptr) {
+                        ptr_val = int(v.(uintptr))
+                    } else if type_of(v) == type_of(u64) {
+                        ptr_val = int(v.(u64))
+                    }
+                    sb_print_string(b, "0x")
+                    sb_print_hex_lower_padded(b, ptr_val, 0, width, flags)
+                }
+                arg_idx += 1
+            } else if spec == 'v' {
+                if arg_idx < len(args) {
+                    sb_print_value(b, args[arg_idx])
+                }
+                arg_idx += 1
+            } else if spec == '%' {
+                sb_print_byte(b, '%')
+            } else {
+                // Unknown spec: print literally
+                sb_print_byte(b, '%')
+                sb_print_byte(b, spec)
+            }
+        } else {
+            sb_print_byte(b, format[i])
+            i += 1
+        }
+    }
+    return b.count - start
+}
+
 // --- Helper: repeat character ---
 
 sb_print_repeat :: proc(b: ^strings.Builder, c: byte, count: int) {
