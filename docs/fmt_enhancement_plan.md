@@ -1,13 +1,16 @@
 # Core:fmt Enhancement Plan
 
 ## Current Status
-All 190 tests pass. The fmt module is functional for basic use cases.
+All 191 tests pass. The fmt module supports basic printing, format specifiers, strings.Builder-based output, and cross-package imports.
 
 ## Implemented Features
 - `println`, `printf`, `printfln`, `eprintln`, `eprintf`, `eprintfln`
 - Format specifiers: `%d`, `%s`, `%x`, `%u`, `%f`, `%v`, `%%`, `%b`, `%o`, `%X`
 - Type support: int, i8, i16, i32, i64, u8, u16, u32, u64, uintptr, rune, byte, f32, f64, bool, string
 - Runtime type identification via `type_of(v)` for `any` type
+- `strings.Builder` support in `core:strings` (builder_make, write_byte, write_string, to_string, to_bytes)
+- Builder-based formatted output: `sbprint`, `sbprintf`, `sbprintln`, `sbprintfln`
+- Cross-package `core:strings` import from `core:fmt`
 
 ## Completed Work
 
@@ -26,7 +29,6 @@ All 190 tests pass. The fmt module is functional for basic use cases.
 - [x] Implemented `to_string()`, `to_bytes()` as builtins
 - [x] Fixed IR generation for empty struct literals (returns zero-initialized values)
 - [x] Fixed append() to use select-based conditional growth (avoids LLVM crashes)
-- [x] All 190 tests pass
 
 ### Qualified Type Name Support (Completed 2026-07-26)
 - [x] Added `QualifiedTypeName` grammar rule
@@ -35,19 +37,19 @@ All 190 tests pass. The fmt module is functional for basic use cases.
 - [x] All 191 tests pass
 - [x] Works correctly in function parameter types (e.g., `proc(b: ^strings.Builder)`)
 
-### fmt Module Extensions (Completed 2026-07-26)
-- [x] Added `%b` binary format specifier
-- [x] Added `%o` octal format specifier  
-- [x] Added `%X` uppercase hex format specifier
+### Nested Import IR Gen Fix (Completed 2026-07-27)
+- [x] Fixed `sem_evaluate_expr.c:1734`: Non-polymorphic package-qualified CALL nodes now propagate `resolved_symbol` from the preceding MEMBER node
+- [x] Fixed `ir_gen_postfix.c:604-624`: Forward-declare cross-package procedures via `LLVMGetNamedFunction`/`LLVMAddFunction` when `symbol->value.value` is NULL
+- [x] `fmt.odin` can now `import "core:strings"` and call `strings.write_string()` internally
+- [x] Detailed analysis in `notes/nested_import_ir_gen_bug.md`
 
-### String Builder Support (Completed 2026-07-26)
-- [x] Created `stubs/core/strings/strings.odin` with Builder struct
-- [x] Implemented `builder_make_none()`, `builder_make(n)`
-- [x] Implemented `write_byte()`, `write_bytes()`, `write_string()`
-- [x] Implemented `to_string()`, `to_bytes()` as builtins
-- [x] Fixed IR generation for empty struct literals (returns zero-initialized values)
-- [x] Fixed append() to use select-based conditional growth (avoids LLVM crashes)
-- [ ] **Pending**: Add `sbprint`, `sbprintf`, `sbprintfln` - strings package import causes symbol resolution issues in fmt
+### Builder-based fmt Functions (Completed 2026-07-27)
+- [x] Implemented `sbprint(b: ^Builder, args: ..any) -> int` — space-separated args into builder
+- [x] Implemented `sbprintf(b: ^Builder, format: string, args: ..any) -> int` — formatted output into builder
+- [x] Implemented `sbprintln(b: ^Builder, args: ..any) -> int` — space-separated args + trailing newline
+- [x] Implemented `sbprintfln(b: ^Builder, format: string, args: ..any) -> int` — formatted output + trailing newline
+- [x] Builder-aware helpers: `sb_print_string`, `sb_print_byte`, `sb_print_value`, `sb_print_int`, `sb_print_f64`, `sb_print_hex`, `sb_print_hex_upper`, `sb_print_binary`, `sb_print_octal`
+- [x] All 191 tests pass (test_fmt_sb.odin covers all 4 functions with 15 subtests)
 
 ## Pending Enhancements
 
@@ -74,107 +76,25 @@ All 190 tests pass. The fmt module is functional for basic use cases.
 
 ### Priority 4: Extensibility
 - [ ] Custom formatter registration (`@(builtin)` attribute support)
-- [ ] String Builder-based formatted output functions (`aprint`, `tprint`, `bprint`, `sbprint`, etc.)
 
-## String Builder Support Plan
+## Remaining Builder Variants
 
-### Overview
-The official fmt implementation uses `strings.Builder` for efficient string construction. This is needed for:
-- `aprint`, `aprintln`, `aprintf`, `aprintfln` (allocate string)
-- `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator)
-- `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
-- `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string)
-- `sbprint`, `sbprintfln`, `sbprintf`, `sbprintfln` (strings.Builder)
-- `wprint`, `wprintln`, `wprintf`, `wprintfln` (io.Writer)
+### Priority 2: Builder Variants
+- [ ] `aprint`, `aprintln`, `aprintf`, `aprintfln` (allocate string)
+- [ ] `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator)
+- [ ] `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
+- [ ] `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string)
+- [ ] `wprint`, `wprintln`, `wprintf`, `wprintfln` (io.Writer)
 
-### Required Components
-
-#### 1. strings.Builder Type
-Need to implement `strings.Builder` struct:
-```odin
-Builder :: struct {
-    data: [dynamic]byte;
-    count: int;
-}
-```
-
-#### 2. Builder Functions
-- `builder_init(builder: ^Builder, allocator: context.allocator)`
-- `builder_from_bytes(buf: []byte) -> Builder`
-- `to_string(builder: ^Builder) -> string`
-- `write_byte(builder: ^Builder, b: byte)`
-- `write_string(builder: ^Builder, s: string)`
-
-#### 3. strings Package Support
-Need stub implementations for:
-- `strings.Builder` type
-- `strings.builder_init`
-- `strings.to_string`
-- `strings.builder_from_bytes`
-- `strings.write_byte`
-- `strings.write_string`
-
-#### 4. IO Writer Support
-The fmt module uses `io.Writer` interface:
-```odin
-Writer :: struct {
-    procedure: proc(stream_data: rawptr, mode: Stream_Mode, p: []byte, offset: i64, whence: Seek_From) -> (n: i64, err: Error),
-    data: rawptr,
-}
-```
-
-Need to implement:
-- `io.write_byte(writer: Writer, c: byte, n_written: ^int) -> Error`
-- `io.write_string(writer: Writer, str: string, n_written: ^int) -> (n: int, err: Error)`
-- `io.flush(writer: Writer) -> Error`
-
-### Implementation Steps
-
-1. **Create strings package stub** (`stubs/core/strings/strings.odin`) ✅ DONE
-   - Define `Builder` struct
-   - Implement `builder_init`, `to_string`, `builder_from_bytes`
-   - Implement `write_byte`, `write_string`
-
-2. **Create io package stub** (`stubs/core/io/io.odin`) ✅ DONE
-   - Define `Writer`, `Reader`, `Stream_Mode`, `Error` types
-   - Implement `write_byte`, `write_string`, `flush`
-
-3. **Extend fmt.odin**
-   - [x] Add `%b`, `%o`, `%X` format specifiers
-   - [ ] Add `aprint`, `aprintln`, `aprintf`, `aprintfln` (allocator-based)
-   - [ ] Add `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator)
-   - [ ] Add `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
-   - [ ] Add `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string)
-   - [ ] Add `sbprint`, `sbprintfln`, `sbprintf`, `sbprintfln` (Builder)
-   - [ ] Add `wprint`, `wprintln`, `wprintf`, `wprintfln` (Writer)
-
-4. **Add missing format specifiers**
-   - [x] Add `%b`, `%o`, `%X` (completed)
-   - [ ] Implement width/precision parsing
-   - [ ] Add `%e`, `%E`, `%g`, `%G`
-   - [ ] Add alignment and sign flags
-
-5. **Add advanced formatting**
-   - [ ] Implement Python-like syntax parser
-   - [ ] Add positional argument support
-   - [ ] Add memory formatting (`%m`, `%M`)
-
-6. **Add complex type formatting**
-   - [ ] Complex numbers
-   - [ ] Quaternions
-   - [ ] Enums (with names)
-   - [ ] Structs (with fields)
-   - [ ] Unions
-   - [ ] Matrices
-
-7. **Add custom formatter support**
-   - [ ] Implement `@(builtin)` attribute parsing
-   - [ ] Add formatter registry mechanism
-   - [ ] Add `register_user_formatter`
+### Priority 3: IO Writer Support
+- [ ] Create `stubs/core/io/io.odin`
+- [ ] Define `Writer`, `Reader`, `Stream_Mode`, `Error` types
+- [ ] Implement `write_byte`, `write_string`, `flush`
 
 ## Estimated Effort
-- String Builder support: 2-3 days
-- Missing format specifiers: 1-2 days
+- Remaining format specifiers: 1-2 days
+- Builder variants: 1 day
+- IO Writer support: 1-2 days
 - Complex type formatting: 2-3 days
 - Custom formatters: 1-2 days
 
