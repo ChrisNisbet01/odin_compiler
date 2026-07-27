@@ -232,7 +232,20 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
     if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
     {
         if (*cur_type && (*cur_type)->kind == TD_KIND_PROC)
+        {
             proc_type = *cur_type;
+            // Priority 3 only fires when Priority 1 (resolved_symbol) and
+            // Priority 2 (scope identifier lookup) both failed, meaning *val
+            // came from a member access GEP (pointer to proc-field storage),
+            // not from ir_gen_identifier (which already loads proc variables).
+            // With LLVM opaque pointers, LLVMTypeOf(*val) == proc_type->llvm_type
+            // (both are bare `ptr`), so the type check can't distinguish them.
+            // Always load: if *val is already the function pointer value (rare),
+            // the load would be a no-op error — but that case is handled by
+            // Priority 2, so Priority 3 reaching here means *val is a GEP.
+            if (*val != NULL)
+                *val = LLVMBuildLoad2(ctx->builder, proc_type->llvm_type, *val, "fptr.load");
+        }
     }
 
     if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
