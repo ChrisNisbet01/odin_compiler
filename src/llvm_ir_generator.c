@@ -3404,9 +3404,57 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         LLVMValueRef context_ptr;
         if (ctx_type)
         {
-            LLVMValueRef ctx_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
-            LLVMBuildStore(ctx->builder, LLVMConstNull(ctx_type->llvm_type), ctx_alloca);
-            context_ptr = ctx_alloca;
+            // Create default allocator that uses C malloc/free
+            TypeDescriptor const * allocator_type = type_descriptor_get_allocator_type(ctx->type_registry);
+            if (allocator_type != NULL)
+            {
+                LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+                LLVMValueRef malloc_fn = LLVMGetNamedFunction(ctx->module, "malloc");
+                if (malloc_fn != NULL)
+                {
+                    // Cast malloc to the allocator procedure type
+                    LLVMValueRef malloc_as_proc = LLVMBuildPointerCast(ctx->builder, malloc_fn, i8ptr, "malloc.as.proc");
+                    
+                    // Create allocator struct: { procedure: malloc, data: NULL }
+                    LLVMValueRef alloc_fields[2];
+                    alloc_fields[0] = malloc_as_proc;
+                    alloc_fields[1] = LLVMConstNull(i8ptr);
+                    
+                    // Create global for default allocator
+                    LLVMValueRef default_alloc_global = LLVMAddGlobal(ctx->module, allocator_type->llvm_type, "default_allocator");
+                    LLVMSetInitializer(default_alloc_global, LLVMConstStruct(alloc_fields, 2, false));
+                    
+                    // Create global for temp allocator (same as default for now)
+                    LLVMValueRef temp_alloc_global = LLVMAddGlobal(ctx->module, allocator_type->llvm_type, "temp_allocator");
+                    LLVMSetInitializer(temp_alloc_global, LLVMConstStruct(alloc_fields, 2, false));
+                    
+                    // Create context struct: { allocator, temp_allocator, user_ptr=NULL, user_index=0 }
+                    LLVMValueRef ctx_fields[4];
+                    ctx_fields[0] = default_alloc_global;
+                    ctx_fields[1] = temp_alloc_global;
+                    ctx_fields[2] = LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+                    ctx_fields[3] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
+                    
+                    LLVMValueRef ctx_val = LLVMConstStruct(ctx_fields, 4, false);
+                    
+                    LLVMValueRef ctx_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
+                    LLVMBuildStore(ctx->builder, ctx_val, ctx_alloca);
+                    context_ptr = ctx_alloca;
+                }
+                else
+                {
+                    // No malloc, fall back to null context
+                    LLVMValueRef ctx_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
+                    LLVMBuildStore(ctx->builder, LLVMConstNull(ctx_type->llvm_type), ctx_alloca);
+                    context_ptr = ctx_alloca;
+                }
+            }
+            else
+            {
+                LLVMValueRef ctx_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
+                LLVMBuildStore(ctx->builder, LLVMConstNull(ctx_type->llvm_type), ctx_alloca);
+                context_ptr = ctx_alloca;
+            }
         }
         else
         {
