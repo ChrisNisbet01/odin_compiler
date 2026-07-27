@@ -252,7 +252,8 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
         return_types = NULL;
     }
     TypeDescriptor const * proc_type = get_or_create_proc_type(
-        ctx->type_registry, return_type, params, param_count, return_types, return_count, is_variadic, cc
+        ctx->type_registry, return_type, params, param_count, return_types, return_count, is_variadic, cc,
+        false
     );
     free((void *)params);
     free((void *)return_types);

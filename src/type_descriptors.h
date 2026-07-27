@@ -32,6 +32,11 @@ typedef struct
     bool is_void_return;
     calling_convention_t calling_convention;
     LLVMTypeRef func_type;
+    
+    // Default parameter values: array of AST node pointers, one per parameter
+    // A NULL entry means no default value; non-NULL is the expression AST node
+    // containing the default value (re-evaluated at each call site)
+    struct odin_grammar_node_t * * default_values;
 } ProcMetadata;
 
 typedef struct
@@ -218,7 +223,8 @@ TypeDescriptor const * get_or_create_proc_type(
     TypeDescriptor const ** returns,
     int return_count,
     bool is_variadic,
-    calling_convention_t calling_convention
+    calling_convention_t calling_convention,
+    bool force_unique
 );
 
 TypeDescriptor const * register_struct_type(

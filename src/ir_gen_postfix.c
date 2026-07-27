@@ -255,6 +255,35 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
         arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, arg_types, 128);
     }
 
+    // Fill in omitted arguments with default values
+    {
+        int param_count = proc_type->proc_metadata.param_count;
+        if (arg_count < param_count && proc_type->proc_metadata.default_values != NULL)
+        {
+            for (int di = arg_count; di < param_count; di++)
+            {
+                odin_grammar_node_t * default_node = proc_type->proc_metadata.default_values[di];
+                if (default_node == NULL)
+                    break;
+                LLVMValueRef def_val = ir_gen_node(ctx, default_node);
+                if (def_val != NULL)
+                {
+                    args[di] = def_val;
+                    arg_types[di] = default_node->resolved_type;
+                    arg_count++;
+                }
+                else
+                {
+                    ir_gen_error_collection_add(
+                        &ctx->errors, NULL, default_node,
+                        "failed to generate code for default parameter value"
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
     // Wrap arguments that match 'any' parameters (non-variadic)
     {
         TypeDescriptor const * any_type = get_basic_type_by_name(ctx->type_registry, "any");

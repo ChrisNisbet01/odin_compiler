@@ -638,6 +638,10 @@ type_descriptors_destroy_registry(TypeDescriptors * registry)
         {
             free((void *)registry->types[i]->proc_metadata.returns);
         }
+        if (registry->types[i]->proc_metadata.default_values)
+        {
+            free((void *)registry->types[i]->proc_metadata.default_values);
+        }
         if (registry->types[i]->kind == TD_KIND_OVERLOAD_BUNDLE)
         {
             free(registry->types[i]->as.overload_bundle.candidate_types);
@@ -1017,9 +1021,12 @@ get_or_create_proc_type(
     TypeDescriptor const ** returns,
     int return_count,
     bool is_variadic,
-    calling_convention_t calling_convention
+    calling_convention_t calling_convention,
+    bool force_unique
 )
 {
+    if (!force_unique)
+    {
     for (int i = 0; i < registry->count; i++)
     {
         TypeDescriptor * t = registry->types[i];
@@ -1058,6 +1065,7 @@ get_or_create_proc_type(
         if (match)
             return t;
     }
+    } // !force_unique
 
     TypeDescriptor * td = type_descriptor_alloc(registry);
     if (td == NULL)
@@ -1081,6 +1089,12 @@ get_or_create_proc_type(
     {
         td->proc_metadata.returns = malloc((size_t)return_count * sizeof(*td->proc_metadata.returns));
         memcpy((void *)td->proc_metadata.returns, returns, (size_t)return_count * sizeof(*td->proc_metadata.returns));
+    }
+
+    // Initialize default_values array (all NULL initially)
+    if (param_count > 0)
+    {
+        td->proc_metadata.default_values = calloc((size_t)param_count, sizeof(struct odin_grammar_node_t *));
     }
 
     bool has_context_param = (calling_convention == CALLING_CONV_ODIN && registry->context_type != NULL);

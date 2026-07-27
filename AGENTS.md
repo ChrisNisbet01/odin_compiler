@@ -587,3 +587,13 @@ The `@AST_ACTION_POSTFIX_SLICE` action is shared between `PostfixOpSlice` (for `
 - **Tests**: `test_switch_enum_exhaustive.odin` (full coverage — passes), `test_switch_enum_partial.odin` (partial coverage with `#partial` — passes), `test_switch_enum_default.odin` (partial coverage with default case — passes), `expected_to_fail/test_switch_enum_missing.odin` (missing case without `#partial` or default — expected to fail because exhaustiveness error).
 - **All 132 tests pass** (128 previous + 3 new regular + 1 new expected-to-fail).
 - **Pre-existing limitation discovered**: `Color.Green` qualified enumerator access does not work (errors "type has no member"). Only bare enumerators (`Green`) work. This is a separate limitation tracked implicitly.
+
+## Accomplishments (session 2026-07-28)
+
+### Implemented default parameter values
+- **Grammar fix** (`odin_grammar.gdl`): Changed `Parameter` rule default value from `Expression` to `AssignExpression` — `Expression = chainl1(AssignExpression, Comma)` consumed commas separating parameters, breaking multi-default-param procs like `proc(a: int, b: int := 20, c: int := 30)`.
+- **Type descriptor** (`type_descriptors.h/c`): Changed `ProcMetadata.default_values` from `LLVMValueRef*` to `odin_grammar_node_t**` — stores AST node pointers (not evaluated LLVM values) so defaults are re-evaluated at each call site, supporting non-constant defaults.
+- **Proc type deduplication fix** (`type_descriptors.c`): Added `bool force_unique` parameter to `get_or_create_proc_type()`. When `true`, skips the dedup loop entirely. This prevents procs with different defaults but identical signatures (e.g., `add(x: int, y: int := 10)` and `zero_default(x: int, y: int := 0)`) from sharing the same type descriptor and overwriting each other's defaults.
+- **Semantic analysis** (`semantic_analyser.c`): In `sem_resolve_procedure_signature`, detects default value child nodes on `AST_NODE_PARAMETER` — iterates children in reverse, finding the first child that isn't the param identifier, type node, or ellipsis. Collects default value AST nodes in a parallel array to param types. After `get_or_create_proc_type`, populates `proc_metadata.default_values[]` from the collected nodes.
+- **IR generation** (`ir_gen_postfix.c`): In `ir_gen_postfix_call`, after collecting provided arguments, fills omitted args by iterating `proc_type->proc_metadata.default_values[di]` for each missing arg position. Calls `ir_gen_node(ctx, default_node)` to generate IR for the default expression at each call site.
+- **Tests**: `test_default_params.odin` (10 subtests: single default int, override, multiple defaults all/partial/none, no-defaults baseline, bool default, zero-value default). **All 196 tests pass**.

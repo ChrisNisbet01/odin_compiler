@@ -449,7 +449,9 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
         }
     }
 
-    // Extract param type descriptors from the parameter list
+    // Extract param type descriptors and default values from the parameter list
+    odin_grammar_node_t ** default_value_nodes = NULL;
+    size_t default_val_cap = 0;
     if (param_list_node != NULL && param_list_node->list.count > 0)
     {
         odin_grammar_node_t * params = param_list_node->list.children[0];
@@ -463,6 +465,7 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
 
                 odin_grammar_node_t * param_ident = NULL;
                 odin_grammar_node_t * param_type_node = NULL;
+                odin_grammar_node_t * default_value_node = NULL;
                 for (size_t ci = 0; ci < param->list.count; ci++)
                 {
                     odin_grammar_node_t * child = param->list.children[ci];
@@ -472,6 +475,23 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
                         param_ident = child;
                     else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child) || child->type == AST_NODE_POLY_IDENT)
                         param_type_node = child;
+                }
+                // Detect default value: last child that is not the identifier,
+                // not the type node, and not an ellipsis
+                for (size_t ci = param->list.count; ci > 0; ci--)
+                {
+                    odin_grammar_node_t * child = param->list.children[ci - 1];
+                    if (child == NULL)
+                        continue;
+                    if (child == param_ident || child == param_type_node)
+                        continue;
+                    if (child->type == AST_NODE_ELLIPSIS)
+                        continue;
+                    if (!is_type_node(child))
+                    {
+                        default_value_node = child;
+                        break;
+                    }
                 }
                 if (param_type_node == NULL)
                 {
@@ -529,11 +549,30 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
                     if (tmp == NULL)
                     {
                         free(param_types);
+                        free(default_value_nodes);
                         return NULL;
                     }
                     param_types = tmp;
                     param_cap = new_cap;
                 }
+                // Store default value node (NULL if no default)
+                if (param_count >= (int)default_val_cap)
+                {
+                    size_t new_cap = default_val_cap == 0 ? 4 : default_val_cap * 2;
+                    odin_grammar_node_t ** tmp2 = realloc(default_value_nodes, new_cap * sizeof(odin_grammar_node_t *));
+                    if (tmp2 == NULL)
+                    {
+                        free(param_types);
+                        free(default_value_nodes);
+                        return NULL;
+                    }
+                    // Zero-initialize newly allocated slots
+                    for (size_t zi = default_val_cap; zi < new_cap; zi++)
+                        tmp2[zi] = NULL;
+                    default_value_nodes = tmp2;
+                    default_val_cap = new_cap;
+                }
+                default_value_nodes[param_count] = default_value_node;
                 param_types[param_count++] = pt;
             }
         }
@@ -563,9 +602,39 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
     if (return_count == 0)
         return_types = NULL;
 
+    // Check if any parameter has a default value — force unique type to
+    // avoid sharing default_values across procs with same signature
+    bool has_any_defaults = false;
+    if (default_value_nodes != NULL)
+    {
+        for (int di = 0; di < param_count; di++)
+        {
+            if (default_value_nodes[di] != NULL)
+            {
+                has_any_defaults = true;
+                break;
+            }
+        }
+    }
+
     TypeDescriptor const * proc_type = get_or_create_proc_type(
-        ctx->type_registry, return_type, param_types, param_count, return_types, return_count, is_variadic, cc
+        ctx->type_registry, return_type, param_types, param_count, return_types, return_count, is_variadic, cc,
+        has_any_defaults
     );
+
+    // Populate default parameter values in the proc type metadata
+    if (proc_type != NULL && default_value_nodes != NULL && param_count > 0)
+    {
+        TypeDescriptor * mutable_proc = (TypeDescriptor *)proc_type;
+        for (int di = 0; di < param_count; di++)
+        {
+            if (default_value_nodes[di] != NULL)
+            {
+                mutable_proc->proc_metadata.default_values[di] = default_value_nodes[di];
+            }
+        }
+    }
+    free(default_value_nodes);
 
     if (out_param_types) *out_param_types = param_types; else free(param_types);
     if (out_param_count) *out_param_count = param_count;
