@@ -1497,7 +1497,7 @@ sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node)
 
     // Look up the identifier in the current scope to see if it's a type alias
     symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
-    if (sym != NULL && sym->kind == SYMBOL_TYPE && sym->value.type_info != NULL)
+    if (sym != NULL && sym->value.type_info != NULL)
     {
         node->resolved_type = (TypeDescriptor *)sym->value.type_info;
         return sym->value.type_info;
@@ -1794,7 +1794,7 @@ sem_resolve_qualified_type_name(SemContext * ctx, odin_grammar_node_t * node)
         {
             // Found the package, now look up the type in its scope
             symbol_t * sym = scope_find_symbol_entry(pkg->package_scope, type_node->text);
-            if (sym != NULL && sym->kind == SYMBOL_TYPE)
+            if (sym != NULL && sym->value.type_info != NULL)
             {
                 type_node->resolved_type = (TypeDescriptor *)sym->value.type_info;
                 return sym->value.type_info;

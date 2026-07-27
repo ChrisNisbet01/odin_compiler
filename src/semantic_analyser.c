@@ -924,12 +924,40 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
                 free(candidate_symbols);
             }
         }
+        else if (value_node != NULL && is_type_node(value_node))
+        {
+            resolved_type = sem_resolve_type_expr(ctx, value_node);
+            value_node->resolved_type = (TypeDescriptor *)resolved_type;
+        }
+        else if (value_node != NULL && value_node->type == AST_NODE_IDENTIFIER)
+        {
+            resolved_type = sem_resolve_type_expr(ctx, value_node);
+            value_node->resolved_type = (TypeDescriptor *)resolved_type;
+        }
 
     if (name_node->type == AST_NODE_IDENTIFIER)
     {
         TypedValue tv = create_typed_value(NULL, resolved_type, false);
         scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
         sem_set_symbol_private(generator_current_scope(ctx->gen_ctx), name_node->text, is_private);
+
+        // Mark type aliases (struct, union, enum, etc.) as SYMBOL_TYPE
+        // Do this BEFORE any other code might look up this symbol
+        if (resolved_type != NULL && value_node != NULL && value_node->type != AST_NODE_PROCEDURE_DEFINITION
+            && value_node->type != AST_NODE_PROC_OVERLOAD_BUNDLE)
+        {
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            if (sym)
+                sym->kind = SYMBOL_TYPE;
+        }
+
+        // Also mark procedure definitions as SYMBOL_PROCEDURE
+        if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_DEFINITION)
+        {
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            if (sym)
+                sym->kind = SYMBOL_PROCEDURE;
+        }
 
         // Mark the symbol as polymorphic if its procedure signature uses any
         // $T / $N poly identifiers. Polymorphic procs are NOT analyzed or
@@ -1057,6 +1085,8 @@ import_using_copy_symbol(void * value, void * user_data)
         copy->const_int_val = sym->const_int_val;
         copy->has_const_int_val = true;
     }
+    // Propagate kind (SYMBOL_TYPE for type aliases)
+    copy->kind = sym->kind;
     // Propagate polymorphism flag and register origin AST so poly calls
     // through the `using`-imported copy can resolve (Stage 11).
     if (sym->is_polymorphic)
