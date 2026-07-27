@@ -1283,6 +1283,19 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
             if (sym && sym->value.type_info)
                 cur_type = sym->value.type_info;
         }
+        // Handle 'context' keyword — unwraps through PrimaryExpression/Expression to ContextExpr
+        if (cur_type == NULL)
+        {
+            odin_grammar_node_t * inner = pe_child;
+            while (inner != NULL && is_expression_wrapper_type(inner->type) && inner->list.count > 0)
+                inner = inner->list.children[0];
+            if (inner != NULL && inner->type == AST_NODE_CONTEXT_EXPR)
+            {
+                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+                if (sym && sym->value.type_info)
+                    cur_type = sym->value.type_info;
+            }
+        }
     }
     if (cur_type == NULL && pe_child != NULL)
         cur_type = pe_child->resolved_type;

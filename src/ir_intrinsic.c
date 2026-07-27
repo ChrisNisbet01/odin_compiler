@@ -175,8 +175,9 @@ ir_gen_intrinsic_int_to_string(IrGenContext * ctx)
     LLVMValueRef sx = LLVMBuildZExt(ctx->builder, is_neg, i64_type, "its.sx");
     LLVMValueRef total_len = LLVMBuildAdd(ctx->builder, n_digits, sx, "its.len");
 
-    LLVMValueRef buf_a = LLVMBuildAlloca(ctx->builder, LLVMArrayType(i8_type, 21), "its.buf");
-    LLVMValueRef buf_p = LLVMBuildBitCast(ctx->builder, buf_a, LLVMPointerType(i8_type, 0), "its.bp");
+    LLVMValueRef allocator = ir_gen_get_context_allocator(ctx);
+    LLVMValueRef alloc_size = LLVMConstInt(i64_type, 21, false);
+    LLVMValueRef buf_p = ir_gen_call_allocator_alloc(ctx, allocator, alloc_size, NULL);
 
     LLVMValueRef rem_a = LLVMBuildAlloca(ctx->builder, i64_type, "its.rem");
     LLVMBuildStore(ctx->builder, LLVMBuildLoad2(ctx->builder, i64_type, abs_saved, "its.abs"), rem_a);

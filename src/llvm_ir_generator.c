@@ -1670,9 +1670,9 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
     len_val = LLVMBuildIntCast(ctx->builder, len_val, LLVMInt64TypeInContext(ctx->context), "len.i64");
 
-    // Get allocator if provided - if not, use C malloc directly
+    // Get allocator if provided (maps only use children[2] as allocator)
     LLVMValueRef allocator_val = NULL;
-    if (node->list.count >= 3)
+    if (node->list.count >= 3 && result_type->kind == TD_KIND_MAP)
     {
         odin_grammar_node_t * allocator_node = node->list.children[2];
         allocator_val = ir_gen_node(ctx, allocator_node);
@@ -1767,8 +1767,20 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 
         bool is_da = (result_type->kind == TD_KIND_DYNAMIC_ARRAY);
 
+        // For DAs with cap argument: allocate cap elements. Otherwise allocate len elements.
+        LLVMValueRef cap_val = len_val;
+        if (is_da && node->list.count >= 3)
+        {
+            odin_grammar_node_t * cap_node = node->list.children[2];
+            cap_val = ir_gen_node(ctx, cap_node);
+            if (cap_val == NULL)
+                return NULL;
+            cap_val = LLVMBuildIntCast(ctx->builder, cap_val, LLVMInt64TypeInContext(ctx->context), "cap.i64");
+        }
+        LLVMValueRef alloc_count = is_da ? cap_val : len_val;
+
         LLVMValueRef elem_size = LLVMSizeOf(elem_type->llvm_type);
-        LLVMValueRef total_size = LLVMBuildMul(ctx->builder, elem_size, len_val, "makemem.size");
+        LLVMValueRef total_size = LLVMBuildMul(ctx->builder, elem_size, alloc_count, "makemem.size");
 
         // Use allocator if provided, otherwise use C malloc
         LLVMValueRef raw_mem;
@@ -1811,7 +1823,7 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 2, false)};
             LLVMBuildStore(
                 ctx->builder,
-                len_val,
+                cap_val,
                 LLVMBuildInBoundsGEP2(ctx->builder, result_type->llvm_type, make_ptr, cidx, 2, "make.cap.gep")
             );
         }
@@ -3409,15 +3421,72 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
             if (allocator_type != NULL)
             {
                 LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+                LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
                 LLVMValueRef malloc_fn = LLVMGetNamedFunction(ctx->module, "malloc");
                 if (malloc_fn != NULL)
                 {
-                    // Cast malloc to the allocator procedure type
-                    LLVMValueRef malloc_as_proc = LLVMBuildPointerCast(ctx->builder, malloc_fn, i8ptr, "malloc.as.proc");
+                    // Generate an Odin allocator wrapper that conforms to the 6-arg protocol:
+                    // proc(data: rawptr, mode: int, size: int, alignment: int, nil: rawptr, zero: int) -> []byte
+                    LLVMTypeRef slice_type = LLVMStructTypeInContext(ctx->context, (LLVMTypeRef[]){i8ptr, i64t}, 2, false);
+                    LLVMTypeRef alloc_fn_type = LLVMFunctionType(
+                        slice_type,
+                        (LLVMTypeRef[]){i8ptr, i64t, i64t, i64t, i8ptr, i64t},
+                        6, false
+                    );
+                    LLVMValueRef alloc_wrapper = LLVMAddFunction(ctx->module, "__odin_default_alloc", alloc_fn_type);
+                    LLVMSetLinkage(alloc_wrapper, LLVMPrivateLinkage);
+
+                    LLVMBasicBlockRef entry_bb = LLVMAppendBasicBlockInContext(ctx->context, alloc_wrapper, "entry");
+                    LLVMBasicBlockRef alloc_bb = LLVMAppendBasicBlockInContext(ctx->context, alloc_wrapper, "alloc");
+                    LLVMBasicBlockRef free_bb = LLVMAppendBasicBlockInContext(ctx->context, alloc_wrapper, "free");
+                    LLVMBasicBlockRef done_bb = LLVMAppendBasicBlockInContext(ctx->context, alloc_wrapper, "done");
+                    LLVMBuilderRef saved_builder = ctx->builder;
+                    ctx->builder = LLVMCreateBuilderInContext(ctx->context);
+                    LLVMPositionBuilderAtEnd(ctx->builder, entry_bb);
+
+                    // mode (arg1) == 0 means Alloc, anything else means Free
+                    LLVMValueRef mode = LLVMGetParam(alloc_wrapper, 1);
+                    LLVMValueRef is_alloc = LLVMBuildICmp(ctx->builder, LLVMIntEQ, mode, LLVMConstInt(i64t, 0, false), "is.alloc");
+                    LLVMBuildCondBr(ctx->builder, is_alloc, alloc_bb, free_bb);
+
+                    // Free path: call free(ptr)
+                    LLVMPositionBuilderAtEnd(ctx->builder, free_bb);
+                    LLVMTypeRef free_type = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), (LLVMTypeRef[]){i8ptr}, 1, false);
+                    LLVMValueRef free_fn = LLVMGetNamedFunction(ctx->module, "free");
+                    if (free_fn == NULL)
+                        free_fn = LLVMAddFunction(ctx->module, "free", free_type);
+                    LLVMValueRef free_ptr = LLVMGetParam(alloc_wrapper, 4);
+                    LLVMBuildCall2(ctx->builder, free_type, free_fn, &free_ptr, 1, "");
+                    LLVMValueRef empty_slice = LLVMGetUndef(slice_type);
+                    LLVMBuildBr(ctx->builder, done_bb);
+
+                    // Alloc path: call malloc(size)
+                    LLVMPositionBuilderAtEnd(ctx->builder, alloc_bb);
+                    LLVMTypeRef malloc_type = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64t}, 1, false);
+                    LLVMValueRef alloc_size = LLVMGetParam(alloc_wrapper, 2);
+                    LLVMValueRef malloc_ptr = LLVMBuildCall2(ctx->builder, malloc_type, malloc_fn, &alloc_size, 1, "raw.ptr");
+                    LLVMValueRef slice_val = LLVMGetUndef(slice_type);
+                    slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, malloc_ptr, 0, "sl.ptr");
+                    slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, alloc_size, 1, "sl.len");
+                    LLVMBuildBr(ctx->builder, done_bb);
+
+                    // Merge: phi
+                    LLVMPositionBuilderAtEnd(ctx->builder, done_bb);
+                    LLVMValueRef result_phi = LLVMBuildPhi(ctx->builder, slice_type, "result");
+                    LLVMBasicBlockRef phi_blocks[] = {free_bb, alloc_bb};
+                    LLVMValueRef phi_vals[] = {empty_slice, slice_val};
+                    LLVMAddIncoming(result_phi, phi_vals, phi_blocks, 2);
+                    LLVMBuildRet(ctx->builder, result_phi);
+
+                    LLVMDisposeBuilder(ctx->builder);
+                    ctx->builder = saved_builder;
+
+                    // Cast wrapper to the allocator procedure pointer type
+                    LLVMValueRef alloc_as_proc = LLVMBuildPointerCast(ctx->builder, alloc_wrapper, i8ptr, "alloc.proc");
                     
-                    // Create allocator struct: { procedure: malloc, data: NULL }
+                    // Create allocator struct: { procedure: alloc_wrapper, data: NULL }
                     LLVMValueRef alloc_fields[2];
-                    alloc_fields[0] = malloc_as_proc;
+                    alloc_fields[0] = alloc_as_proc;
                     alloc_fields[1] = LLVMConstNull(i8ptr);
                     
                     // Create global for default allocator
@@ -3429,9 +3498,10 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
                     LLVMSetInitializer(temp_alloc_global, LLVMConstStruct(alloc_fields, 2, false));
                     
                     // Create context struct: { allocator, temp_allocator, user_ptr=NULL, user_index=0 }
+                    // Use the VALUE of the global initializer (the {proc, data} struct), not the global pointer
                     LLVMValueRef ctx_fields[4];
-                    ctx_fields[0] = default_alloc_global;
-                    ctx_fields[1] = temp_alloc_global;
+                    ctx_fields[0] = LLVMGetInitializer(default_alloc_global);
+                    ctx_fields[1] = LLVMGetInitializer(temp_alloc_global);
                     ctx_fields[2] = LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
                     ctx_fields[3] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
                     

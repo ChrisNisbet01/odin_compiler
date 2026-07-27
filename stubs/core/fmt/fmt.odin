@@ -1051,3 +1051,64 @@ sbprintfln :: proc(b: ^strings.Builder, format: string, args: ..any) -> int {
     sb_print_string(b, "\n")
     return b.count - start
 }
+
+// --- Temp-allocator variants (use context.temp_allocator for builder buffer) ---
+
+tprint :: proc(args: ..any) {
+    for i in 0..<len(args) {
+        if i > 0 {
+            print_string(1, " ")
+        }
+        print_value(1, args[i])
+    }
+}
+
+tprintln :: proc(args: ..any) {
+    for i in 0..<len(args) {
+        if i > 0 {
+            print_string(1, " ")
+        }
+        print_value(1, args[i])
+    }
+    print_string(1, "\n")
+}
+
+tprintf :: proc(format: string, args: ..any) {
+    b := strings.builder_make_temp(64)
+    sb_format_parsed(&b, format, args)
+    s := strings.to_string(b)
+    print_string(1, s)
+}
+
+tprintfln :: proc(format: string, args: ..any) {
+    b := strings.builder_make_temp(64)
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, '\n')
+    s := strings.to_string(b)
+    print_string(1, s)
+}
+
+teprintln :: proc(args: ..any) {
+    for i in 0..<len(args) {
+        if i > 0 {
+            print_string(2, " ")
+        }
+        print_value(2, args[i])
+    }
+    print_string(2, "\n")
+}
+
+teprintf :: proc(format: string, args: ..any) {
+    b := strings.builder_make_temp(64)
+    sb_format_parsed(&b, format, args)
+    s := strings.to_string(b)
+    print_string(2, s)
+}
+
+teprintfln :: proc(format: string, args: ..any) {
+    b := strings.builder_make_temp(64)
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, '\n')
+    s := strings.to_string(b)
+    print_string(2, s)
+}

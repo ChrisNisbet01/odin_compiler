@@ -1509,6 +1509,13 @@ sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node)
         node->resolved_type = (TypeDescriptor *)bt;
         return bt;
     }
+    // Fallback: check for compiler-internal named types (Allocator, Context, etc.)
+    TypeDescriptor const * named = type_descriptor_find_named_type(ctx->type_registry, node->text);
+    if (named != NULL)
+    {
+        node->resolved_type = (TypeDescriptor *)named;
+        return named;
+    }
     return NULL;
     
 }

@@ -597,3 +597,22 @@ The `@AST_ACTION_POSTFIX_SLICE` action is shared between `PostfixOpSlice` (for `
 - **Semantic analysis** (`semantic_analyser.c`): In `sem_resolve_procedure_signature`, detects default value child nodes on `AST_NODE_PARAMETER` — iterates children in reverse, finding the first child that isn't the param identifier, type node, or ellipsis. Collects default value AST nodes in a parallel array to param types. After `get_or_create_proc_type`, populates `proc_metadata.default_values[]` from the collected nodes.
 - **IR generation** (`ir_gen_postfix.c`): In `ir_gen_postfix_call`, after collecting provided arguments, fills omitted args by iterating `proc_type->proc_metadata.default_values[di]` for each missing arg position. Calls `ir_gen_node(ctx, default_node)` to generate IR for the default expression at each call site.
 - **Tests**: `test_default_params.odin` (10 subtests: single default int, override, multiple defaults all/partial/none, no-defaults baseline, bool default, zero-value default). **All 196 tests pass**.
+
+### Fixed three interconnected issues blocking `fmt.tprintf`/`sbprintf` content
+
+#### Fix 1: Context initializer stored allocator global address instead of value
+- **Root cause** (`llvm_ir_generator.c:3493`): Entry point stored `ptr @default_allocator` (address of the global variable) as the allocator procedure pointer, instead of the global's VALUE `{ ptr @__odin_default_alloc, ptr null }`. The allocator struct was `{ address_of_global_var, address_of_temp_global }` — calling the global variable address as a function pointer crashed with SIGSEGV.
+- **Fix**: Changed `ctx_fields[0] = default_alloc_global` → `ctx_fields[0] = LLVMGetInitializer(default_alloc_global)` to use the `{ proc, data }` struct value, not the global pointer.
+
+#### Fix 2: `int_to_string` returned pointer to dead stack buffer
+- **Root cause** (`ir_intrinsic.c:178`): `int_to_string` used `alloca [21 x i8]` for the digit buffer. The function returned `{ptr into alloca, len}`, but callers like `sb_print_string` then called `append()` which invoked `malloc`/`free`, clobbering the dead stack memory before all bytes were read. This caused `int_to_string(42)` → `"4\0"` instead of `"42"`.
+- **Fix**: Replaced stack `alloca` with heap allocation via `ir_gen_get_context_allocator` + `ir_gen_call_allocator_alloc`. The digit buffer now persists after `int_to_string` returns.
+
+#### Fix 3: `make([dynamic]T, len, cap)` support for pre-allocated capacity
+- **Root cause**: `strings.builder_make(n)` called `make([dynamic]byte, n)` which created len=n, cap=n. `append` then wrote at position n (after existing elements), but `to_string(b)` read positions 0..count (all zeros from calloc).
+- **Grammar**: Already supported `make(Type, expr, expr?)` — no changes needed.
+- **IR generation** (`llvm_ir_generator.c`): For dynamic arrays with 3 args, `children[2]` is now treated as cap (not allocator). Allocation uses `alloc_count = cap_val` when cap is provided, storing both len and cap in the DA fat pointer. Maps still use `children[2]` as allocator.
+- **Semantic analyser** (`sem_evaluate_expr.c`): Updated third-arg comment to reflect cap semantics for slices/DAs.
+- **Stubs** (`stubs/core/strings/strings.odin`): `builder_make` and `grow` now use `make([dynamic]byte, 0, n)` — zero-length with pre-allocated capacity.
+- **Tests**: Fixed `test_ptr_append.odin` and `test_ptr_append2.odin` to use `make([dynamic]byte, 0, 4)`.
+- **All 208 tests pass**.

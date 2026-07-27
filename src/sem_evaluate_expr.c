@@ -315,11 +315,12 @@ sem_evaluate_make_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     sem_evaluate_expr(ctx, len_node);
     
-    // Evaluate optional allocator argument
+    // For maps: evaluate optional allocator argument (children[2])
+    // For slices/DAs: children[2] is cap (optional), evaluate it
     if (node->list.count >= 3)
     {
-        odin_grammar_node_t * allocator_node = node->list.children[2];
-        sem_evaluate_expr(ctx, allocator_node);
+        odin_grammar_node_t * third_arg = node->list.children[2];
+        sem_evaluate_expr(ctx, third_arg);
     }
     
     node->resolved_type = (TypeDescriptor *)td;

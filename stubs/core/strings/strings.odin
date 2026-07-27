@@ -9,14 +9,14 @@ builder_make_none :: proc() -> Builder {
 	return Builder{}
 }
 
-builder_make :: proc(n: int) -> Builder {
+builder_make :: proc(n: int, allocator: Allocator := context.allocator) -> Builder {
 	b: Builder;
-	b.buf = make([dynamic]byte, n);
+	b.buf = make([dynamic]byte, 0, n);
 	return b;
 }
 
 builder_make_temp :: proc(n: int) -> Builder {
-	return builder_make(n);
+	return builder_make(n, context.temp_allocator);
 }
 
 builder_cap :: proc(b: Builder) -> int {
@@ -69,7 +69,7 @@ grow :: proc(b: ^Builder, n: int) {
 		for new_cap < needed {
 			new_cap = new_cap * 2;
 		}
-		new_buf := make([dynamic]byte, new_cap);
+		new_buf := make([dynamic]byte, 0, new_cap);
 		for i in 0..<b.count {
 			new_buf = append(new_buf, b.buf[i]);
 		}

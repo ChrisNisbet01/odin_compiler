@@ -1737,6 +1737,22 @@ type_descriptor_get_ptr_type(TypeDescriptors * registry)
     return registry->ptr_type;
 }
 
+TypeDescriptor const *
+type_descriptor_find_named_type(TypeDescriptors * registry, char const * name)
+{
+    if (name == NULL)
+        return NULL;
+    if (strcmp(name, "Allocator") == 0)
+        return registry->allocator_type;
+    if (strcmp(name, "Context") == 0)
+        return registry->context_type;
+    if (strcmp(name, "Source_Location") == 0)
+        return registry->source_location_type;
+    if (strcmp(name, "type_info") == 0)
+        return registry->type_info_type;
+    return NULL;
+}
+
 bool
 is_integer_kind(TypeDescriptor const * desc)
 {
