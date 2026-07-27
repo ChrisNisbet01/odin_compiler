@@ -111,16 +111,16 @@ All 193 tests pass. The fmt module supports basic printing, full format specifie
 - [ ] Field/access position argument: `%[1]d` / `%[2]s` — requires AST_NODE for spec parsing.
 
 ### Priority 2: Builder Variants
-- [x] **Temp allocator support** — Now implemented!
+- [x] **Temp allocator infrastructure** — Implemented!
   - Added `TD_KIND_ARENA` type descriptor with 6 fields (backing_allocator, curr_block, total_used, total_capacity, minimum_block_size, temp_count)
   - Created `stubs/core/mem/virtual.odin` with Arena infrastructure (arena_init, arena_alloc, arena_free_all, arena_destroy, arena_allocator_proc)
   - Created `stubs/core/runtime/default_temporary_allocator.odin` with Default_Temp_Allocator
   - Added `free_all(allocator: Allocator)` builtin that calls allocator's `.Free_All` mode
   - IR intrinsic `ir_gen_intrinsic_free_all` for runtime implementation
   - Context entry point initializes temp_allocator with default_temp_allocator_proc and global arena
-  - `strings.builder_make(n, allocator)` now accepts optional allocator parameter (defaults to context.allocator)
-  - `free_all(context.temp_allocator)` works to release all temp allocations at once
-- [ ] `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator) — needs temp allocator support in compiler first
+- [ ] `builder_make(n, allocator)` — needs `make` builtin to support allocator parameter (not yet implemented)
+- [ ] `builder_make_temp(n)` — needs `make` to support allocator parameter
+- [ ] `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator) — blocked by `make` allocator parameter support
 - [ ] `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
 - [ ] `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string)
 - [ ] `wprint`, `wprintln`, `wprintf`, `wprintfln` (io.Writer) — needs io.Writer abstraction

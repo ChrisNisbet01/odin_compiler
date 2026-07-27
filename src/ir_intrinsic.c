@@ -1,5 +1,6 @@
 #include "ir_intrinsic.h"
 #include "hash.h"
+#include "type_descriptors.h"
 
 #include <string.h>
 #include <stdint.h>
@@ -603,28 +604,95 @@ ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr)
 }
 
 LLVMValueRef
-ir_gen_call_mem_alloc(IrGenContext * ctx, LLVMValueRef size, LLVMValueRef alignment)
+ir_gen_call_mem_alloc(IrGenContext * ctx, LLVMValueRef size, LLVMValueRef alignment, LLVMValueRef allocator)
 {
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
-    LLVMTypeRef mem_alloc_args[] = {LLVMInt64TypeInContext(ctx->context), LLVMInt64TypeInContext(ctx->context)};
-    LLVMTypeRef mem_alloc_type = LLVMFunctionType(i8ptr, mem_alloc_args, 2, false);
+    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
+    
+    // mem_alloc returns (data: rawptr, err: Allocator_Error)
+    LLVMTypeRef slice_type = LLVMStructTypeInContext(ctx->context, (LLVMTypeRef[]){i8ptr, i64t}, 2, false);
+    LLVMTypeRef mem_alloc_args[] = {i64t, i64t, i8ptr};
+    LLVMTypeRef mem_alloc_type = LLVMFunctionType(slice_type, mem_alloc_args, 3, false);
     LLVMValueRef mem_alloc_fn = LLVMGetNamedFunction(ctx->module, "mem_alloc");
     if (mem_alloc_fn == NULL)
         mem_alloc_fn = LLVMAddFunction(ctx->module, "mem_alloc", mem_alloc_type);
-    LLVMValueRef args[] = {size, alignment};
-    return LLVMBuildCall2(ctx->builder, mem_alloc_type, mem_alloc_fn, args, 2, "mem_alloc");
+    LLVMValueRef args[] = {size, alignment, allocator};
+    LLVMValueRef result = LLVMBuildCall2(ctx->builder, mem_alloc_type, mem_alloc_fn, args, 3, "mem_alloc");
+    
+    // Extract the data pointer from the result
+    return LLVMBuildExtractValue(ctx->builder, result, 0, "mem_alloc.data");
 }
 
 void
-ir_gen_call_mem_free(IrGenContext * ctx, LLVMValueRef ptr)
+ir_gen_call_mem_free(IrGenContext * ctx, LLVMValueRef ptr, LLVMValueRef allocator)
 {
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
-    LLVMTypeRef mem_free_args[] = {i8ptr};
-    LLVMTypeRef mem_free_type = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), mem_free_args, 1, false);
+    LLVMTypeRef mem_free_args[] = {i8ptr, i8ptr};
+    LLVMTypeRef mem_free_type = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), mem_free_args, 2, false);
     LLVMValueRef mem_free_fn = LLVMGetNamedFunction(ctx->module, "mem_free");
     if (mem_free_fn == NULL)
         mem_free_fn = LLVMAddFunction(ctx->module, "mem_free", mem_free_type);
-    LLVMValueRef args[] = {LLVMBuildPointerCast(ctx->builder, ptr, i8ptr, "")};
-    LLVMBuildCall2(ctx->builder, mem_free_type, mem_free_fn, args, 1, "");
+    LLVMValueRef args[] = {LLVMBuildPointerCast(ctx->builder, ptr, i8ptr, ""), allocator};
+    LLVMBuildCall2(ctx->builder, mem_free_type, mem_free_fn, args, 2, "");
+}
+
+LLVMValueRef
+ir_gen_call_allocator_alloc(IrGenContext * ctx, LLVMValueRef allocator, LLVMValueRef size, LLVMValueRef alignment)
+{
+    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    
+    // Allocator struct: { procedure: fn, data: ptr }
+    // Call: allocator.procedure(allocator.data, .Alloc, size, alignment, nil, 0)
+    LLVMValueRef allocator_proc = LLVMBuildExtractValue(ctx->builder, allocator, 0, "alloc.proc");
+    LLVMValueRef allocator_data = LLVMBuildExtractValue(ctx->builder, allocator, 1, "alloc.data");
+    
+    LLVMValueRef mode_val = LLVMConstInt(i64t, 0, false); // .Alloc = 0
+    
+    LLVMTypeRef slice_type = LLVMStructTypeInContext(ctx->context, (LLVMTypeRef[]){i8ptr, i64t}, 2, false);
+    LLVMTypeRef allocator_fn_type = LLVMFunctionType(
+        slice_type,
+        (LLVMTypeRef[]){i8ptr, i64t, i64t, i64t, i8ptr, i64t},
+        6, false
+    );
+    
+    LLVMValueRef args[] = {
+        allocator_data,
+        mode_val,
+        size,
+        alignment ? alignment : LLVMConstInt(i64t, 16, false),
+        LLVMConstNull(i8ptr),
+        LLVMConstInt(i64t, 0, false)
+    };
+    
+    LLVMValueRef result = LLVMBuildCall2(ctx->builder, allocator_fn_type, allocator_proc, args, 6, "alloc.call");
+    
+    // Extract the data pointer from the []byte result
+    return LLVMBuildExtractValue(ctx->builder, result, 0, "alloc.result");
+}
+
+LLVMValueRef
+ir_gen_get_context_allocator(IrGenContext * ctx)
+{
+    // Get context allocator from context.allocator (field 0 of context struct)
+    LLVMValueRef current_func = func_current_function(ctx);
+    if (current_func == NULL)
+        return NULL;
+    
+    // Get the first parameter (context)
+    LLVMValueRef context_ptr = LLVMGetParam(current_func, 0);
+    
+    // context.allocator is field 0
+    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    LLVMValueRef allocator_ptr = LLVMBuildInBoundsGEP2(ctx->builder, 
+        LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0),
+        context_ptr, &idx0, 1, "context.allocator");
+    
+    // Load the allocator struct
+    TypeDescriptor const * allocator_type = type_descriptor_get_allocator_type(ctx->type_registry);
+    if (allocator_type == NULL)
+        return NULL;
+    
+    return LLVMBuildLoad2(ctx->builder, allocator_type->llvm_type, allocator_ptr, "allocator");
 }
 

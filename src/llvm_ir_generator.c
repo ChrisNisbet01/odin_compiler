@@ -1670,6 +1670,16 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
     len_val = LLVMBuildIntCast(ctx->builder, len_val, LLVMInt64TypeInContext(ctx->context), "len.i64");
 
+    // Get allocator if provided - if not, use C malloc directly
+    LLVMValueRef allocator_val = NULL;
+    if (node->list.count >= 3)
+    {
+        odin_grammar_node_t * allocator_node = node->list.children[2];
+        allocator_val = ir_gen_node(ctx, allocator_node);
+        if (allocator_val == NULL)
+            return NULL;
+    }
+
     LLVMValueRef make_ptr = LLVMBuildAlloca(ctx->builder, result_type->llvm_type, "make.result");
 
     if (result_type->kind == TD_KIND_MAP)
@@ -1694,7 +1704,17 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMValueRef hdr32 = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 32, false);
         LLVMValueRef total_size = LLVMBuildAdd(ctx->builder, hdr32, entries_size, "map.total.size");
 
-        LLVMValueRef map_data = ir_gen_call_calloc(ctx, total_size);
+        // Use allocator if provided, otherwise use C calloc
+        LLVMValueRef map_data;
+        if (allocator_val != NULL)
+        {
+            map_data = ir_gen_call_allocator_alloc(ctx, allocator_val, total_size,
+                LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 16, false));
+        }
+        else
+        {
+            map_data = ir_gen_call_calloc(ctx, total_size);
+        }
         if (map_data == NULL)
             return NULL;
 
@@ -1750,7 +1770,17 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMValueRef elem_size = LLVMSizeOf(elem_type->llvm_type);
         LLVMValueRef total_size = LLVMBuildMul(ctx->builder, elem_size, len_val, "makemem.size");
 
-        LLVMValueRef raw_mem = ir_gen_call_malloc(ctx, total_size);
+        // Use allocator if provided, otherwise use C malloc
+        LLVMValueRef raw_mem;
+        if (allocator_val != NULL)
+        {
+            raw_mem = ir_gen_call_allocator_alloc(ctx, allocator_val, total_size,
+                LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 16, false));
+        }
+        else
+        {
+            raw_mem = ir_gen_call_malloc(ctx, total_size);
+        }
         if (raw_mem == NULL)
             return NULL;
         LLVMTypeRef elem_ptr_type = LLVMPointerType(elem_type->llvm_type, 0);

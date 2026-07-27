@@ -231,9 +231,9 @@ RBracket = lexeme(']');
 Semicolon = lexeme(';');
 Comma = lexeme(',');
 Dot = lexeme('.');
+ColonAssign = lexeme(":=");
 Colon = lexeme(':' not(':') not('='));
 DoubleColon = lexeme("::" not(':'));
-ColonAssign = lexeme(":=");
 Assign = lexeme('=' not('='));
 Arrow = lexeme("->");
 At = lexeme('@');
@@ -333,7 +333,7 @@ StructRawBody = LBrace StructFieldList RBrace;
 StructType = KwStruct (SoaType | (ParameterList? (Directive IntegerLiteral?)? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
 StructTypeRef = KwStruct Identifier @AST_ACTION_STRUCT_TYPE_REF;
 
-Parameter = KwUsing? ((PolyIdent Colon TypePrefix) | (Identifier Colon VariadicMarker? TypePrefix)) @AST_ACTION_PARAMETER;
+Parameter = KwUsing? ((PolyIdent Colon TypePrefix) | (Identifier Colon VariadicMarker? TypePrefix)) (ColonAssign Expression)? @AST_ACTION_PARAMETER;
 Parameters = Ellipsis | (Parameter (Comma Parameter)* (Comma Ellipsis)?) @AST_ACTION_PARAMETERS;
 ParameterList = LParen Parameters? RParen @AST_ACTION_PARAMETER_LIST;
 NamedReturn = Identifier Colon TypePrefix @AST_ACTION_NAMED_RETURN;
@@ -438,7 +438,7 @@ MaxExpr = KwMax LParen AssignExpression Comma AssignExpression RParen @AST_ACTIO
 TypeOfExpr = KwTypeOf LParen (Expression | TypeName) RParen @AST_ACTION_TYPE_OF_EXPR;
 TypeidOfExpr = KwTypeidOf LParen TypeName RParen @AST_ACTION_TYPEID_OF_EXPR;
 TypeInfoOfExpr = KwTypeInfoOf LParen TypeName RParen @AST_ACTION_TYPE_INFO_OF_EXPR;
-MakeExpr = KwMake LParen TypePrefix Comma Expression RParen @AST_ACTION_MAKE_EXPR;
+MakeExpr = KwMake LParen TypePrefix Comma Expression (Comma Expression)? RParen @AST_ACTION_MAKE_EXPR;
 NewExpr = KwNew LParen TypePrefix RParen @AST_ACTION_NEW_EXPR;
 DeleteExpr = KwDelete LParen Expression RParen @AST_ACTION_DELETE_EXPR;
 AppendExpr = KwAppend LParen AssignExpression (Comma AssignExpression)+ RParen @AST_ACTION_APPEND_EXPR;

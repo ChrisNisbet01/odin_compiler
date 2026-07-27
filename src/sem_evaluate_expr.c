@@ -314,6 +314,14 @@ sem_evaluate_make_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
     sem_evaluate_expr(ctx, len_node);
+    
+    // Evaluate optional allocator argument
+    if (node->list.count >= 3)
+    {
+        odin_grammar_node_t * allocator_node = node->list.children[2];
+        sem_evaluate_expr(ctx, allocator_node);
+    }
+    
     node->resolved_type = (TypeDescriptor *)td;
     return td;
     

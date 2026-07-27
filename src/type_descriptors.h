@@ -282,6 +282,8 @@ TypeDescriptor const * type_descriptor_get_ptr_type(TypeDescriptors * registry);
 
 TypeDescriptor const * type_descriptor_get_context_type(TypeDescriptors * registry);
 
+TypeDescriptor const * type_descriptor_get_allocator_type(TypeDescriptors * registry);
+
 TypeDescriptor const * type_descriptor_get_source_location_type(TypeDescriptors * registry);
 
 TypeDescriptor const * type_descriptor_get_type_info_type(TypeDescriptors * registry);

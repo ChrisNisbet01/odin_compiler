@@ -1641,6 +1641,12 @@ type_descriptor_get_context_type(TypeDescriptors * registry)
 }
 
 TypeDescriptor const *
+type_descriptor_get_allocator_type(TypeDescriptors * registry)
+{
+    return registry->allocator_type;
+}
+
+TypeDescriptor const *
 type_descriptor_get_source_location_type(TypeDescriptors * registry)
 {
     return registry->source_location_type;
