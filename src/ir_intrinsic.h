@@ -23,8 +23,11 @@ LLVMValueRef ir_gen_intrinsic_sys_read(IrGenContext * ctx);
 LLVMValueRef ir_gen_intrinsic_strings_to_string(IrGenContext * ctx);
 LLVMValueRef ir_gen_intrinsic_strings_to_bytes(IrGenContext * ctx);
 void ir_gen_intrinsic_builder_make_none(IrGenContext * ctx);
+void ir_gen_intrinsic_free_all(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type);
 
 LLVMValueRef ir_gen_call_malloc(IrGenContext * ctx, LLVMValueRef size);
 void ir_gen_call_free(IrGenContext * ctx, LLVMValueRef ptr);
 LLVMValueRef ir_gen_call_calloc(IrGenContext * ctx, LLVMValueRef size);
 LLVMValueRef ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr);
+LLVMValueRef ir_gen_call_mem_alloc(IrGenContext * ctx, LLVMValueRef size, LLVMValueRef alignment);
+void ir_gen_call_mem_free(IrGenContext * ctx, LLVMValueRef ptr);

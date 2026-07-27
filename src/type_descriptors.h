@@ -72,6 +72,7 @@ typedef enum
     TD_KIND_OVERLOAD_BUNDLE,
     TD_KIND_VECTOR,
     TD_KIND_TUPLE,
+    TD_KIND_ARENA,
 } td_kind_t;
 
 typedef struct
@@ -168,6 +169,11 @@ typedef struct TypeDescriptor
             TypeDescriptor const ** element_types;
             int element_count;
         } tuple;
+        struct
+        {
+            TypeDescriptor const * backing_allocator_type;
+            TypeDescriptor const * curr_block_type;
+        } arena;
     } as;
 } TypeDescriptor;
 
@@ -242,6 +248,12 @@ get_or_create_overload_bundle_type(
     TypeDescriptor const ** candidate_types,
     symbol_t ** candidate_symbols,
     int candidate_count
+);
+
+TypeDescriptor const *
+get_or_create_arena_type(
+    TypeDescriptors * registry,
+    TypeDescriptor const * backing_allocator_type
 );
 
 TypeDescriptor const * create_distinct_type(TypeDescriptors * registry, TypeDescriptor const * base_type);

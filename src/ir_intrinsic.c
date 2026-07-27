@@ -47,6 +47,7 @@ init_intrinsic_handlers(void)
     generic_hash_table_insert(intrinsic_handlers, "to_string", (void *)ir_gen_intrinsic_strings_to_string);
     generic_hash_table_insert(intrinsic_handlers, "to_bytes", (void *)ir_gen_intrinsic_strings_to_bytes);
     generic_hash_table_insert(intrinsic_handlers, "builder_make_none", (void *)ir_gen_intrinsic_builder_make_none);
+    generic_hash_table_insert(intrinsic_handlers, "free_all", (void *)ir_gen_intrinsic_free_all);
 }
 
 LLVMValueRef
@@ -485,6 +486,51 @@ ir_gen_intrinsic_builder_make_none(IrGenContext * ctx)
 }
 
 void
+ir_gen_intrinsic_free_all(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type)
+{
+    (void)func_name;
+    (void)proc_type;
+    // free_all(allocator: Allocator)
+    // Calls the allocator's procedure with mode = .Free_All
+    LLVMValueRef allocator_param = LLVMGetParam(func_current_function(ctx), 1);
+    
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+    LLVMValueRef mode_val = LLVMConstInt(i64_type, 4, false); // .Free_All = 4
+    
+    // Get allocator fields: procedure (field 0) and data (field 1)
+    LLVMValueRef proc_ptr = LLVMBuildExtractValue(ctx->builder, allocator_param, 0, "fa.proc");
+    LLVMValueRef data_ptr = LLVMBuildExtractValue(ctx->builder, allocator_param, 1, "fa.data");
+    
+    // Call: allocator.procedure(allocator.data, .Free_All, 0, 0, nil, 0)
+    // Signature: (data: rawptr, mode: Allocator_Mode, size: int, alignment: int, old_memory: rawptr, old_size: int) -> (data: []byte, err: Allocator_Error)
+    LLVMTypeRef i8ptr_type = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef allocator_fn_type = LLVMFunctionType(
+        LLVMStructTypeInContext(ctx->context,
+            (LLVMTypeRef[]){
+                LLVMStructTypeInContext(ctx->context,
+                    (LLVMTypeRef[]){i8ptr_type, i64_type}, 2, false), // []byte = { ptr, len }
+                i64_type  // Allocator_Error = i64
+            }, 2, false),
+        (LLVMTypeRef[]){i8ptr_type, i64_type, i64_type, i64_type, i8ptr_type, i64_type},
+        6, false
+    );
+
+    LLVMValueRef args[] = {
+        data_ptr,
+        mode_val,
+        LLVMConstNull(LLVMInt64TypeInContext(ctx->context)),
+        LLVMConstNull(LLVMInt64TypeInContext(ctx->context)),
+        LLVMConstNull(i8ptr_type),
+        LLVMConstNull(LLVMInt64TypeInContext(ctx->context))
+    };
+    
+    LLVMBuildCall2(ctx->builder, allocator_fn_type, proc_ptr, args, 6, "fa.call");
+    
+    // We don't need the return value, just ensure the call happens
+    LLVMBuildRetVoid(ctx->builder);
+}
+
+void
 ir_gen_runtime_intrinsic_body(IrGenContext * ctx, char const * func_name,
                                 TypeDescriptor const * proc_type)
 {
@@ -556,10 +602,29 @@ ir_gen_call_strlen(IrGenContext * ctx, LLVMValueRef str_ptr)
     return LLVMBuildCall2(ctx->builder, strlen_type, strlen_fn, args, 1, "strlen");
 }
 
-static void
-ir_gen_intrinsic_array_grow(IrGenContext * ctx, LLVMValueRef fn)
+LLVMValueRef
+ir_gen_call_mem_alloc(IrGenContext * ctx, LLVMValueRef size, LLVMValueRef alignment)
 {
-    (void)ctx;
-    (void)fn;
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef mem_alloc_args[] = {LLVMInt64TypeInContext(ctx->context), LLVMInt64TypeInContext(ctx->context)};
+    LLVMTypeRef mem_alloc_type = LLVMFunctionType(i8ptr, mem_alloc_args, 2, false);
+    LLVMValueRef mem_alloc_fn = LLVMGetNamedFunction(ctx->module, "mem_alloc");
+    if (mem_alloc_fn == NULL)
+        mem_alloc_fn = LLVMAddFunction(ctx->module, "mem_alloc", mem_alloc_type);
+    LLVMValueRef args[] = {size, alignment};
+    return LLVMBuildCall2(ctx->builder, mem_alloc_type, mem_alloc_fn, args, 2, "mem_alloc");
+}
+
+void
+ir_gen_call_mem_free(IrGenContext * ctx, LLVMValueRef ptr)
+{
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef mem_free_args[] = {i8ptr};
+    LLVMTypeRef mem_free_type = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), mem_free_args, 1, false);
+    LLVMValueRef mem_free_fn = LLVMGetNamedFunction(ctx->module, "mem_free");
+    if (mem_free_fn == NULL)
+        mem_free_fn = LLVMAddFunction(ctx->module, "mem_free", mem_free_type);
+    LLVMValueRef args[] = {LLVMBuildPointerCast(ctx->builder, ptr, i8ptr, "")};
+    LLVMBuildCall2(ctx->builder, mem_free_type, mem_free_fn, args, 1, "");
 }
 

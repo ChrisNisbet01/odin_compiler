@@ -1523,6 +1523,65 @@ get_or_create_tuple_type(TypeDescriptors * registry, TypeDescriptor const ** ele
 }
 
 TypeDescriptor const *
+get_or_create_arena_type(
+    TypeDescriptors * registry,
+    TypeDescriptor const * backing_allocator_type
+)
+{
+    if (registry == NULL || backing_allocator_type == NULL)
+        return NULL;
+
+    // Deduplicate by comparing backing allocator type
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_ARENA)
+            continue;
+        if (t->as.arena.backing_allocator_type != backing_allocator_type)
+            continue;
+        return t;
+    }
+
+    // Arena LLVM type: { backing_allocator: Allocator, curr_block: Memory_Block*, used: uint, capacity: uint, minimum_block_size: uint, temp_count: uint }
+    // For now, use a simplified layout: { backing_allocator: Allocator, curr_block: ptr, used: i64, capacity: i64, minimum_block_size: i64, temp_count: i64 }
+    LLVMTypeRef arena_fields[6];
+    arena_fields[0] = backing_allocator_type->llvm_type;
+    arena_fields[1] = registry->ptr_type->llvm_type;  // Memory_Block*
+    arena_fields[2] = registry->i64_type->llvm_type;  // total_used
+    arena_fields[3] = registry->i64_type->llvm_type;  // total_capacity
+    arena_fields[4] = registry->i64_type->llvm_type;  // minimum_block_size
+    arena_fields[5] = registry->i64_type->llvm_type;  // temp_count
+    LLVMTypeRef arena_llvm = LLVMStructTypeInContext(registry->context, arena_fields, 6, false);
+
+    struct_or_union_members_st arena_members;
+    arena_members.count = 6;
+    arena_members.fields = malloc(6 * sizeof(struct_field_t));
+    arena_members.fields[0].name = "backing_allocator";
+    arena_members.fields[0].type_desc = backing_allocator_type;
+    arena_members.fields[0].is_using = false;
+    arena_members.fields[1].name = "curr_block";
+    arena_members.fields[1].type_desc = registry->ptr_type;
+    arena_members.fields[1].is_using = false;
+    arena_members.fields[2].name = "total_used";
+    arena_members.fields[2].type_desc = registry->i64_type;
+    arena_members.fields[2].is_using = false;
+    arena_members.fields[3].name = "total_capacity";
+    arena_members.fields[3].type_desc = registry->i64_type;
+    arena_members.fields[3].is_using = false;
+    arena_members.fields[4].name = "minimum_block_size";
+    arena_members.fields[4].type_desc = registry->i64_type;
+    arena_members.fields[4].is_using = false;
+    arena_members.fields[5].name = "temp_count";
+    arena_members.fields[5].type_desc = registry->i64_type;
+    arena_members.fields[5].is_using = false;
+
+    TypeDescriptor * td = (TypeDescriptor *)register_struct_type(registry, arena_llvm, true, &arena_members);
+    free(arena_members.fields);
+
+    return td;
+}
+
+TypeDescriptor const *
 get_or_create_overload_bundle_type(
     TypeDescriptors * registry,
     TypeDescriptor const ** candidate_types,

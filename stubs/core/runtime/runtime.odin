@@ -16,3 +16,18 @@ sys_read     :: proc(fd: int, data: ^u8, count: int) -> int ---
 sys_write    :: proc(fd: int, data: ^u8, count: int) -> int ---
 @(builtin)
 sys_close    :: proc(fd: int) -> int ---
+
+@(builtin)
+mem_alloc :: proc(size: int, alignment: int, allocator: Allocator) -> (data: rawptr, err: Allocator_Error) ---
+
+@(builtin)
+mem_free :: proc(mem: rawptr, allocator: Allocator) ---
+
+@(builtin)
+copy :: proc(dst: rawptr, src: rawptr, n: int) ---
+
+@(builtin)
+align_forward_uint :: proc(x: uint, alignment: uint) -> uint ---
+
+@(builtin)
+mem_zero :: proc(ptr: rawptr, size: uint) ---
