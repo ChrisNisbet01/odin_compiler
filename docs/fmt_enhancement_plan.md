@@ -1,15 +1,19 @@
 # Core:fmt Enhancement Plan
 
 ## Current Status
-All 193 tests pass. The fmt module supports basic printing, full format specifier handling with flags/width/precision (via `sb_format_parsed`), strings.Builder-based output, cross-package imports, and `..any` variadic forwarding.
+All 205 tests pass. The fmt module supports basic printing, full format specifier handling with flags/width/precision (via `sb_format_parsed`), strings.Builder-based output, cross-package imports, and `..any` variadic forwarding.
 
 ## Compiler Bugs Fixed During This Work
 
+### Fixed in this session (2026-07-28)
+
+- **Context initializer stored allocator global address instead of value**: Entry point stored `ptr @default_allocator` (address of global variable) as allocator procedure pointer instead of the global's VALUE `{ @__odin_default_alloc, null }`. Calling the address crashed with SIGSEGV. Fixed by using `LLVMGetInitializer(default_alloc_global)`.
+- **`int_to_string` returned dangling pointer**: Used stack `alloca [21 x i8]` for the digit buffer. Callers like `sb_print_string` → `append` clobbered the dead stack memory before all bytes were read. Fixed by heap-allocating via the context allocator.
+- **`make([dynamic]T, len, cap)` support for pre-allocated capacity**: `strings.builder_make(n)` called `make([dynamic]byte, n)` which created len=n, cap=n. `append` wrote at position n, but `to_string` read positions 0..count (all zeros). Fixed by treating `children[2]` as cap for DAs/slices. Updated `strings.odin` to use `make([dynamic]byte, 0, n)`.
+- **String `==`/`!=` comparison**: `icmp eq` on `{ptr, i64}` struct operands is invalid LLVM IR. Fixed by adding `ir_gen_string_compare` in `ir_gen_operator.c` — compares lengths first (fast-fail via `icmp eq`), then calls `memcmp` on data pointers if lengths match. For `!=`, the `==` result is negated.
+
 ### Pre-existing Limitations (Still Open)
 
-- **Two-step Builder init pattern**: `b: pkg.Type` then `b = expr` was previously broken due to AST_NODE_QUALIFIED_TYPE_NAME bug. Now fixed. The one-step form (`b := expr`) also works and is preferred.
-- **Pre-existing `append` codegen bug**: `append` on pre-allocated dynamic arrays (`make([dynamic]T, N)` followed by `append`) miscomputes the buffer pointer. Workaround: use `builder_make_none()` instead of `builder_make(N)`.
-- **String equality comparison**: Strings (`{ptr, i64}` aggregate) cannot be compared with `==`. Must compare `len()` and individual characters.
 - **`rawptr` not usable in source code**: The internal `ptr_type` isn't in the `BasicType` grammar rule, so `rawptr` can't be used as a variable type.
 
 ## Implemented Features
@@ -25,8 +29,8 @@ All 193 tests pass. The fmt module supports basic printing, full format specifie
 - `flush_to_fd` — write builder contents to a file descriptor
 
 ### Allocate-based Print
-- `aprint`, `aprintln` — return allocated string (uses `builder_make_none()` to avoid pre-existing append codegen bug)
-- `aprintf`, `aprintfln` — formatted versions that forward `..any` to `sb_format_parsed` (was broken by `..any`→`..any` forwarding bug, now fixed)
+- `aprint`, `aprintln` — return allocated string
+- `aprintf`, `aprintfln` — formatted versions that forward `..any` to `sb_format_parsed`
 
 ### Format Flag Constants
 - `FLAG_LEFT_ALIGN=1`, `FLAG_ALWAYS_SIGN=2`, `FLAG_SPACE_SIGN=4`, `FLAG_ZERO_PAD=8`, `FLAG_ALTERNATE=16`
@@ -71,29 +75,13 @@ All 193 tests pass. The fmt module supports basic printing, full format specifie
 - `to_string`, `to_bytes` (builtins)
 - `destroy` (frees the dynamic-array buffer)
 - Cross-package import working; package-qualified type names work in declarations (`b: strings.Builder`)
+- `builder_make(n)` now uses `make([dynamic]byte, 0, n)` for zero-length pre-allocated capacity
+- `grow` also uses `make([dynamic]byte, 0, new_cap)` correctly
 
 ## Pending Refactoring Work
 
-### HIGH: Migrate `printf`/`printfln`/`eprintf`/`eprintfln`/`sbprintf`/`sbprintfln` to `sb_format_parsed`
-**Status**: not started; previously blocked by `..any`→`..any` forwarding bug (now fixed).
-**Plan**:
-- [ ] Replace each ~80-line ad-hoc parser in `printf`/`printfln`/`eprintf`/`eprintfln` with:
-  ```odin
-  printf :: proc(format: string, args: ..any) {
-      b := strings.builder_make_none()
-      sb_format_parsed(&b, format, args)
-      flush_to_fd(&b, 1)
-  }
-  ```
-  (Use `flush_to_fd` to write the built-up string; or inline `strings.to_string` + `print_string`.)
-- [ ] Same for `sbprintf`/`sbprintfln` — they already use a builder:
-  ```odin
-  sbprintf :: proc(b: ^Builder, format: string, args: ..any) -> int {
-      return sb_format_parsed(b, format, args)
-  }
-  ```
-- [ ] Verify all existing tests still pass with the once only 7 format specifiers (`%d`, `%s`, `%x`, `%u`, `%f`, `%v`, `%%`); then verify new specifiers/flags work transparently in `printf`.
-- [ ] Delete the now-redundant ad-hoc parser bodies (saves ~480 lines of duplicate code).
+### ~~HIGH: Migrate `printf`/`printfln`/`eprintf`/`eprintfln`/`sbprintf`/`sbprintfln` to `sb_format_parsed`~~
+**Status**: DONE — all format-style entry points already delegate to `sb_format_parsed`.
 
 ### MEDIUM: Add tests for new format specifiers/flags using the migrated `printf`
 - [ ] Test `printf("%c\n", 'A')`, `printf("%.3f\n", 3.14159)`, `printf("%05d\n", 42)`, `printf("%-10s|\n", "hi")`, `printf("%e\n", 123.456)`, `printf("%#x\n", 255)`.
@@ -112,18 +100,12 @@ All 193 tests pass. The fmt module supports basic printing, full format specifie
 
 ### Priority 2: Builder Variants
 - [x] **Temp allocator infrastructure** — Implemented!
-  - Added `TD_KIND_ARENA` type descriptor with 6 fields (backing_allocator, curr_block, total_used, total_capacity, minimum_block_size, temp_count)
-  - Created `stubs/core/mem/virtual.odin` with Arena infrastructure (arena_init, arena_alloc, arena_free_all, arena_destroy, arena_allocator_proc)
-  - Created `stubs/core/runtime/default_temporary_allocator.odin` with Default_Temp_Allocator
-  - Added `free_all(allocator: Allocator)` builtin that calls allocator's `.Free_All` mode
-  - IR intrinsic `ir_gen_intrinsic_free_all` for runtime implementation
-  - Context entry point initializes temp_allocator with default_temp_allocator_proc and global arena
-- [ ] `builder_make(n, allocator)` — needs `make` builtin to support allocator parameter (not yet implemented)
-- [ ] `builder_make_temp(n)` — needs `make` to support allocator parameter
-- [ ] `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator) — blocked by `make` allocator parameter support
-- [ ] `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based)
-- [ ] `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string)
-- [ ] `wprint`, `wprintln`, `wprintf`, `wprintfln` (io.Writer) — needs io.Writer abstraction
+- [x] `builder_make(n, allocator)` — `make` now supports allocator parameter (grammar allows 3 args).
+- [x] `builder_make_temp(n)` — works via `builder_make(n, context.temp_allocator)`.
+- [x] `tprint`, `tprintln`, `tprintf`, `tprintfln` (temp allocator) — all working and tested.
+- [ ] `bprint`, `bprintfln`, `bprintf`, `bprintfln` (buffer-based).
+- [ ] `caprint`, `caprintfln`, `caprintf`, `caprintfln` (C string).
+- [ ] `wprint`, `wprintln`, `wprintf`, `wprintfln` (io.Writer) — needs io.Writer abstraction.
 
 ### Priority 3: Complex Type Support
 - [ ] Memory formatting (`%m`, `%M`)
@@ -142,8 +124,8 @@ All 193 tests pass. The fmt module supports basic printing, full format specifie
 - Test additions for new specifiers in printf: 1 day
 - String truncation (`%.5s`), `%q`, `%m`: 1 day
 - Positional/named arguments: 2-3 days (AST grammar changes)
-- Builder variants (temp allocator done): 1-2 days (blocked by temp allocator / io.Writer)
+- Buffer/C string/Writer variants: 2-3 days
 - Complex type formatting: 2-3 days
 - Custom formatters: 1-2 days
 
-Total rest: 6-10 days for complete implementation.
+Total rest: 5-9 days for complete implementation.

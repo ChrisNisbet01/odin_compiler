@@ -1,8 +1,86 @@
 #include "ir_gen_operator.h"
 #include "ast_metadata.h"
 #include "ast_utils.h"
+#include "type_descriptors.h"
 
 // --- Binary expression codegen ---
+
+static bool
+is_string_type(TypeDescriptor const * td)
+{
+    return td != NULL
+        && td->kind == TD_KIND_BASIC
+        && td->as.basic.name != NULL
+        && strcmp(td->as.basic.name, "string") == 0;
+}
+
+static LLVMValueRef
+ir_gen_string_compare(IrGenContext * ctx, LLVMValueRef lhs, LLVMValueRef rhs,
+                       TypeDescriptor const * lhs_td, TypeDescriptor const * rhs_td,
+                       bool is_eq)
+{
+    // String is {ptr data, i64 len}. Compare lengths first (fast-fail),
+    // then compare data via memcmp.
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i32_type = LLVMInt32TypeInContext(ctx->context);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+
+    LLVMValueRef lhs_len = LLVMBuildExtractValue(ctx->builder, lhs, 1, "str.lhs.len");
+    LLVMValueRef rhs_len = LLVMBuildExtractValue(ctx->builder, rhs, 1, "str.rhs.len");
+
+    // If lengths differ, strings are not equal
+    LLVMValueRef len_eq = LLVMBuildICmp(ctx->builder, LLVMIntEQ, lhs_len, rhs_len, "str.len.eq");
+
+    // If lengths are equal, compare data via memcmp
+    LLVMBasicBlockRef len_equal_bb = LLVMAppendBasicBlockInContext(ctx->context,
+        func_current_function(ctx), "str.len.eq.bb");
+    LLVMBasicBlockRef memcmp_bb = LLVMAppendBasicBlockInContext(ctx->context,
+        func_current_function(ctx), "str.memcmp.bb");
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(ctx->context,
+        func_current_function(ctx), "str.merge.bb");
+
+    LLVMBuildCondBr(ctx->builder, len_eq, memcmp_bb, len_equal_bb);
+
+    // len_equal_bb: lengths differ → strings are NOT equal → result = false (for ==)
+    // For !=, we negate the == result at the end
+    LLVMPositionBuilderAtEnd(ctx->builder, len_equal_bb);
+    LLVMValueRef len_diff_result = LLVMConstInt(LLVMInt1TypeInContext(ctx->context), 0, false);
+    LLVMBuildBr(ctx->builder, merge_bb);
+
+    // memcmp_bb: lengths equal → call memcmp(lhs.data, rhs.data, len)
+    LLVMPositionBuilderAtEnd(ctx->builder, memcmp_bb);
+    LLVMValueRef lhs_data = LLVMBuildExtractValue(ctx->builder, lhs, 0, "str.lhs.data");
+    LLVMValueRef rhs_data = LLVMBuildExtractValue(ctx->builder, rhs, 0, "str.rhs.data");
+
+    LLVMTypeRef memcmp_param_types[] = {i8ptr, i8ptr, LLVMInt64TypeInContext(ctx->context)};
+    LLVMTypeRef memcmp_type = LLVMFunctionType(i32_type, memcmp_param_types, 3, false);
+    LLVMValueRef memcmp_fn = LLVMGetNamedFunction(ctx->module, "memcmp");
+    if (memcmp_fn == NULL)
+        memcmp_fn = LLVMAddFunction(ctx->module, "memcmp", memcmp_type);
+
+    LLVMValueRef memcmp_call_args[] = {
+        LLVMBuildPointerCast(ctx->builder, lhs_data, i8ptr, "str.lhs.data.cast"),
+        LLVMBuildPointerCast(ctx->builder, rhs_data, i8ptr, "str.rhs.data.cast"),
+        lhs_len
+    };
+    LLVMValueRef cmp_result = LLVMBuildCall2(ctx->builder, memcmp_type, memcmp_fn,
+        memcmp_call_args, 3, "str.memcmp.call");
+    LLVMValueRef data_eq = LLVMBuildICmp(ctx->builder, LLVMIntEQ, cmp_result,
+        LLVMConstInt(i32_type, 0, false), "str.memcmp.eq");
+    LLVMBuildBr(ctx->builder, merge_bb);
+
+    // merge_bb: phi(len_diff_result from len_equal_bb, data_eq from memcmp_bb)
+    LLVMPositionBuilderAtEnd(ctx->builder, merge_bb);
+    LLVMValueRef phi = LLVMBuildPhi(ctx->builder, LLVMInt1TypeInContext(ctx->context), "str.cmp.result");
+    LLVMValueRef incoming_vals[] = {len_diff_result, data_eq};
+    LLVMBasicBlockRef incoming_blocks[] = {len_equal_bb, memcmp_bb};
+    LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
+
+    // For !=, negate the == result
+    if (!is_eq)
+        return LLVMBuildNot(ctx->builder, phi, "str.ne.result");
+    return phi;
+}
 
 static LLVMValueRef
 ir_gen_logical_short_circuit(IrGenContext * ctx, odin_grammar_node_t * node, OperatorKind op_kind)
@@ -308,12 +386,20 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         return LLVMBuildXor(ctx->builder, lhs, rhs, "xortmp");
     case OP_EQ:
     {
+        TypeDescriptor const * lhs_td = node->list.children[0]->resolved_type;
+        TypeDescriptor const * rhs_td = node->list.children[node->list.count - 1]->resolved_type;
+        if (is_string_type(lhs_td) || is_string_type(rhs_td))
+            return ir_gen_string_compare(ctx, lhs, rhs, lhs_td, rhs_td, true);
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOEQ, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntEQ, lhs, rhs, "cmptmp");
         return cmp;
     }
     case OP_NE:
     {
+        TypeDescriptor const * lhs_td = node->list.children[0]->resolved_type;
+        TypeDescriptor const * rhs_td = node->list.children[node->list.count - 1]->resolved_type;
+        if (is_string_type(lhs_td) || is_string_type(rhs_td))
+            return ir_gen_string_compare(ctx, lhs, rhs, lhs_td, rhs_td, false);
         LLVMValueRef cmp = is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealONE, lhs, rhs, "cmptmp")
                                     : LLVMBuildICmp(ctx->builder, LLVMIntNE, lhs, rhs, "cmptmp");
         return cmp;
