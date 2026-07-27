@@ -138,6 +138,7 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         reg->ptr_type->llvm_type = LLVMPointerType(LLVMInt8TypeInContext(context), 0);
         reg->ptr_type->as.basic.name = "rawptr";
         reg->ptr_type->as.basic.width = 64;
+        reg->basic_types[reg->basic_count++] = reg->ptr_type;
     }
 
     struct

@@ -1,7 +1,7 @@
 # Core:fmt Enhancement Plan
 
 ## Current Status
-All 205 tests pass. The fmt module supports basic printing, full format specifier handling with flags/width/precision (via `sb_format_parsed`), strings.Builder-based output, cross-package imports, and `..any` variadic forwarding.
+All 206 tests pass. The fmt module supports basic printing, full format specifier handling with flags/width/precision (via `sb_format_parsed`), strings.Builder-based output, cross-package imports, and `..any` variadic forwarding.
 
 ## Compiler Bugs Fixed During This Work
 
@@ -11,10 +11,11 @@ All 205 tests pass. The fmt module supports basic printing, full format specifie
 - **`int_to_string` returned dangling pointer**: Used stack `alloca [21 x i8]` for the digit buffer. Callers like `sb_print_string` → `append` clobbered the dead stack memory before all bytes were read. Fixed by heap-allocating via the context allocator.
 - **`make([dynamic]T, len, cap)` support for pre-allocated capacity**: `strings.builder_make(n)` called `make([dynamic]byte, n)` which created len=n, cap=n. `append` wrote at position n, but `to_string` read positions 0..count (all zeros). Fixed by treating `children[2]` as cap for DAs/slices. Updated `strings.odin` to use `make([dynamic]byte, 0, n)`.
 - **String `==`/`!=` comparison**: `icmp eq` on `{ptr, i64}` struct operands is invalid LLVM IR. Fixed by adding `ir_gen_string_compare` in `ir_gen_operator.c` — compares lengths first (fast-fail via `icmp eq`), then calls `memcmp` on data pointers if lengths match. For `!=`, the `==` result is negated.
+- **`rawptr` not usable in source code**: Internal `ptr_type` was registered in `TypeDescriptors` but never added to `basic_types[]`, lacking a grammar lexeme, and missing from `BasicType`/`AllReservedWords` rules. Fixed by adding `KwRawptr` lexeme, adding it to both grammar rules, and registering `ptr_type` in `basic_types[]`.
 
 ### Pre-existing Limitations (Still Open)
 
-- **`rawptr` not usable in source code**: The internal `ptr_type` isn't in the `BasicType` grammar rule, so `rawptr` can't be used as a variable type.
+(None — all previously-listed limitations have been resolved.)
 
 ## Implemented Features
 
