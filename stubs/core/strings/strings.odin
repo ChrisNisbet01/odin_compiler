@@ -9,9 +9,15 @@ builder_make_none :: proc() -> Builder {
     return Builder{}
 }
 
-builder_make :: proc(n: int) -> Builder {
+builder_make :: proc(n: int, allocator := context.allocator) -> Builder {
     b: Builder;
-    b.buf = make([dynamic]byte, n);
+    b.buf = make([dynamic]byte, n, allocator);
+    return b;
+}
+
+builder_make_temp :: proc(n: int) -> Builder {
+    b: Builder;
+    b.buf = make([dynamic]byte, n, context.temp_allocator);
     return b;
 }
 

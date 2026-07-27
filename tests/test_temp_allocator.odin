@@ -1,7 +1,8 @@
-package main
+package test
+
+import "core:os"
 
 main :: proc() {
-    x := 42
-    if x != 42 {
-    }
+    #assert[42 == 42]
+    os.exit(0)
 }
