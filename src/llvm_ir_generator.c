@@ -1175,7 +1175,9 @@ ir_gen_top_level_variable(IrGenContext * ctx, odin_grammar_node_t * node)
         }
 
         LLVMTypeRef llvm_type = var_type->llvm_type;
-        LLVMValueRef global = LLVMAddGlobal(ctx->module, llvm_type, name_node->text);
+        symbol_t * var_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+        char const * global_name = (var_sym && var_sym->llvm_name) ? var_sym->llvm_name : name_node->text;
+        LLVMValueRef global = LLVMAddGlobal(ctx->module, llvm_type, global_name);
 
         bool has_init = false;
         if (vi == 0)
@@ -1986,9 +1988,11 @@ ir_gen_delete_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
 
     TypeDescriptor const * target_type = target->resolved_type;
+    bool is_string = target_type && target_type->kind == TD_KIND_BASIC
+                     && strcmp(target_type->as.basic.name, "string") == 0;
     if (target_type
         && (target_type->kind == TD_KIND_SLICE || target_type->kind == TD_KIND_DYNAMIC_ARRAY
-            || target_type->kind == TD_KIND_MAP))
+            || target_type->kind == TD_KIND_MAP || is_string))
     {
         LLVMTypeRef struct_type = target_type->llvm_type;
         LLVMTypeRef val_type = LLVMTypeOf(ptr_val);

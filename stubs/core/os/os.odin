@@ -1,6 +1,44 @@
 package os
 
+import "core:io"
+
 args: []string
+
+Handle :: int
+
+stdin  : Handle = 0
+stdout : Handle = 1
+stderr : Handle = 2
+
+file_stream_proc :: proc(data: rawptr, mode: io.Stream_Mode, p: []byte, offset: i64, whence: io.Seek_From) -> (i64, io.Error) {
+    fd := int(uintptr(data))
+    if mode == io.Stream_Mode.Write {
+        n, err := write(fd, &p[0], len(p))
+        if err != 0 {
+            return i64(n), io.Error.Unknown
+        }
+        return i64(n), io.Error.None
+    } else if mode == io.Stream_Mode.Read {
+        n, err := read(fd, &p[0], len(p))
+        if err != 0 {
+            return i64(n), io.Error.Unknown
+        }
+        return i64(n), io.Error.None
+    } else if mode == io.Stream_Mode.Close {
+        close(fd)
+        return 0, io.Error.None
+    } else if mode == io.Stream_Mode.Flush {
+        return 0, io.Error.None
+    }
+    return 0, io.Error.Unsupported
+}
+
+stream_from_handle :: proc(fd: Handle) -> io.Stream {
+    result: io.Stream
+    result.procedure = file_stream_proc
+    result.data = rawptr(uintptr(fd))
+    return result
+}
 
 O_RDONLY :: 0
 O_WRONLY :: 1

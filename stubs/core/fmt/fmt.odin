@@ -1113,3 +1113,45 @@ teprintfln :: proc(format: string, args: ..any) {
     s := strings.to_string(b)
     print_string(2, s)
 }
+
+// --- Writer variants (write to io.Writer) ---
+
+wprint :: proc(w: io.Writer, args: ..any) {
+    b := strings.builder_make_none()
+    for i in 0..<len(args) {
+        if i > 0 {
+            sb_print_string(&b, " ")
+        }
+        sb_print_value(&b, args[i])
+    }
+    s := strings.to_string(b)
+    io.write_string(w, s)
+}
+
+wprintln :: proc(w: io.Writer, args: ..any) {
+    b := strings.builder_make_none()
+    for i in 0..<len(args) {
+        if i > 0 {
+            sb_print_string(&b, " ")
+        }
+        sb_print_value(&b, args[i])
+    }
+    sb_print_byte(&b, '\n')
+    s := strings.to_string(b)
+    io.write_string(w, s)
+}
+
+wprintf :: proc(w: io.Writer, format: string, args: ..any) {
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    s := strings.to_string(b)
+    io.write_string(w, s)
+}
+
+wprintfln :: proc(w: io.Writer, format: string, args: ..any) {
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, '\n')
+    s := strings.to_string(b)
+    io.write_string(w, s)
+}

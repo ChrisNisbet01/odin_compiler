@@ -1923,31 +1923,32 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         if (value_node->type == AST_NODE_PROCEDURE_DEFINITION)
         {
             sem_analyse_procedure_literal(ctx, value_node, name_node->text);
+        }
 
-            // Set LLVM mangled name for imported package procedures.
-            // Main package functions keep bare names so the entry point
-            // wrapper can find `main`.
-            if (ctx->import_stack_count > 0 && ctx->package_name != NULL)
+        // Set LLVM mangled name for all imported package symbols.
+        // Main package symbols keep bare names so the entry point
+        // wrapper can find `main`.
+        if (ctx->import_stack_count > 0 && ctx->package_name != NULL)
+        {
+            ProcDeclAttributes * attrs = (ProcDeclAttributes *)node->metadata;
+            // Don't mangle @(builtin) intrinsics — they dispatch by
+            // bare name in ir_gen_runtime_intrinsic_body.
+            if (attrs == NULL || !attrs->is_builtin)
             {
-                ProcDeclAttributes * attrs = (ProcDeclAttributes *)node->metadata;
-                // Don't mangle @(builtin) intrinsics — they dispatch by
-                // bare name in ir_gen_runtime_intrinsic_body.
-                if (attrs == NULL || !attrs->is_builtin)
+                char mangled[512];
+                int len = snprintf(mangled, sizeof(mangled), "%s.%s",
+                                   ctx->package_name, name_node->text);
+                if (len > 0 && len < (int)sizeof(mangled))
                 {
-                    char mangled[512];
-                    int len = snprintf(mangled, sizeof(mangled), "%s.%s",
-                                       ctx->package_name, name_node->text);
-                    if (len > 0 && len < (int)sizeof(mangled))
-                    {
-                        symbol_t * sym = scope_find_symbol_entry(
-                            generator_current_scope(ctx->gen_ctx), name_node->text);
-                        if (sym)
-                            sym->llvm_name = strdup(mangled);
-                    }
+                    symbol_t * sym = scope_find_symbol_entry(
+                        generator_current_scope(ctx->gen_ctx), name_node->text);
+                    if (sym)
+                        sym->llvm_name = strdup(mangled);
                 }
             }
         }
-        else if (value_node->type == AST_NODE_STRUCT_TYPE)
+
+        if (value_node->type == AST_NODE_STRUCT_TYPE)
         {
             // Check if this is a poly struct type — skip resolution
             symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
