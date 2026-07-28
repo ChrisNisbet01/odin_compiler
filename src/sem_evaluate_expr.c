@@ -1469,14 +1469,22 @@ sem_evaluate_postfix_call(SemContext * ctx, odin_grammar_node_t * node)
 static TypeDescriptor const *
 sem_evaluate_postfix_member(SemContext * ctx, odin_grammar_node_t * node)
 {
+    if (node->list.count < 1 || node->list.children[0] == NULL || node->list.children[0]->text == NULL)
+        return NULL;
 
-    if (node->list.count >= 1 && node->list.children[0] && node->list.children[0]->text)
+    char const * field_name = node->list.children[0]->text;
+
+    // Bare .EnumValue: look up the field name as a symbol in scope.
+    // Enum values are registered as symbols during enum type resolution.
+    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), field_name);
+    if (sym && sym->value.type_info)
     {
-        char const * field_name = node->list.children[0]->text;
-        (void)field_name;
+        node->resolved_type = (TypeDescriptor *)sym->value.type_info;
+        return sym->value.type_info;
     }
+
+    sem_error_list_add(&ctx->errors, NULL, node->list.children[0], "undeclared identifier");
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -2234,6 +2242,34 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     {
                         sem_error_list_add(&ctx->errors, NULL, op, "cannot access member through pointer to this type");
                     }
+                }
+            }
+            else if (type && type->kind == TD_KIND_ENUM && op->list.count >= 1 && op->list.children[0])
+            {
+                char const * field_name = op->list.children[0]->text;
+                if (field_name == NULL)
+                {
+                    sem_error_list_add(&ctx->errors, NULL, op, "enum member access: missing field name");
+                    break;
+                }
+                bool found = false;
+                for (int ei = 0; ei < type->as.enum_type.enumerator_count; ei++)
+                {
+                    if (type->as.enum_type.enumerator_names[ei] != NULL
+                        && strcmp(field_name, type->as.enum_type.enumerator_names[ei]) == 0)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (found)
+                {
+                    op->resolved_type = (TypeDescriptor *)type;
+                }
+                else
+                {
+                    sem_error_list_add(&ctx->errors, NULL, op, "enum type has no member named");
+                    type = NULL;
                 }
             }
             break;

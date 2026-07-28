@@ -1363,6 +1363,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                     // import_push_path strdup'd resolved; stack owns it now
                     if (pkg == NULL)
                     {
+                        sem_error_list_add(&ctx->errors, NULL, path_node, "failed to parse imported file");
                         import_pop_path(ctx);
                         free(resolved);
                         continue;
@@ -1443,6 +1444,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                     ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
                     if (pkg == NULL)
                     {
+                        sem_error_list_add(&ctx->errors, NULL, path_node, "failed to parse imported file");
                         import_pop_path(ctx);
                         free(resolved);
                         continue;
@@ -1524,6 +1526,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                     ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
                     if (pkg == NULL)
                     {
+                        sem_error_list_add(&ctx->errors, NULL, path_node, "failed to parse imported file");
                         import_pop_path(ctx);
                         free(resolved);
                         continue;

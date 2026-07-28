@@ -2695,6 +2695,30 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_ASSIGN_EXPRESSION:
         return ir_gen_assign_expression(ctx, node);
 
+    // Bare PostfixMember (e.g., .Write as an enum value reference)
+    case AST_NODE_POSTFIX_MEMBER:
+    {
+        odin_grammar_node_t * field_name_node = node->list.children[0];
+        if (field_name_node == NULL || field_name_node->text == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "enum value reference: missing field name");
+            return NULL;
+        }
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), field_name_node->text);
+        if (sym == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "undeclared identifier");
+            return NULL;
+        }
+        TypeDescriptor const * td = sym->value.type_info;
+        if (td == NULL)
+        {
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, "symbol has no type");
+            return NULL;
+        }
+        return sym->value.value;
+    }
+
     // Postfix expression — handles calls through PostfixOps chain
     case AST_NODE_POSTFIX_EXPRESSION:
         return ir_gen_postfix_expression(ctx, node);

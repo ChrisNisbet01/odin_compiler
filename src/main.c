@@ -496,6 +496,7 @@ main(int argc, char * argv[])
     {
         sem_error_list_print(&sem_ctx.errors);
         sem_error_list_init(&sem_ctx.errors);
+        exit_code = EXIT_FAILURE;
     }
 
     // Compute output filenames
@@ -618,6 +619,8 @@ main(int argc, char * argv[])
         else
         {
             ir_gen_error_collection_print(&ir_ctx->errors);
+            if (ir_ctx->errors.count > 0)
+                exit_code = EXIT_FAILURE;
         }
 
         ir_gen_context_destroy(ir_ctx);

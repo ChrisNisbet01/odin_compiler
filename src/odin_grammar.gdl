@@ -416,7 +416,7 @@ PostfixOp = PostfixOpCall | PostfixOpSlice | PostfixOpSliceLt | PostfixOpFullSli
            | PostfixOpMember | PostfixOpDeref | PostfixOpAssertion;
 
 PostfixOps = PostfixOp* @AST_ACTION_POSTFIX_OPS;
-PostfixExpression = PrimaryExpression PostfixOps @AST_ACTION_POSTFIX_EXPRESSION;
+PostfixExpression = PostfixOpMember | PrimaryExpression PostfixOps @AST_ACTION_POSTFIX_EXPRESSION;
 
 UnaryOpNot = LogicalNot @AST_ACTION_UNARY_OP;
 UnaryOpNeg = Minus @AST_ACTION_UNARY_OP;

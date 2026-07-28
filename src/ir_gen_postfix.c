@@ -834,6 +834,30 @@ ir_gen_postfix_member(IrGenContext * ctx, odin_grammar_node_t * op, LLVMValueRef
             *val = LLVMBuildIntCast(ctx->builder, extracted, bf->type->llvm_type, "bf.val");
             *cur_type = bf->type;
         }
+        else if (*cur_type && (*cur_type)->kind == TD_KIND_ENUM)
+        {
+            char const * field_name = field_name_node->text;
+            int enum_idx = -1;
+            for (int ei = 0; ei < (*cur_type)->as.enum_type.enumerator_count; ei++)
+            {
+                if ((*cur_type)->as.enum_type.enumerator_names[ei] != NULL
+                    && strcmp(field_name, (*cur_type)->as.enum_type.enumerator_names[ei]) == 0)
+                {
+                    enum_idx = ei;
+                    break;
+                }
+            }
+            if (enum_idx >= 0)
+            {
+                long long en_val = (*cur_type)->as.enum_type.enumerator_values[enum_idx];
+                *val = LLVMConstInt((*cur_type)->llvm_type, (unsigned long long)en_val, false);
+            }
+            else
+            {
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "enum type has no member named");
+            }
+            return;
+        }
         else if (*cur_type)
         {
             ir_gen_error_collection_add(&ctx->errors, NULL, op, "type has no member");
