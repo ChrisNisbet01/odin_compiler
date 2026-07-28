@@ -405,7 +405,7 @@ PrimaryExpression = StringLiteral | RawStringLiteral | RuneLiteral
 
 PostfixOpCall = LParen ArgumentList? RParen @AST_ACTION_POSTFIX_CALL;
 PostfixOpSubscript = LBracket Expression RBracket @AST_ACTION_POSTFIX_SUBSCRIPT;
-PostfixOpSlice = LBracket (LogOrExpression? DotDot LogOrExpression?) RBracket @AST_ACTION_POSTFIX_SLICE;
+PostfixOpSlice = LBracket (LogOrExpression? (DotDot | Colon) LogOrExpression?) RBracket @AST_ACTION_POSTFIX_SLICE;
 PostfixOpSliceLt = LBracket (LogOrExpression? DotDotLt LogOrExpression?) RBracket @AST_ACTION_POSTFIX_SLICE_LT;
 PostfixOpFullSlice = LBracket Colon RBracket @AST_ACTION_POSTFIX_SLICE;
 PostfixOpMember = Dot FieldName @AST_ACTION_POSTFIX_MEMBER;

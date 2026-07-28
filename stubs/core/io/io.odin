@@ -54,7 +54,7 @@ write_byte :: proc(w: ^Writer, x: byte) -> (n: int, err: Error) {
 	buf: [1]byte
 	buf[0] = x
 	bytes: []byte = buf[:] when false else buf[:1]
-	wn, werr := w.procedure(w.data, .Write, buf[:1], 0, .Start)
+	wn, werr := w.procedure(w.data, .Write, buf[:], 0, .Start)
 	return int(wn), werr
 }
 
@@ -67,7 +67,7 @@ write_rune :: proc(w: ^Writer, r: rune) -> (n: int, err: Error) {
 	// For now, runes are single bytes (ASCII)
 	b: [1]byte
 	b[0] = byte(r)
-	wn, werr := w.procedure(w.data, .Write, b[:1], 0, .Start)
+	wn, werr := w.procedure(w.data, .Write, b[:], 0, .Start)
 	return int(wn), werr
 }
 
