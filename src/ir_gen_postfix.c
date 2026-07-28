@@ -782,6 +782,15 @@ ir_gen_postfix_member(IrGenContext * ctx, odin_grammar_node_t * op, LLVMValueRef
             LLVMValueRef field_indices[2] = {idx0, LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_idx, false)};
             *val = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, ptr_val, field_indices, 2, field_name_node->text);
             *cur_type = resolved_type;
+            // Load pointer-valued basic fields (rawptr, cstring) immediately.
+            // The auto-load in ir_gen_postfix_expression skips these types
+            // to avoid double-loading identifier values, but for GEP results
+            // from member access we need the field VALUE, not the field address.
+            if (*cur_type && (*cur_type)->kind == TD_KIND_BASIC
+                && LLVMGetTypeKind((*cur_type)->llvm_type) == LLVMPointerTypeKind)
+            {
+                *val = LLVMBuildLoad2(ctx->builder, (*cur_type)->llvm_type, *val, field_name_node->text);
+            }
             return;
         }
         if (error_name)
@@ -924,6 +933,15 @@ ir_gen_postfix_member(IrGenContext * ctx, odin_grammar_node_t * op, LLVMValueRef
             *cur_type = f->type_desc;
         else
             tmp_type = f->type_desc;
+    }
+    // Load pointer-valued basic fields (rawptr, cstring) immediately.
+    // The auto-load in ir_gen_postfix_expression skips these types
+    // to avoid double-loading identifier values, but for GEP results
+    // from member access we need the field VALUE, not the field address.
+    if (*cur_type && (*cur_type)->kind == TD_KIND_BASIC
+        && LLVMGetTypeKind((*cur_type)->llvm_type) == LLVMPointerTypeKind)
+    {
+        *val = LLVMBuildLoad2(ctx->builder, (*cur_type)->llvm_type, *val, field_name_node->text);
     }
 }
 
