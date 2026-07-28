@@ -50,28 +50,43 @@ Stream :: struct {
 
 Writer :: Stream
 
-write_byte :: proc(w: ^Writer, x: byte) -> (n: int, err: Error) {
+write :: proc(w: Writer, p: []byte) -> Error {
+	if w.procedure != nil {
+		_, err := w.procedure(w.data, .Write, p, 0, .Start)
+		return err
+	}
+	return Unsupported
+}
+
+write_byte :: proc(w: Writer, c: byte) -> Error {
 	buf: [1]byte
-	buf[0] = x
-	bytes: []byte = buf[:] when false else buf[:1]
-	wn, werr := w.procedure(w.data, .Write, buf[:], 0, .Start)
-	return int(wn), werr
-}
-
-write_string :: proc(w: ^Writer, s: string) -> (n: int, err: Error) {
-	wn, werr := w.procedure(w.data, .Write, s[:], 0, .Start)
-	return int(wn), werr
-}
-
-write_rune :: proc(w: ^Writer, r: rune) -> (n: int, err: Error) {
-	// For now, runes are single bytes (ASCII)
-	b: [1]byte
-	b[0] = byte(r)
-	wn, werr := w.procedure(w.data, .Write, b[:], 0, .Start)
-	return int(wn), werr
-}
-
-flush :: proc(w: ^Writer) -> Error {
-	_, err := w.procedure(w.data, .Flush, nil[:], 0, .Start)
+	buf[0] = c
+	_, err := w.procedure(w.data, .Write, buf[:], 0, .Start)
 	return err
+}
+
+write_string :: proc(w: Writer, str: string) -> Error {
+	_, err := w.procedure(w.data, .Write, transmute([]byte)str, 0, .Start)
+	return err
+}
+
+write_rune :: proc(w: Writer, r: rune) -> Error {
+	if r < 0x80 {
+		return write_byte(w, byte(r))
+	}
+	buf: [4]byte
+	buf[0] = byte(r >> 18 | 0xC0)
+	buf[1] = byte(r >> 12 & 0x3F | 0x80)
+	buf[2] = byte(r >> 6 & 0x3F | 0x80)
+	buf[3] = byte(r & 0x3F | 0x80)
+	_, err := w.procedure(w.data, .Write, buf[:], 0, .Start)
+	return err
+}
+
+flush :: proc(w: Writer) -> Error {
+	if w.procedure != nil {
+		_, err := w.procedure(w.data, .Flush, nil[:], 0, .Start)
+		return err
+	}
+	return Error.None
 }
