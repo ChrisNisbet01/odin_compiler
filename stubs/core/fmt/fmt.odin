@@ -1,6 +1,7 @@
 package fmt
 
 import "core:strings"
+import "core:io"
 
 println :: proc(args: ..any) {
     for i in 0..<len(args) {
