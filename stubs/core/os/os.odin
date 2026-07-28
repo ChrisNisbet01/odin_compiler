@@ -64,7 +64,7 @@ read :: proc(fd: int, data: ^u8, count: int) -> (int, int) {
     return result, 0
 }
 
-__odin_write :: proc(fd: int, data: ^u8, count: int) -> (int, int) {
+write :: proc(fd: int, data: ^u8, count: int) -> (int, int) {
     result := sys_write(fd, data, count)
     if result < 0 {
         return 0, -result

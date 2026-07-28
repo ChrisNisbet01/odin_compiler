@@ -273,12 +273,13 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
     if (sym->value.value == NULL && sym->value.type_info
         && sym->value.type_info->kind == TD_KIND_PROC)
     {
-        LLVMValueRef existing = LLVMGetNamedFunction(ctx->module, node->text);
+        char const * llvm_name = sym->llvm_name ? sym->llvm_name : node->text;
+        LLVMValueRef existing = LLVMGetNamedFunction(ctx->module, llvm_name);
         if (existing)
             sym->value.value = existing;
         else
             sym->value.value = LLVMAddFunction(
-                ctx->module, node->text, sym->value.type_info->proc_metadata.func_type
+                ctx->module, llvm_name, sym->value.type_info->proc_metadata.func_type
             );
     }
 
@@ -1048,7 +1049,9 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     
 
         ProcDeclAttributes * attrs = (ProcDeclAttributes *)node->metadata;
-        char const * func_name = (attrs && attrs->link_name) ? attrs->link_name : name_node->text;
+        char const * func_name = (attrs && attrs->link_name) ? attrs->link_name
+                               : (sym && sym->llvm_name) ? sym->llvm_name
+                               : name_node->text;
 
         LLVMValueRef func = LLVMGetNamedFunction(ctx->module, func_name);
         if (func == NULL)
@@ -3219,6 +3222,9 @@ import_using_copy_symbol(void * value, void * user_data)
         if (origin != NULL)
             poly_register_origin(copy, origin);
     }
+    // Propagate LLVM name so the copy is codegen'd with the mangled name
+    if (sym->llvm_name)
+        copy->llvm_name = strdup(sym->llvm_name);
 }
 
 // Generate LLVM IR for a single polymorphic specialization.

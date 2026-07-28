@@ -32,4 +32,9 @@ typedef struct symbol
     //       memory layout of the symbol_t struct (which exposes pre-existing
     //       use-after-free bugs in scope_lists.c / scope cleanup ordering).
     bool is_polymorphic;
+
+    // LLVM name for function symbols. NULL means use `name` as the LLVM
+    // function name. For imported package procedures, this is set to
+    // "package_name.function_name" to prevent inter-package name collisions.
+    char * llvm_name;
 } symbol_t;

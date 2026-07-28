@@ -13,7 +13,7 @@ main :: proc() {
     wbuf[1] = 66
     wbuf[2] = 67
     wbuf[3] = 68
-    n, err := os.__odin_write(fd, &wbuf[0], 4)
+    n, err := os.write(fd, &wbuf[0], 4)
     if err != 0 || n != 4 { os.exit(2) }
 
     os.close(fd)

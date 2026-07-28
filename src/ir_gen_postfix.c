@@ -197,9 +197,10 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
             }
             else
             {
-                *val = LLVMGetNamedFunction(ctx->module, resolved->name);
+                char const * name = resolved->llvm_name ? resolved->llvm_name : resolved->name;
+                *val = LLVMGetNamedFunction(ctx->module, name);
                 if (*val == NULL)
-                    *val = LLVMAddFunction(ctx->module, resolved->name, proc_type->proc_metadata.func_type);
+                    *val = LLVMAddFunction(ctx->module, name, proc_type->proc_metadata.func_type);
                 resolved->value.value = *val;
             }
         }
@@ -680,9 +681,10 @@ ir_gen_postfix_member(IrGenContext * ctx, odin_grammar_node_t * op, LLVMValueRef
         else if (sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
         {
             // Forward-declare: function not yet codegen'd (cross-package dependency)
-            *val = LLVMGetNamedFunction(ctx->module, sym->name);
+            char const * llvm_name = sym->llvm_name ? sym->llvm_name : sym->name;
+            *val = LLVMGetNamedFunction(ctx->module, llvm_name);
             if (*val == NULL)
-                *val = LLVMAddFunction(ctx->module, sym->name,
+                *val = LLVMAddFunction(ctx->module, llvm_name,
                                        sym->value.type_info->proc_metadata.func_type);
             sym->value.value = *val;
         }

@@ -34,6 +34,7 @@ free_symbol(void * value, void * user_data)
     symbol_t * symbol = (symbol_t *)value;
     if (symbol == NULL) return;
     free((void *)symbol->name);
+    free(symbol->llvm_name);
     free(symbol);
 }
 
