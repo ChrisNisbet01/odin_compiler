@@ -1427,16 +1427,22 @@ sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * left_type = sem_evaluate_expr(ctx, node->list.children[0]);
     TypeDescriptor const * right_type = sem_evaluate_expr(ctx, node->list.children[2]);
 
-    // Check for matrix multiplication: a * b where both are matrices
+    // Check for matrix-related operations
     odin_grammar_node_t * op_node = node_find_op(node);
     if (op_node)
     {
         AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
-        if (op_md && op_md->kind == OP_MUL
+        if (op_md == NULL)
+        {
+            node->resolved_type = (TypeDescriptor *)left_type;
+            return left_type;
+        }
+
+        // Matrix × Matrix (standard matrix multiplication)
+        if (op_md->kind == OP_MUL
             && left_type && left_type->kind == TD_KIND_MATRIX
             && right_type && right_type->kind == TD_KIND_MATRIX)
         {
-            // Validate: columns of A == rows of B
             if (left_type->as.matrix.columns != right_type->as.matrix.rows)
             {
                 char buf[256];
@@ -1448,7 +1454,6 @@ sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
                 node->resolved_type = (TypeDescriptor *)left_type;
                 return left_type;
             }
-            // Element types must match
             if (left_type->as.matrix.element_type != right_type->as.matrix.element_type)
             {
                 sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
@@ -1456,7 +1461,6 @@ sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
                 node->resolved_type = (TypeDescriptor *)left_type;
                 return left_type;
             }
-            // Result type: matrix[rows(A), columns(B)]T
             TypeDescriptor const * result_type = get_or_create_matrix_type(
                 ctx->type_registry,
                 left_type->as.matrix.rows,
@@ -1466,6 +1470,60 @@ sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
             );
             node->resolved_type = (TypeDescriptor *)result_type;
             return result_type;
+        }
+
+        // Matrix * Scalar, Scalar * Matrix (broadcast)
+        if (op_md->kind == OP_MUL)
+        {
+            bool left_scalar = left_type && (is_integer_kind(left_type) || is_floating_kind(left_type));
+            bool right_scalar = right_type && (is_integer_kind(right_type) || is_floating_kind(right_type));
+            if (left_type && left_type->kind == TD_KIND_MATRIX && right_scalar)
+            {
+                node->resolved_type = (TypeDescriptor *)left_type;
+                return left_type;
+            }
+            if (right_type && right_type->kind == TD_KIND_MATRIX && left_scalar)
+            {
+                node->resolved_type = (TypeDescriptor *)right_type;
+                return right_type;
+            }
+        }
+
+        // Matrix + Matrix, Matrix - Matrix (element-wise)
+        if ((op_md->kind == OP_ADD || op_md->kind == OP_SUB)
+            && left_type && left_type->kind == TD_KIND_MATRIX
+            && right_type && right_type->kind == TD_KIND_MATRIX)
+        {
+            if (left_type->as.matrix.rows != right_type->as.matrix.rows
+                || left_type->as.matrix.columns != right_type->as.matrix.columns)
+            {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "matrix %s dimension mismatch: cannot operate on matrix[%lld,%lld] and matrix[%lld,%lld]",
+                    op_md->kind == OP_ADD ? "addition" : "subtraction",
+                    (long long)left_type->as.matrix.rows, (long long)left_type->as.matrix.columns,
+                    (long long)right_type->as.matrix.rows, (long long)right_type->as.matrix.columns);
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, op_node, buf);
+                node->resolved_type = (TypeDescriptor *)left_type;
+                return left_type;
+            }
+            if (left_type->as.matrix.element_type != right_type->as.matrix.element_type)
+            {
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+                    "matrix element type mismatch for element-wise operation");
+                node->resolved_type = (TypeDescriptor *)left_type;
+                return left_type;
+            }
+            node->resolved_type = (TypeDescriptor *)left_type;
+            return left_type;
+        }
+
+        // Matrix / Scalar (broadcast)
+        if (op_md->kind == OP_DIV && left_type && left_type->kind == TD_KIND_MATRIX
+            && right_type && (is_integer_kind(right_type) || is_floating_kind(right_type)))
+        {
+            node->resolved_type = (TypeDescriptor *)left_type;
+            return left_type;
         }
     }
 

@@ -140,13 +140,16 @@ The `check_binary_matrix` function handles matrix operations:
 
 ### Current State
 
-1. ✅ Matrix type syntax `[N][M]T` works (as nested arrays)
-2. ✅ Basic arithmetic operators work on element types
-3. ❌ Matrix multiplication (`*`) not implemented
-4. ❌ No special handling for matrix-vector operations
-5. ❌ No transpose, determinant, inverse functions
-6. ❌ No `#row_major` / `#column_major` directives
-7. ❌ No SIMD optimization for matrix operations
+ 1. ✅ Matrix type syntax `[N][M]T` works (as nested arrays)
+ 2. ✅ Basic arithmetic operators work on element types
+ 3. ✅ Matrix multiplication (`*`) implemented
+ 4. ✅ Matrix × Scalar / Scalar × Matrix (broadcast) implemented
+ 5. ✅ Matrix + Matrix / Matrix - Matrix (element-wise) implemented
+ 6. ✅ Matrix / Scalar (broadcast) implemented
+ 7. ❌ No special handling for matrix-vector operations
+ 8. ❌ No transpose, determinant, inverse functions
+ 9. ❌ No `#row_major` / `#column_major` directives
+10. ❌ No SIMD optimization for matrix operations
 
 ### Missing Features
 
