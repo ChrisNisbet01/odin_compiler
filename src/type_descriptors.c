@@ -225,6 +225,7 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         string_td->llvm_type = string_llvm;
         string_td->as.basic.name = "string";
         string_td->as.basic.width = 128;
+        string_td->element_type = get_basic_type_by_name(reg, "u8");
         reg->basic_types[reg->basic_count++] = string_td;
     }
 

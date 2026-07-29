@@ -1165,9 +1165,11 @@ sem_evaluate_raw_data_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
     if (operand_type->kind != TD_KIND_SLICE && operand_type->kind != TD_KIND_ARRAY
-        && operand_type->kind != TD_KIND_DYNAMIC_ARRAY)
+        && operand_type->kind != TD_KIND_DYNAMIC_ARRAY
+        && !(operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name != NULL
+             && strcmp(operand_type->as.basic.name, "string") == 0))
     {
-        sem_error_list_add(&ctx->errors, NULL, node, "raw_data requires a slice, array, or dynamic array");
+        sem_error_list_add(&ctx->errors, NULL, node, "raw_data requires a slice, array, dynamic array, or string");
         node->resolved_type = NULL;
         return NULL;
     }
