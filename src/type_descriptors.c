@@ -594,6 +594,17 @@ type_write_canonical_name_internal(TypeDescriptor const * td, char * buf, size_t
         break;
     }
 
+    case TD_KIND_MATRIX:
+    {
+        char inner[512];
+        type_write_canonical_name_internal(td->element_type, inner, sizeof(inner), depth + 1);
+        snprintf(buf, buf_size, "matrix[%lld,%lld]%s",
+                 (long long)td->as.matrix.rows,
+                 (long long)td->as.matrix.columns,
+                 inner);
+        break;
+    }
+
     default:
         snprintf(buf, buf_size, "?");
         break;
@@ -1481,6 +1492,39 @@ get_or_create_vector_type(TypeDescriptors * registry, TypeDescriptor const * ele
     td->as.vector.element_type = element_type;
     td->as.vector.lane_count = lane_count;
     td->llvm_type = LLVMVectorType(element_type->llvm_type, (unsigned)lane_count);
+    type_compute_hash(td);
+    return td;
+}
+
+TypeDescriptor const *
+get_or_create_matrix_type(TypeDescriptors * registry, int64_t rows, int64_t columns, TypeDescriptor const * element_type, bool is_row_major)
+{
+    if (element_type == NULL || rows <= 0 || columns <= 0)
+        return NULL;
+
+    for (int i = 0; i < registry->count; i++)
+    {
+        TypeDescriptor * t = registry->types[i];
+        if (t->kind != TD_KIND_MATRIX)
+            continue;
+        if (t->as.matrix.rows == rows && t->as.matrix.columns == columns
+            && t->element_type == element_type && t->as.matrix.is_row_major == is_row_major)
+            return t;
+    }
+
+    TypeDescriptor * td = type_descriptor_alloc(registry);
+    if (td == NULL)
+        return NULL;
+    td->kind = TD_KIND_MATRIX;
+    td->element_type = element_type;
+    td->as.matrix.rows = rows;
+    td->as.matrix.columns = columns;
+    td->as.matrix.element_type = element_type;
+    td->as.matrix.is_row_major = is_row_major;
+    td->llvm_type = LLVMArrayType(
+        LLVMArrayType(element_type->llvm_type, (unsigned)columns),
+        (unsigned)rows
+    );
     type_compute_hash(td);
     return td;
 }

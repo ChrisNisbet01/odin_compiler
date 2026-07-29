@@ -76,6 +76,7 @@ typedef enum
     TD_KIND_MULTI_POINTER,
     TD_KIND_OVERLOAD_BUNDLE,
     TD_KIND_VECTOR,
+    TD_KIND_MATRIX,
     TD_KIND_TUPLE,
     TD_KIND_ARENA,
 } td_kind_t;
@@ -179,6 +180,13 @@ typedef struct TypeDescriptor
             TypeDescriptor const * backing_allocator_type;
             TypeDescriptor const * curr_block_type;
         } arena;
+        struct
+        {
+            int64_t rows;
+            int64_t columns;
+            TypeDescriptor const * element_type;
+            bool is_row_major;
+        } matrix;
     } as;
 } TypeDescriptor;
 
@@ -244,6 +252,9 @@ get_or_create_multi_pointer_type(TypeDescriptors * registry, TypeDescriptor cons
 
 TypeDescriptor const *
 get_or_create_vector_type(TypeDescriptors * registry, TypeDescriptor const * element_type, int lane_count);
+
+TypeDescriptor const *
+get_or_create_matrix_type(TypeDescriptors * registry, int64_t rows, int64_t columns, TypeDescriptor const * element_type, bool is_row_major);
 
 TypeDescriptor const *
 get_or_create_tuple_type(TypeDescriptors * registry, TypeDescriptor const ** element_types, int element_count);

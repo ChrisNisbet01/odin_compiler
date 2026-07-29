@@ -176,6 +176,7 @@ typedef enum
     AST_NODE_STRUCT_LIT_FIELDS,
     AST_NODE_ARRAY_LIT_EXPR,
     AST_NODE_ARRAY_LIT_ELEMENTS,
+    AST_NODE_MATRIX_TYPE,
     AST_NODE_COUNT,
 } odin_grammar_node_type_t;
 

@@ -1818,6 +1818,14 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             type = type->element_type;
                             op->resolved_type = (TypeDescriptor *)type;
                         }
+                        else if (type && type->kind == TD_KIND_MATRIX)
+                        {
+                            // First subscript on a matrix returns a row (inner array)
+                            type = get_or_create_array_type(
+                                ctx->type_registry, type->as.matrix.element_type, (size_t)type->as.matrix.columns
+                            );
+                            op->resolved_type = (TypeDescriptor *)type;
+                        }
                         else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
                                  && strcmp(type->as.basic.name, "string") == 0)
                         {
@@ -2282,6 +2290,14 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
             {
                 type = type->element_type;
+                op->resolved_type = (TypeDescriptor *)type;
+            }
+            else if (type && type->kind == TD_KIND_MATRIX)
+            {
+                // First subscript on a matrix returns a row (inner array)
+                type = get_or_create_array_type(
+                    ctx->type_registry, type->as.matrix.element_type, (size_t)type->as.matrix.columns
+                );
                 op->resolved_type = (TypeDescriptor *)type;
             }
             else if (type && type->kind == TD_KIND_MAP)

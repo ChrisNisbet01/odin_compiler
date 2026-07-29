@@ -46,6 +46,7 @@ static TypeDescriptor const * sem_resolve_type_application(SemContext * ctx, odi
 static TypeDescriptor const * sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node);
 TypeDescriptor const * sem_resolve_union_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_vector_type(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_resolve_matrix_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_qualified_type_name(SemContext * ctx, odin_grammar_node_t * node);
 
 static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *, odin_grammar_node_t *) = {
@@ -71,6 +72,7 @@ static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *
     [AST_NODE_TYPE_APPLICATION] = sem_resolve_type_application,
     [AST_NODE_UNION_TYPE] = sem_resolve_union_type,
     [AST_NODE_VECTOR_TYPE] = sem_resolve_vector_type,
+    [AST_NODE_MATRIX_TYPE] = sem_resolve_matrix_type,
     [AST_NODE_QUALIFIED_TYPE_NAME] = sem_resolve_qualified_type_name,
 };
 
@@ -1453,6 +1455,61 @@ sem_resolve_vector_type(SemContext * ctx, odin_grammar_node_t * node)
     if (vec_type)
         node->resolved_type = (TypeDescriptor *)vec_type;
     return vec_type;
+    
+}
+
+static TypeDescriptor const *
+sem_resolve_matrix_type(SemContext * ctx, odin_grammar_node_t * node)
+{
+
+    // MatrixType = KwMatrix LBracket AssignExpression Comma AssignExpression RBracket TypePrefix
+    // Children (terminals excluded): [rows_Expr, columns_Expr, ElementType]
+    size_t child_count = node->list.count;
+    if (child_count < 3)
+        return NULL;
+
+    // Use positional children: [0]=rows_expr, [1]=cols_expr, [2]=type
+    odin_grammar_node_t * rows_node = node->list.children[0];
+    odin_grammar_node_t * cols_node = node->list.children[1];
+    odin_grammar_node_t * type_child = node->list.children[2];
+    if (rows_node == NULL || cols_node == NULL || type_child == NULL)
+        return NULL;
+
+    // If the 'type' child happens to be an expression (e.g. named type), the
+    // real type might be in a later child. Fall back to scanning for the last
+    // type-relevant child.
+    if (!is_type_node(type_child) && type_child->type != AST_NODE_IDENTIFIER)
+    {
+        for (size_t i = child_count; i > 0; i--)
+        {
+            odin_grammar_node_t * candidate = node->list.children[i - 1];
+            if (candidate != NULL
+                && (is_type_node(candidate) || candidate->type == AST_NODE_IDENTIFIER))
+            {
+                type_child = candidate;
+                break;
+            }
+        }
+    }
+
+    int const_ok = 0;
+    long long rows = sem_evaluate_constant_int(ctx, rows_node, &const_ok);
+    if (!const_ok || rows <= 0)
+        return NULL;
+    long long columns = sem_evaluate_constant_int(ctx, cols_node, &const_ok);
+    if (!const_ok || columns <= 0)
+        return NULL;
+
+    TypeDescriptor const * elem_type = sem_resolve_type_expr(ctx, type_child);
+    if (elem_type == NULL)
+        return NULL;
+
+    TypeDescriptor const * mtx_type = get_or_create_matrix_type(
+        ctx->type_registry, rows, columns, elem_type, true
+    );
+    if (mtx_type)
+        node->resolved_type = (TypeDescriptor *)mtx_type;
+    return mtx_type;
     
 }
 

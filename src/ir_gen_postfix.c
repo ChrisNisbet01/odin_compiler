@@ -469,7 +469,8 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
 
             // Load aggregate values from alloca pointers when param expects value
             if (LLVMGetTypeKind(arg_llvm_type) == LLVMPointerTypeKind
-                && (param_type->kind == TD_KIND_ARRAY || param_type->kind == TD_KIND_STRUCT))
+                && (param_type->kind == TD_KIND_ARRAY || param_type->kind == TD_KIND_STRUCT
+                    || param_type->kind == TD_KIND_MATRIX))
             {
                 args[arg_idx] = LLVMBuildLoad2(ctx->builder, param_type->llvm_type, arg_val, "arg.load");
                 continue;
@@ -557,6 +558,29 @@ ir_gen_postfix_subscript(IrGenContext * ctx, odin_grammar_node_t * op, LLVMValue
         LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false), index_val};
         LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, *val, indices, 2, "subs");
         *val = elem_ptr;
+    }
+    else if ((*cur_type)->kind == TD_KIND_MATRIX)
+    {
+        // First subscript on a matrix: index into rows, producing a row pointer.
+        // Update cur_type to inner array type for the second subscript.
+        // Return early to prevent fallthrough type-narrowing (which would turn
+        // the inner array type into the element type prematurely).
+        TypeDescriptor const * mtx = *cur_type;
+        if (ctx->bounds_checking_enabled)
+        {
+            LLVMValueRef len_val = LLVMConstInt(
+                LLVMInt64TypeInContext(ctx->context), mtx->as.matrix.rows, false
+            );
+            index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
+        }
+        LLVMTypeRef mtx_type = mtx->llvm_type;
+        LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false), index_val};
+        LLVMValueRef row_ptr = LLVMBuildInBoundsGEP2(ctx->builder, mtx_type, *val, indices, 2, "row");
+        *val = row_ptr;
+        *cur_type = get_or_create_array_type(
+            ctx->type_registry, mtx->as.matrix.element_type, (size_t)mtx->as.matrix.columns
+        );
+        return;
     }
     else if ((*cur_type)->kind == TD_KIND_SLICE || (*cur_type)->kind == TD_KIND_DYNAMIC_ARRAY)
     {

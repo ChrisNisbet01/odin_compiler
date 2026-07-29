@@ -299,7 +299,8 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
                 || sym->value.type_info->kind == TD_KIND_BIT_FIELD || sym->value.type_info->kind == TD_KIND_UNION
                 || sym->value.type_info->kind == TD_KIND_MAYBE
                 || sym->value.type_info->kind == TD_KIND_MULTI_POINTER
-                || sym->value.type_info->kind == TD_KIND_VECTOR))
+                || sym->value.type_info->kind == TD_KIND_VECTOR
+                || sym->value.type_info->kind == TD_KIND_MATRIX))
         {
             return sym->value.value;
         }
@@ -1366,6 +1367,7 @@ type_info_kind_from_td_kind(td_kind_t kind)
         case TD_KIND_MAYBE: return 16;
         case TD_KIND_MULTI_POINTER: return 17;
         case TD_KIND_VECTOR: return 18;
+        case TD_KIND_MATRIX: return 19;
         default: return 0;
     }
 }

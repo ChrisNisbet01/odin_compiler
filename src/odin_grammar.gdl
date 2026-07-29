@@ -132,6 +132,7 @@ KwExcl = lexeme("excl" IdBoundary);
 KwMaybe = lexeme("Maybe" IdBoundary);
 KwHashType = lexeme("#type" IdBoundary);
 KwSimd = lexeme("#simd" IdBoundary);
+KwMatrix = lexeme("matrix" IdBoundary);
 KwExpandValues = lexeme("expand_values" IdBoundary);
 KwCompressValues = lexeme("compress_values" IdBoundary);
 KwSoaZip = lexeme("soa_zip" IdBoundary);
@@ -163,7 +164,7 @@ AllReservedWords = KwPackage | KwImport | KwForeign
         | KwBitField | KwBitSet | KwIncl | KwExcl
         | KwMaybe
         | KwTypeidOf | KwTypeInfoOf
-        | KwHashType | KwSimd | KwExpandValues | KwCompressValues | KwSoaZip | KwSoaUnzip;
+        | KwMatrix | KwHashType | KwSimd | KwExpandValues | KwCompressValues | KwSoaZip | KwSoaUnzip;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
 FieldName = lexeme(identifier) @AST_ACTION_IDENTIFIER;
@@ -352,6 +353,8 @@ MaybeType = KwMaybe LParen TypePrefix RParen @AST_ACTION_MAYBE_TYPE;
 
 VectorType = KwSimd LBracket IntegerLiteral RBracket TypePrefix @AST_ACTION_VECTOR_TYPE;
 
+MatrixType = KwMatrix LBracket AssignExpression Comma AssignExpression RBracket TypePrefix @AST_ACTION_MATRIX_TYPE;
+
 TupleType = LBracket TypePrefix (Comma TypePrefix)+ RBracket @AST_ACTION_TUPLE_TYPE;
 
 // Type application for polymorphic types: Box(int), Vec2(f64), IntBox(float, 3)
@@ -363,7 +366,7 @@ QualifiedTypeName = Identifier Dot Identifier @AST_ACTION_QUALIFIED_TYPE_NAME;
 
 // Base types for TypeName (no left recursion)
 TypePrefix = TupleType | PointerType | DynamicArrayType | SliceType | MultiPointerType | ArrayType
-           | MapType | VectorType | ProcedureSignature
+           | MapType | VectorType | MatrixType | ProcedureSignature
            | StructType | UnionType | EnumType | BitFieldType | BitSetType
            | DistinctType | BasicType | StructTypeRef | EnumTypeRef
            | TypeApplication
