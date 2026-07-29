@@ -2077,6 +2077,8 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 );
                                 op->resolved_symbol = callee_sym;
                                 op->resolved_type = (TypeDescriptor *)result_type;
+                                type = result_type;  // Update type for POSTFIX_EXPRESSION
+                                node->resolved_type = (TypeDescriptor *)type;  // Also set on the node
                                 break;
                             }
                         }

@@ -34,5 +34,14 @@ main :: proc() {
     if z[0][0] != 0 { result = result + 256 }
     if z[2][3] != 0 { result = result + 512 }
 
+    // 4. Transpose
+    t := transpose(m)
+    if t[0][0] != 1 { result = result + 1024 }
+    if t[0][1] != 4 { result = result + 2048 }
+    if t[1][0] != 2 { result = result + 4096 }
+    if t[1][1] != 5 { result = result + 8192 }
+    if t[2][0] != 3 { result = result + 16384 }
+    if t[2][1] != 6 { result = result + 32768 }
+
     os.exit(result)
 }

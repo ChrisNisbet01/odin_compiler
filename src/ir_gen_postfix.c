@@ -24,6 +24,8 @@ ir_gen_postfix_transpose(IrGenContext * ctx, LLVMValueRef m_param,
     LLVMTypeRef elem_llvm = elem_type->llvm_type;
     LLVMTypeRef result_llvm = result_type->llvm_type;
 
+    // m_param should be a pointer to the matrix
+    // Use it directly with GEP to access elements
     LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, result_llvm, "transpose.res");
     LLVMBuildStore(ctx->builder, LLVMConstNull(result_llvm), result_ptr);
 
@@ -31,20 +33,17 @@ ir_gen_postfix_transpose(IrGenContext * ctx, LLVMValueRef m_param,
     {
         for (int64_t j = 0; j < cols; j++)
         {
-            LLVMValueRef midx[] = {
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
-            };
-            LLVMValueRef m_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, m_type->llvm_type, m_param, midx, 3, "tr.m.e");
+            LLVMValueRef midx[]
+                = {LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)i, false),
+                   LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)j, false)};
+            LLVMValueRef m_elem_ptr
+                = LLVMBuildInBoundsGEP2(ctx->builder, m_type->llvm_type, m_param, midx, 2, "tr.m.e");
             LLVMValueRef m_elem = LLVMBuildLoad2(ctx->builder, elem_llvm, m_elem_ptr, "tr.m.v");
 
-            LLVMValueRef ridx[] = {
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false)
-            };
-            LLVMValueRef res_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, ridx, 3, "tr.r.e");
+            LLVMValueRef ridx[]
+                = {LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)j, false),
+                   LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)i, false)};
+            LLVMValueRef res_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, ridx, 2, "tr.r.e");
             LLVMBuildStore(ctx->builder, m_elem, res_elem_ptr);
         }
     }
@@ -157,11 +156,13 @@ ir_gen_collect_single_arg(IrGenContext * ctx, odin_grammar_node_t * node, LLVMVa
     // array, etc.), load it. ir_gen_identifier deliberately returns alloca
     // pointers for composites (needed for GEP/subscript/member access), but
     // function call arguments need the actual value.
+    // Exception: matrix types need the pointer for GEP in transpose, etc.
     if (args[0] != NULL
         && node->resolved_type != NULL
         && LLVMGetTypeKind(LLVMTypeOf(args[0])) == LLVMPointerTypeKind
         && node->resolved_type->llvm_type != NULL
-        && LLVMTypeOf(args[0]) != node->resolved_type->llvm_type)
+        && LLVMTypeOf(args[0]) != node->resolved_type->llvm_type
+        && node->resolved_type->kind != TD_KIND_MATRIX)  // Matrices kept as pointers for GEP
     {
         args[0] = LLVMBuildLoad2(ctx->builder, node->resolved_type->llvm_type,
                                   args[0], "arg.load");
@@ -351,15 +352,31 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
     // Special handling for transpose builtin - handle before 'any' packing
     {
         char const * func_name = NULL;
+        
+        // Try op->resolved_symbol first
         if (op->resolved_symbol)
         {
             func_name = op->resolved_symbol->llvm_name ? op->resolved_symbol->llvm_name : op->resolved_symbol->name;
         }
-        else if (proc_type == NULL && node->list.children[0] != NULL)
+        // Fall back to checking the base identifier
+        if (func_name == NULL && node->list.count > 0 && node->list.children[0] != NULL)
         {
-            odin_grammar_node_t * ident = expression_unwrap_to_identifier(node->list.children[0]);
-            if (ident)
-                func_name = ident->text;
+            odin_grammar_node_t * base = node->list.children[0];
+            // Unwrap PrimaryExpression if needed
+            while (base->type == AST_NODE_PRIMARY_EXPRESSION && base->list.count > 0)
+                base = base->list.children[0];
+            if (base && base->type == AST_NODE_IDENTIFIER && base->text)
+            {
+                func_name = base->text;
+            }
+        }
+        // Fall back to proc_type
+        if (func_name == NULL && proc_type && proc_type->proc_metadata.func_type)
+        {
+            // Get function name from the function type
+            LLVMValueRef func = *val;
+            if (func)
+                func_name = LLVMGetValueName(func);
         }
         
         if (func_name && strcmp(func_name, "transpose") == 0 && arg_count > 0)
@@ -367,17 +384,10 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
             LLVMValueRef m_param = args[0];
             TypeDescriptor const * m_type = arg_types[0];
 
-            // Load the matrix value from the alloca pointer if needed
-            if (m_type && m_type->kind == TD_KIND_MATRIX
-                && LLVMGetTypeKind(LLVMTypeOf(m_param)) == LLVMPointerTypeKind
-                && m_type->llvm_type != NULL
-                && LLVMTypeOf(m_param) != m_type->llvm_type)
-            {
-                m_param = LLVMBuildLoad2(ctx->builder, m_type->llvm_type, m_param, "transpose.arg");
-            }
-
             // Get the result type (transposed matrix dimensions)
-            TypeDescriptor const * result_type = node->resolved_type;
+            // Use op->resolved_type (set by semantic analyser for builtin transpose),
+            // fallback to node->resolved_type
+            TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
             if (result_type && result_type->kind == TD_KIND_MATRIX)
             {
                 LLVMValueRef transposed = ir_gen_postfix_transpose(ctx, m_param, m_type, result_type);
@@ -754,8 +764,35 @@ ir_gen_postfix_subscript(IrGenContext * ctx, odin_grammar_node_t * op, LLVMValue
         if (*val == NULL)
             return;
     }
+    else if ((*cur_type)->kind == TD_KIND_MATRIX)
+    {
+        // Matrix subscript: m[i][j] is two subscripts
+        // First subscript returns a row (array of columns)
+        // Second subscript returns an element
+        // Matrix is stored as [rows x [cols x element_type]]
+        // First subscript: m[i] returns [cols x element_type]
+        fprintf(stderr, "DEBUG: Matrix subscript: val type=%s, cur_type kind=%d, rows=%lld, cols=%lld\n",
+            LLVMGetTypeKind(LLVMTypeOf(*val)) == LLVMPointerTypeKind ? "pointer" : "other",
+            (*cur_type)->kind,
+            (long long)(*cur_type)->as.matrix.rows,
+            (long long)(*cur_type)->as.matrix.columns);
+        
+        LLVMValueRef indices[] = {index_val};
+        LLVMValueRef row_ptr = LLVMBuildInBoundsGEP2(
+            ctx->builder, (*cur_type)->llvm_type, *val, indices, 1, "matrix.subs");
+        // Load the row (which is an array)
+        TypeDescriptor const * row_type = get_or_create_array_type(
+            ctx->type_registry,
+            (*cur_type)->as.matrix.element_type,
+            (*cur_type)->as.matrix.columns
+        );
+        LLVMValueRef row_val = LLVMBuildLoad2(ctx->builder, row_type->llvm_type, row_ptr, "matrix.row");
+        *val = row_val;
+        *cur_type = row_type;
+    }
     else
     {
+        fprintf(stderr, "DEBUG: Cannot subscript: cur_type=%p, kind=%d\n", (void*)(*cur_type), *cur_type ? (*cur_type)->kind : -1);
         ir_gen_error_collection_add(&ctx->errors, NULL, op, "cannot subscript type: not an array, slice, dynamic array, multi-pointer, or map");
         return;
     }
@@ -1477,13 +1514,25 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
     if (cur_type == NULL && pe_child != NULL)
         cur_type = pe_child->resolved_type;
 
+    // Check if the first postfix op is a POSTFIX_CALL with a resolved_type (e.g., for transpose)
+    // The semantic analyser sets op->resolved_type for builtin functions like transpose
+    if (postfix_ops != NULL && postfix_ops->list.count > 0)
+    {
+        odin_grammar_node_t * first_op = postfix_ops->list.children[0];
+        if (first_op && first_op->type == AST_NODE_POSTFIX_CALL)
+        {
+            if (first_op->resolved_type)
+                cur_type = first_op->resolved_type;
+        }
+    }
+
     for (size_t i = 0; i < postfix_ops->list.count; i++)
     {
         odin_grammar_node_t * op = postfix_ops->list.children[i];
         if (op == NULL)
             continue;
 
-        switch (op->type)
+switch (op->type)
         {
         case AST_NODE_POSTFIX_CALL:
             if (ir_gen_postfix_call(ctx, node, op, &val, &cur_type))
