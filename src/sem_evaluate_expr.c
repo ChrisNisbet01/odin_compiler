@@ -2043,13 +2043,45 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
             // Walk the base expression to find the resolved symbol.
             symbol_t * callee_sym = NULL;
             odin_grammar_node_t * base = node->list.children[0];
+            odin_grammar_node_t * inner = NULL;
             if (base != NULL)
             {
-                odin_grammar_node_t * inner = base;
+                inner = base;
                 while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
                     inner = inner->list.children[0];
                 if (inner->type == AST_NODE_IDENTIFIER)
                     callee_sym = inner->resolved_symbol;
+            }
+
+            // Handle transpose builtin specially - compute return type from argument
+            if (callee_sym && inner && inner->text && strcmp(inner->text, "transpose") == 0)
+            {
+                if (op->list.count > 0 && op->list.children[0] != NULL)
+                {
+                    odin_grammar_node_t * arg_list = op->list.children[0];
+                    if (arg_list->type == AST_NODE_ARGUMENT_LIST && arg_list->list.count > 0)
+                    {
+                        odin_grammar_node_t * arg = arg_list->list.children[0];
+                        if (arg)
+                        {
+                            sem_evaluate_expr(ctx, arg);
+                            TypeDescriptor const * arg_type = arg->resolved_type;
+                            if (arg_type && arg_type->kind == TD_KIND_MATRIX)
+                            {
+                                TypeDescriptor const * result_type = get_or_create_matrix_type(
+                                    ctx->type_registry,
+                                    arg_type->as.matrix.columns,
+                                    arg_type->as.matrix.rows,
+                                    arg_type->as.matrix.element_type,
+                                    true
+                                );
+                                op->resolved_symbol = callee_sym;
+                                op->resolved_type = (TypeDescriptor *)result_type;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
 
             if (callee_sym && callee_sym->is_polymorphic)

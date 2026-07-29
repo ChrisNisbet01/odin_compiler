@@ -1,6 +1,56 @@
 #include "ir_gen_postfix.h"
 #include "ast_metadata.h"
 #include "ast_utils.h"
+#include "type_descriptors.h"
+#include "hash.h"
+
+#include <string.h>
+
+// --- Transpose helper ---
+
+static LLVMValueRef
+ir_gen_postfix_transpose(IrGenContext * ctx, LLVMValueRef m_param,
+                           TypeDescriptor const * m_type,
+                           TypeDescriptor const * result_type)
+{
+    if (m_type == NULL || m_type->kind != TD_KIND_MATRIX)
+        return NULL;
+    if (result_type == NULL || result_type->kind != TD_KIND_MATRIX)
+        return NULL;
+
+    int64_t rows = m_type->as.matrix.rows;
+    int64_t cols = m_type->as.matrix.columns;
+    TypeDescriptor const * elem_type = m_type->as.matrix.element_type;
+    LLVMTypeRef elem_llvm = elem_type->llvm_type;
+    LLVMTypeRef result_llvm = result_type->llvm_type;
+
+    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, result_llvm, "transpose.res");
+    LLVMBuildStore(ctx->builder, LLVMConstNull(result_llvm), result_ptr);
+
+    for (int64_t i = 0; i < rows; i++)
+    {
+        for (int64_t j = 0; j < cols; j++)
+        {
+            LLVMValueRef midx[] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
+            };
+            LLVMValueRef m_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, m_type->llvm_type, m_param, midx, 3, "tr.m.e");
+            LLVMValueRef m_elem = LLVMBuildLoad2(ctx->builder, elem_llvm, m_elem_ptr, "tr.m.v");
+
+            LLVMValueRef ridx[] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false)
+            };
+            LLVMValueRef res_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, ridx, 3, "tr.r.e");
+            LLVMBuildStore(ctx->builder, m_elem, res_elem_ptr);
+        }
+    }
+
+    return result_ptr;
+}
 
 // --- Postfix expression / call codegen ---
 
@@ -293,6 +343,49 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
                         "failed to generate code for default parameter value"
                     );
                     break;
+                }
+            }
+        }
+    }
+
+    // Special handling for transpose builtin - handle before 'any' packing
+    {
+        char const * func_name = NULL;
+        if (op->resolved_symbol)
+        {
+            func_name = op->resolved_symbol->llvm_name ? op->resolved_symbol->llvm_name : op->resolved_symbol->name;
+        }
+        else if (proc_type == NULL && node->list.children[0] != NULL)
+        {
+            odin_grammar_node_t * ident = expression_unwrap_to_identifier(node->list.children[0]);
+            if (ident)
+                func_name = ident->text;
+        }
+        
+        if (func_name && strcmp(func_name, "transpose") == 0 && arg_count > 0)
+        {
+            LLVMValueRef m_param = args[0];
+            TypeDescriptor const * m_type = arg_types[0];
+
+            // Load the matrix value from the alloca pointer if needed
+            if (m_type && m_type->kind == TD_KIND_MATRIX
+                && LLVMGetTypeKind(LLVMTypeOf(m_param)) == LLVMPointerTypeKind
+                && m_type->llvm_type != NULL
+                && LLVMTypeOf(m_param) != m_type->llvm_type)
+            {
+                m_param = LLVMBuildLoad2(ctx->builder, m_type->llvm_type, m_param, "transpose.arg");
+            }
+
+            // Get the result type (transposed matrix dimensions)
+            TypeDescriptor const * result_type = node->resolved_type;
+            if (result_type && result_type->kind == TD_KIND_MATRIX)
+            {
+                LLVMValueRef transposed = ir_gen_postfix_transpose(ctx, m_param, m_type, result_type);
+                if (transposed != NULL)
+                {
+                    *val = transposed;
+                    *cur_type = result_type;
+                    return false;
                 }
             }
         }

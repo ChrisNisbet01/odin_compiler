@@ -31,3 +31,6 @@ align_forward_uint :: proc(x: uint, alignment: uint) -> uint ---
 
 @(builtin)
 mem_zero :: proc(ptr: rawptr, size: uint) ---
+
+@(builtin)
+transpose :: proc(m: any) -> any ---

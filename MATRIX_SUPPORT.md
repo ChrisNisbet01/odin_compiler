@@ -147,7 +147,8 @@ The `check_binary_matrix` function handles matrix operations:
  5. ✅ Matrix + Matrix / Matrix - Matrix (element-wise) implemented
  6. ✅ Matrix / Scalar (broadcast) implemented
  7. ✅ Matrix × Vector / Vector × Matrix implemented
- 8. ❌ No transpose, determinant, inverse functions
+ 8. ⏳ Transpose in progress (infrastructure added, debug needed)
+ 9. ❌ No determinant, inverse functions
  9. ❌ No `#row_major` / `#column_major` directives
 10. ❌ No SIMD optimization for matrix operations
 
