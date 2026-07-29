@@ -1424,14 +1424,54 @@ sem_evaluate_range_expr(SemContext * ctx, odin_grammar_node_t * node)
 static TypeDescriptor const *
 sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
 {
-    {
-            TypeDescriptor const * left_type = sem_evaluate_expr(ctx, node->list.children[0]);
-            TypeDescriptor const * right_type = sem_evaluate_expr(ctx, node->list.children[2]);
-            (void)right_type;
-            node->resolved_type = (TypeDescriptor *)left_type;
-            return left_type;
-        }
+    TypeDescriptor const * left_type = sem_evaluate_expr(ctx, node->list.children[0]);
+    TypeDescriptor const * right_type = sem_evaluate_expr(ctx, node->list.children[2]);
 
+    // Check for matrix multiplication: a * b where both are matrices
+    odin_grammar_node_t * op_node = node_find_op(node);
+    if (op_node)
+    {
+        AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
+        if (op_md && op_md->kind == OP_MUL
+            && left_type && left_type->kind == TD_KIND_MATRIX
+            && right_type && right_type->kind == TD_KIND_MATRIX)
+        {
+            // Validate: columns of A == rows of B
+            if (left_type->as.matrix.columns != right_type->as.matrix.rows)
+            {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "matrix multiplication dimension mismatch: cannot multiply matrix[%lld,%lld] by matrix[%lld,%lld]",
+                    (long long)left_type->as.matrix.rows, (long long)left_type->as.matrix.columns,
+                    (long long)right_type->as.matrix.rows, (long long)right_type->as.matrix.columns);
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, op_node, buf);
+                node->resolved_type = (TypeDescriptor *)left_type;
+                return left_type;
+            }
+            // Element types must match
+            if (left_type->as.matrix.element_type != right_type->as.matrix.element_type)
+            {
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+                    "matrix multiplication element type mismatch");
+                node->resolved_type = (TypeDescriptor *)left_type;
+                return left_type;
+            }
+            // Result type: matrix[rows(A), columns(B)]T
+            TypeDescriptor const * result_type = get_or_create_matrix_type(
+                ctx->type_registry,
+                left_type->as.matrix.rows,
+                right_type->as.matrix.columns,
+                left_type->as.matrix.element_type,
+                true
+            );
+            node->resolved_type = (TypeDescriptor *)result_type;
+            return result_type;
+        }
+    }
+
+    // Default: propagate left type for scalar arithmetic
+    node->resolved_type = (TypeDescriptor *)left_type;
+    return left_type;
 }
 
 static TypeDescriptor const *

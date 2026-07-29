@@ -299,6 +299,82 @@ ir_gen_in_expression(
     return LLVMBuildIntCast2(ctx->builder, result_i1, LLVMInt64TypeInContext(ctx->context), false, "in.ext");
 }
 
+static LLVMValueRef
+ir_gen_matrix_mul(IrGenContext * ctx, odin_grammar_node_t * node,
+                   LLVMValueRef lhs_ptr, LLVMValueRef rhs_ptr)
+{
+    TypeDescriptor const * result_td = node->resolved_type;
+    TypeDescriptor const * lhs_td = node->list.children[0]->resolved_type;
+    TypeDescriptor const * rhs_td = node->list.children[2]->resolved_type;
+    if (result_td == NULL || lhs_td == NULL || rhs_td == NULL)
+        return NULL;
+    if (result_td->kind != TD_KIND_MATRIX || lhs_td->kind != TD_KIND_MATRIX || rhs_td->kind != TD_KIND_MATRIX)
+        return NULL;
+
+    int64_t I = result_td->as.matrix.rows;
+    int64_t J = lhs_td->as.matrix.columns;
+    int64_t K = result_td->as.matrix.columns;
+    TypeDescriptor const * elem_td = result_td->as.matrix.element_type;
+    LLVMTypeRef elem_llvm = elem_td->llvm_type;
+
+    // Allocate zero-initialized result matrix
+    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, result_td->llvm_type, "mmul.res");
+    LLVMBuildStore(ctx->builder, LLVMConstNull(result_td->llvm_type), result_ptr);
+
+    bool is_float = (elem_td->kind == TD_KIND_BASIC
+        && (LLVMGetTypeKind(elem_llvm) == LLVMFloatTypeKind
+            || LLVMGetTypeKind(elem_llvm) == LLVMDoubleTypeKind));
+
+    LLVMTypeRef lhs_llvm = lhs_td->llvm_type;
+    LLVMTypeRef rhs_llvm = rhs_td->llvm_type;
+    LLVMTypeRef res_llvm = result_td->llvm_type;
+
+    for (int64_t i = 0; i < I; i++)
+    {
+        for (int64_t k = 0; k < K; k++)
+        {
+            LLVMValueRef sum = LLVMConstNull(elem_llvm);
+
+            for (int64_t j = 0; j < J; j++)
+            {
+                // lhs[i][j]
+                LLVMValueRef li[] = {
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
+                };
+                LLVMValueRef lhs_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, lhs_llvm, lhs_ptr, li, 3, "mmul.le");
+                LLVMValueRef lhs_elem = LLVMBuildLoad2(ctx->builder, elem_llvm, lhs_elem_ptr, "mmul.lev");
+
+                // rhs[j][k]
+                LLVMValueRef ri[] = {
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false),
+                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), k, false)
+                };
+                LLVMValueRef rhs_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, rhs_llvm, rhs_ptr, ri, 3, "mmul.re");
+                LLVMValueRef rhs_elem = LLVMBuildLoad2(ctx->builder, elem_llvm, rhs_elem_ptr, "mmul.rev");
+
+                LLVMValueRef prod = is_float ? LLVMBuildFMul(ctx->builder, lhs_elem, rhs_elem, "mmul.pr")
+                                             : LLVMBuildMul(ctx->builder, lhs_elem, rhs_elem, "mmul.pr");
+                sum = is_float ? LLVMBuildFAdd(ctx->builder, sum, prod, "mmul.acc")
+                               : LLVMBuildAdd(ctx->builder, sum, prod, "mmul.acc");
+            }
+
+            // Store result[i][k]
+            LLVMValueRef si[] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), k, false)
+            };
+            LLVMValueRef res_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, res_llvm, result_ptr, si, 3, "mmul.se");
+            LLVMBuildStore(ctx->builder, sum, res_elem_ptr);
+        }
+    }
+
+    return result_ptr;
+}
+
 LLVMValueRef
 ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -366,8 +442,13 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                         : LLVMBuildSub(ctx->builder, lhs, rhs, "subtmp");
     }
     case OP_MUL:
+    {
+        TypeDescriptor const * lhs_td = node->list.children[0]->resolved_type;
+        if (lhs_td && lhs_td->kind == TD_KIND_MATRIX)
+            return ir_gen_matrix_mul(ctx, node, lhs, rhs);
         return is_float ? LLVMBuildFMul(ctx->builder, lhs, rhs, "multmp")
                         : LLVMBuildMul(ctx->builder, lhs, rhs, "multmp");
+    }
     case OP_DIV:
         return is_float ? LLVMBuildFDiv(ctx->builder, lhs, rhs, "divtmp")
                         : LLVMBuildSDiv(ctx->builder, lhs, rhs, "divtmp");
