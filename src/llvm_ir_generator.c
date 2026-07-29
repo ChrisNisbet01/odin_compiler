@@ -2,36 +2,41 @@
 
 #include "ast_metadata.h"
 #include "ast_utils.h"
-#include "ir_utils.h"
-#include "ir_intrinsic.h"
-#include "ir_gen_var_decl.h"
-#include "ir_gen_statement.h"
+#include "ir_gen_assign.h"
 #include "ir_gen_operator.h"
 #include "ir_gen_postfix.h"
-#include "ir_gen_assign.h"
+#include "ir_gen_statement.h"
+#include "ir_gen_var_decl.h"
+#include "ir_intrinsic.h"
+#include "ir_utils.h"
+#include "odin_grammar_ast.h"
 #include "operator_kind.h"
 #include "polymorphism.h"
 #include "scope.h"
 #include "symbols.h"
 #include "typed_value.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <inttypes.h>
 
 // --- Forward declarations ---
 LLVMValueRef ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node);
 LLVMValueRef ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node);
 bool ir_gen_node_contains_auto_cast(odin_grammar_node_t * node);
-LLVMValueRef ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef index_val,
-                                              LLVMValueRef len_val, odin_grammar_node_t * node);
-LLVMValueRef ir_gen_map_subscript(IrGenContext * ctx, LLVMValueRef map_val,
-                                          TypeDescriptor const * map_type,
-                                          LLVMValueRef index_val,
-                                          TypeDescriptor const ** out_val_type,
-                                          bool is_lvalue, char const * prefix);
+LLVMValueRef
+ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef index_val, LLVMValueRef len_val, odin_grammar_node_t * node);
+LLVMValueRef ir_gen_map_subscript(
+    IrGenContext * ctx,
+    LLVMValueRef map_val,
+    TypeDescriptor const * map_type,
+    LLVMValueRef index_val,
+    TypeDescriptor const ** out_val_type,
+    bool is_lvalue,
+    char const * prefix
+);
 
 bool ir_gen_resolve_aggregate_field(
     IrGenContext * ctx,
@@ -145,8 +150,9 @@ ir_gen_implicit_return(IrGenContext * ctx)
 // --- Centralized type coercion ---
 
 LLVMValueRef
-coerce_value_to_type(IrGenContext * ctx, LLVMValueRef value, LLVMTypeRef target_type,
-                     bool src_is_unsigned, char const * name_hint)
+coerce_value_to_type(
+    IrGenContext * ctx, LLVMValueRef value, LLVMTypeRef target_type, bool src_is_unsigned, char const * name_hint
+)
 {
     if (value == NULL || target_type == NULL)
         return value;
@@ -170,7 +176,7 @@ coerce_value_to_type(IrGenContext * ctx, LLVMValueRef value, LLVMTypeRef target_
             if (src_is_unsigned)
                 return LLVMBuildIntCast2(ctx->builder, value, target_type, false, name_hint ? name_hint : "zext");
             else
-                return LLVMBuildIntCast2(ctx->builder, value, target_type, true,  name_hint ? name_hint : "sext");
+                return LLVMBuildIntCast2(ctx->builder, value, target_type, true, name_hint ? name_hint : "sext");
         }
         return value;
     }
@@ -265,22 +271,20 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
     // Handle compile-time integer constants (e.g., poly $N in body scope)
     if (sym->has_const_int_val)
     {
-        LLVMTypeRef elem_type = sym->value.type_info ? sym->value.type_info->llvm_type : LLVMInt64TypeInContext(ctx->context);
+        LLVMTypeRef elem_type
+            = sym->value.type_info ? sym->value.type_info->llvm_type : LLVMInt64TypeInContext(ctx->context);
         return LLVMConstInt(elem_type, (unsigned long long)sym->const_int_val, true);
     }
 
     // Forward-declare procedures that haven't been code-generated yet
-    if (sym->value.value == NULL && sym->value.type_info
-        && sym->value.type_info->kind == TD_KIND_PROC)
+    if (sym->value.value == NULL && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
     {
         char const * llvm_name = sym->llvm_name ? sym->llvm_name : node->text;
         LLVMValueRef existing = LLVMGetNamedFunction(ctx->module, llvm_name);
         if (existing)
             sym->value.value = existing;
         else
-            sym->value.value = LLVMAddFunction(
-                ctx->module, llvm_name, sym->value.type_info->proc_metadata.func_type
-            );
+            sym->value.value = LLVMAddFunction(ctx->module, llvm_name, sym->value.type_info->proc_metadata.func_type);
     }
 
     if (sym->value.is_lvalue)
@@ -295,12 +299,10 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
         if (sym->value.type_info
             && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
                 || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_SOA
-                || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY                 || sym->value.type_info->kind == TD_KIND_MAP
+                || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY || sym->value.type_info->kind == TD_KIND_MAP
                 || sym->value.type_info->kind == TD_KIND_BIT_FIELD || sym->value.type_info->kind == TD_KIND_UNION
-                || sym->value.type_info->kind == TD_KIND_MAYBE
-                || sym->value.type_info->kind == TD_KIND_MULTI_POINTER
-                || sym->value.type_info->kind == TD_KIND_VECTOR
-                || sym->value.type_info->kind == TD_KIND_MATRIX))
+                || sym->value.type_info->kind == TD_KIND_MAYBE || sym->value.type_info->kind == TD_KIND_MULTI_POINTER
+                || sym->value.type_info->kind == TD_KIND_VECTOR || sym->value.type_info->kind == TD_KIND_MATRIX))
         {
             return sym->value.value;
         }
@@ -398,9 +400,12 @@ make_string_global(IrGenContext * ctx, unsigned char const * bytes, size_t byte_
 static unsigned char
 hex_char_to_int(char c)
 {
-    if (c >= '0' && c <= '9') return (unsigned char)(c - '0');
-    if (c >= 'a' && c <= 'f') return (unsigned char)(c - 'a' + 10);
-    if (c >= 'A' && c <= 'F') return (unsigned char)(c - 'A' + 10);
+    if (c >= '0' && c <= '9')
+        return (unsigned char)(c - '0');
+    if (c >= 'a' && c <= 'f')
+        return (unsigned char)(c - 'a' + 10);
+    if (c >= 'A' && c <= 'F')
+        return (unsigned char)(c - 'A' + 10);
     return 0;
 }
 
@@ -417,26 +422,60 @@ parse_escape_sequence(char const * content, size_t i, size_t content_len, unsign
     }
     switch (content[i + 1])
     {
-    case 'a':  *byte_value = 0x07; *consumed = 2; return;
-    case 'b':  *byte_value = 0x08; *consumed = 2; return;
-    case 'e':  *byte_value = 0x1B; *consumed = 2; return;
-    case 'f':  *byte_value = 0x0C; *consumed = 2; return;
-    case 'n':  *byte_value = 0x0A; *consumed = 2; return;
-    case 'r':  *byte_value = 0x0D; *consumed = 2; return;
-    case 't':  *byte_value = 0x09; *consumed = 2; return;
-    case 'v':  *byte_value = 0x0B; *consumed = 2; return;
-    case '\\': *byte_value = 0x5C; *consumed = 2; return;
-    case '\'': *byte_value = 0x27; *consumed = 2; return;
-    case '"':  *byte_value = 0x22; *consumed = 2; return;
-    case '0':  *byte_value = 0x00; *consumed = 2; return;
+    case 'a':
+        *byte_value = 0x07;
+        *consumed = 2;
+        return;
+    case 'b':
+        *byte_value = 0x08;
+        *consumed = 2;
+        return;
+    case 'e':
+        *byte_value = 0x1B;
+        *consumed = 2;
+        return;
+    case 'f':
+        *byte_value = 0x0C;
+        *consumed = 2;
+        return;
+    case 'n':
+        *byte_value = 0x0A;
+        *consumed = 2;
+        return;
+    case 'r':
+        *byte_value = 0x0D;
+        *consumed = 2;
+        return;
+    case 't':
+        *byte_value = 0x09;
+        *consumed = 2;
+        return;
+    case 'v':
+        *byte_value = 0x0B;
+        *consumed = 2;
+        return;
+    case '\\':
+        *byte_value = 0x5C;
+        *consumed = 2;
+        return;
+    case '\'':
+        *byte_value = 0x27;
+        *consumed = 2;
+        return;
+    case '"':
+        *byte_value = 0x22;
+        *consumed = 2;
+        return;
+    case '0':
+        *byte_value = 0x00;
+        *consumed = 2;
+        return;
     case 'x':
         if (i + 3 < content_len
-            && ((content[i + 2] >= '0' && content[i + 2] <= '9')
-             || (content[i + 2] >= 'a' && content[i + 2] <= 'f')
-             || (content[i + 2] >= 'A' && content[i + 2] <= 'F'))
-            && ((content[i + 3] >= '0' && content[i + 3] <= '9')
-             || (content[i + 3] >= 'a' && content[i + 3] <= 'f')
-             || (content[i + 3] >= 'A' && content[i + 3] <= 'F')))
+            && ((content[i + 2] >= '0' && content[i + 2] <= '9') || (content[i + 2] >= 'a' && content[i + 2] <= 'f')
+                || (content[i + 2] >= 'A' && content[i + 2] <= 'F'))
+            && ((content[i + 3] >= '0' && content[i + 3] <= '9') || (content[i + 3] >= 'a' && content[i + 3] <= 'f')
+                || (content[i + 3] >= 'A' && content[i + 3] <= 'F')))
         {
             *byte_value = (hex_char_to_int(content[i + 2]) << 4) | hex_char_to_int(content[i + 3]);
             *consumed = 4;
@@ -482,7 +521,7 @@ ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node, bool proce
     }
 
     size_t escaped_len = 0;
-    for (size_t i = 0; i < content_len; )
+    for (size_t i = 0; i < content_len;)
     {
         if (content[i] == '\\')
         {
@@ -503,7 +542,7 @@ ir_gen_string_literal(IrGenContext * ctx, odin_grammar_node_t * node, bool proce
     if (buf == NULL)
         return NULL;
     size_t out_idx = 0;
-    for (size_t i = 0; i < content_len; )
+    for (size_t i = 0; i < content_len;)
     {
         if (content[i] == '\\')
         {
@@ -625,8 +664,9 @@ ir_gen_register_enum_enumerators(IrGenContext * ctx, odin_grammar_node_t * enum_
 // --- Procedure parameter registration ---
 
 static void
-ir_gen_register_params(IrGenContext * ctx, odin_grammar_node_t * proc_literal, LLVMValueRef func,
-                       TypeDescriptor const * spec_proc_type)
+ir_gen_register_params(
+    IrGenContext * ctx, odin_grammar_node_t * proc_literal, LLVMValueRef func, TypeDescriptor const * spec_proc_type
+)
 {
     odin_grammar_node_t * sig_node = node_find_child(proc_literal, AST_NODE_PROCEDURE_SIGNATURE);
     if (sig_node == NULL)
@@ -788,8 +828,6 @@ ir_gen_collect_foreign_import(IrGenContext * ctx, odin_grammar_node_t * node)
     }
 }
 
-
-
 // --- Aggregate field resolution (string, slice, dynamic_array) ---
 
 bool
@@ -819,7 +857,8 @@ ir_gen_resolve_aggregate_field(
             *out_field_type = get_basic_type_by_name(ctx->type_registry, "u8");
             return true;
         }
-        if (out_error_name) *out_error_name = "string";
+        if (out_error_name)
+            *out_error_name = "string";
         return false;
     }
 
@@ -838,7 +877,8 @@ ir_gen_resolve_aggregate_field(
             *out_field_type = get_or_create_pointer_type(ctx->type_registry, agg_type->element_type);
             return true;
         }
-        if (out_error_name) *out_error_name = "slice";
+        if (out_error_name)
+            *out_error_name = "slice";
         return false;
     }
 
@@ -863,7 +903,8 @@ ir_gen_resolve_aggregate_field(
             *out_field_type = get_or_create_pointer_type(ctx->type_registry, agg_type->element_type);
             return true;
         }
-        if (out_error_name) *out_error_name = "dynamic array";
+        if (out_error_name)
+            *out_error_name = "dynamic array";
         return false;
     }
 
@@ -873,8 +914,7 @@ ir_gen_resolve_aggregate_field(
 // --- Bounds checking support ---
 
 LLVMValueRef
-ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef index_val,
-                         LLVMValueRef len_val, odin_grammar_node_t * node)
+ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef index_val, LLVMValueRef len_val, odin_grammar_node_t * node)
 {
     if (!ctx->bounds_checking_enabled)
         return index_val;
@@ -947,7 +987,8 @@ ir_gen_os_args_init(IrGenContext * ctx)
 
     // 1. Load argc/argv from globals
     LLVMValueRef argc_val = LLVMBuildLoad2(ctx->builder, i64t, ctx->odin_argc_global, "os.args.argc");
-    LLVMValueRef argv_val = LLVMBuildLoad2(ctx->builder, LLVMPointerType(i8ptr, 0), ctx->odin_argv_global, "os.args.argv");
+    LLVMValueRef argv_val
+        = LLVMBuildLoad2(ctx->builder, LLVMPointerType(i8ptr, 0), ctx->odin_argv_global, "os.args.argv");
 
     // 2. Get string type = {i8*, i64}
     TypeDescriptor const * str_td = get_basic_type_by_name(ctx->type_registry, "string");
@@ -962,14 +1003,11 @@ ir_gen_os_args_init(IrGenContext * ctx)
     LLVMTypeRef slice_type = slice_td->llvm_type;
 
     // 4. Allocate backing array: malloc(argc * sizeof(string))
-    LLVMValueRef elem_size = LLVMConstInt(
-        i64t,
-        (long long)LLVMABISizeOfType(ctx->data_layout, str_type),
-        false
-    );
+    LLVMValueRef elem_size = LLVMConstInt(i64t, (long long)LLVMABISizeOfType(ctx->data_layout, str_type), false);
     LLVMValueRef total_size = LLVMBuildMul(ctx->builder, argc_val, elem_size, "os.args.totalsize");
     LLVMValueRef backing_raw = ir_gen_call_malloc(ctx, total_size);
-    LLVMValueRef backing = LLVMBuildPointerCast(ctx->builder, backing_raw, LLVMPointerType(str_type, 0), "os.args.backing");
+    LLVMValueRef backing
+        = LLVMBuildPointerCast(ctx->builder, backing_raw, LLVMPointerType(str_type, 0), "os.args.backing");
 
     // 5. Set up loop: for (i64 i = 0; i < argc; i++) { ... }
     LLVMValueRef func = func_current_function(ctx);
@@ -1009,7 +1047,8 @@ ir_gen_os_args_init(IrGenContext * ctx)
 
     // End: build []string slice and store in os.args global
     LLVMPositionBuilderAtEnd(ctx->builder, end_bb);
-    LLVMValueRef slice_val = LLVMBuildInsertValue(ctx->builder, LLVMGetUndef(slice_type), backing, 0, "os.args.slice.0");
+    LLVMValueRef slice_val
+        = LLVMBuildInsertValue(ctx->builder, LLVMGetUndef(slice_type), backing, 0, "os.args.slice.0");
     slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, argc_val, 1, "os.args.slice.1");
     LLVMBuildStore(ctx->builder, slice_val, os_args_global);
 }
@@ -1047,12 +1086,10 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
             return NULL;
 
-    
-
         ProcDeclAttributes * attrs = (ProcDeclAttributes *)node->metadata;
         char const * func_name = (attrs && attrs->link_name) ? attrs->link_name
-                               : (sym && sym->llvm_name) ? sym->llvm_name
-                               : name_node->text;
+                                 : (sym && sym->llvm_name)   ? sym->llvm_name
+                                                             : name_node->text;
 
         LLVMValueRef func = LLVMGetNamedFunction(ctx->module, func_name);
         if (func == NULL)
@@ -1084,7 +1121,8 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 {
                     LLVMValueRef context_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
                     // Use aligned_load with explicit struct type to avoid movups/movaps stack slot collisions
-                    LLVMValueRef context_val = LLVMBuildLoad2(ctx->builder, ctx_type->llvm_type, context_param, "context.val");
+                    LLVMValueRef context_val
+                        = LLVMBuildLoad2(ctx->builder, ctx_type->llvm_type, context_param, "context.val");
                     LLVMSetAlignment(context_val, 1);
                     LLVMBuildStore(ctx->builder, context_val, context_alloca);
 
@@ -1101,7 +1139,7 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
                 }
             }
 
-                    if (strcmp(func_name, "main") == 0)
+            if (strcmp(func_name, "main") == 0)
             {
                 ir_gen_os_args_init(ctx);
             }
@@ -1179,7 +1217,8 @@ ir_gen_top_level_variable(IrGenContext * ctx, odin_grammar_node_t * node)
         symbol_t * var_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
         char const * global_name = (var_sym && var_sym->llvm_name) ? var_sym->llvm_name : name_node->text;
         // Mangle names that conflict with libc symbols
-        if (strcmp(global_name, "stdin") == 0 || strcmp(global_name, "stdout") == 0 || strcmp(global_name, "stderr") == 0)
+        if (strcmp(global_name, "stdin") == 0 || strcmp(global_name, "stdout") == 0
+            || strcmp(global_name, "stderr") == 0)
         {
             size_t len = strlen(global_name);
             char * mangled = malloc(len + 8);
@@ -1349,26 +1388,46 @@ type_info_kind_from_td_kind(td_kind_t kind)
 {
     switch (kind)
     {
-        case TD_KIND_BASIC: return 1;
-        case TD_KIND_POINTER: return 2;
-        case TD_KIND_ARRAY: return 3;
-        case TD_KIND_SLICE: return 4;
-        case TD_KIND_DYNAMIC_ARRAY: return 5;
-        case TD_KIND_STRUCT: return 6;
-        case TD_KIND_UNION: return 7;
-        case TD_KIND_ENUM: return 8;
-        case TD_KIND_BIT_FIELD: return 9;
-        case TD_KIND_BIT_SET: return 10;
-        case TD_KIND_MAP: return 11;
-        case TD_KIND_PROC: return 12;
-        case TD_KIND_DISTINCT: return 13;
-        case TD_KIND_SOA: return 14;
-        case TD_KIND_RANGE: return 15;
-        case TD_KIND_MAYBE: return 16;
-        case TD_KIND_MULTI_POINTER: return 17;
-        case TD_KIND_VECTOR: return 18;
-        case TD_KIND_MATRIX: return 19;
-        default: return 0;
+    case TD_KIND_BASIC:
+        return 1;
+    case TD_KIND_POINTER:
+        return 2;
+    case TD_KIND_ARRAY:
+        return 3;
+    case TD_KIND_SLICE:
+        return 4;
+    case TD_KIND_DYNAMIC_ARRAY:
+        return 5;
+    case TD_KIND_STRUCT:
+        return 6;
+    case TD_KIND_UNION:
+        return 7;
+    case TD_KIND_ENUM:
+        return 8;
+    case TD_KIND_BIT_FIELD:
+        return 9;
+    case TD_KIND_BIT_SET:
+        return 10;
+    case TD_KIND_MAP:
+        return 11;
+    case TD_KIND_PROC:
+        return 12;
+    case TD_KIND_DISTINCT:
+        return 13;
+    case TD_KIND_SOA:
+        return 14;
+    case TD_KIND_RANGE:
+        return 15;
+    case TD_KIND_MAYBE:
+        return 16;
+    case TD_KIND_MULTI_POINTER:
+        return 17;
+    case TD_KIND_VECTOR:
+        return 18;
+    case TD_KIND_MATRIX:
+        return 19;
+    default:
+        return 0;
     }
 }
 
@@ -1462,8 +1521,7 @@ ir_gen_cast_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         return LLVMBuildFPCast(ctx->builder, src_val, dest_llvm_type, "fpcast");
     }
-    else if ((src_kind == LLVMIntegerTypeKind)
-             && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
+    else if ((src_kind == LLVMIntegerTypeKind) && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
     {
         return LLVMBuildSIToFP(ctx->builder, src_val, dest_llvm_type, "sitofp");
     }
@@ -1471,7 +1529,7 @@ ir_gen_cast_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         return LLVMBuildFPToSI(ctx->builder, src_val, dest_llvm_type, "fptosi");
     }
-    else     if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMPointerTypeKind)
+    else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMPointerTypeKind)
     {
         return LLVMBuildPointerCast(ctx->builder, src_val, dest_llvm_type, "ptrcast");
     }
@@ -1485,11 +1543,8 @@ ir_gen_cast_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     }
     // Special case: casting string struct {ptr, i64} to a pointer type
     // (cstring, rawptr). Extract the data pointer (field 0) instead of bitcasting.
-    if (dest_kind == LLVMPointerTypeKind
-        && src_kind == LLVMStructTypeKind
-        && expr_node->resolved_type != NULL
-        && expr_node->resolved_type->kind == TD_KIND_BASIC
-        && expr_node->resolved_type->as.basic.name != NULL
+    if (dest_kind == LLVMPointerTypeKind && src_kind == LLVMStructTypeKind && expr_node->resolved_type != NULL
+        && expr_node->resolved_type->kind == TD_KIND_BASIC && expr_node->resolved_type->as.basic.name != NULL
         && strcmp(expr_node->resolved_type->as.basic.name, "string") == 0)
     {
         LLVMValueRef data_ptr = LLVMBuildExtractValue(ctx->builder, src_val, 0, "str2ptr");
@@ -1579,8 +1634,7 @@ ir_gen_len_cap_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMValueRef indices[]
             = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), field_index, false)};
-        LLVMValueRef field_ptr
-            = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, operand_val, indices, 2, "len.ptr");
+        LLVMValueRef field_ptr = LLVMBuildInBoundsGEP2(ctx->builder, struct_type, operand_val, indices, 2, "len.ptr");
         len_val = LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), field_ptr, field_name);
     }
     else
@@ -1590,7 +1644,9 @@ ir_gen_len_cap_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 
     if (len_val == NULL)
     {
-        ir_gen_error_collection_add(&ctx->errors, NULL, node, "len/cap: failed to extract field from slice/dynamic array");
+        ir_gen_error_collection_add(
+            &ctx->errors, NULL, node, "len/cap: failed to extract field from slice/dynamic array"
+        );
         return NULL;
     }
     return len_val;
@@ -1658,8 +1714,9 @@ ir_gen_raw_data_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMValueRef data_ptr = NULL;
     if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind)
     {
-        LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                                  LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
+        LLVMValueRef indices[]
+            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false)};
         data_ptr = LLVMBuildLoad2(
             ctx->builder,
             LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0),
@@ -1688,7 +1745,9 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         || (result_type->kind != TD_KIND_SLICE && result_type->kind != TD_KIND_DYNAMIC_ARRAY
             && result_type->kind != TD_KIND_MAP))
     {
-        ir_gen_error_collection_add(&ctx->errors, NULL, node, "make: target type is not a slice, dynamic array, or map");
+        ir_gen_error_collection_add(
+            &ctx->errors, NULL, node, "make: target type is not a slice, dynamic array, or map"
+        );
         return NULL;
     }
 
@@ -1735,8 +1794,9 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMValueRef map_data;
         if (allocator_val != NULL)
         {
-            map_data = ir_gen_call_allocator_alloc(ctx, allocator_val, total_size,
-                LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 16, false));
+            map_data = ir_gen_call_allocator_alloc(
+                ctx, allocator_val, total_size, LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 16, false)
+            );
         }
         else
         {
@@ -1813,8 +1873,9 @@ ir_gen_make_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMValueRef raw_mem;
         if (allocator_val != NULL)
         {
-            raw_mem = ir_gen_call_allocator_alloc(ctx, allocator_val, total_size,
-                LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 16, false));
+            raw_mem = ir_gen_call_allocator_alloc(
+                ctx, allocator_val, total_size, LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 16, false)
+            );
         }
         else
         {
@@ -1897,13 +1958,20 @@ ir_gen_append_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     LLVMBuildStore(ctx->builder, arr_loaded, result_ptr);
 
     // 2. Load initial data, len, cap
-    LLVMValueRef gep_data = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr, (LLVMValueRef[]){idx0, idx0}, 2, "append.data.gep");
-    LLVMValueRef data_ptr = LLVMBuildLoad2(ctx->builder, LLVMPointerType(elem_type->llvm_type, 0), gep_data, "append.data");
+    LLVMValueRef gep_data = LLVMBuildInBoundsGEP2(
+        ctx->builder, arr_type->llvm_type, result_ptr, (LLVMValueRef[]){idx0, idx0}, 2, "append.data.gep"
+    );
+    LLVMValueRef data_ptr
+        = LLVMBuildLoad2(ctx->builder, LLVMPointerType(elem_type->llvm_type, 0), gep_data, "append.data");
 
-    LLVMValueRef gep_len = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr, (LLVMValueRef[]){idx0, idx1}, 2, "append.len.gep");
+    LLVMValueRef gep_len = LLVMBuildInBoundsGEP2(
+        ctx->builder, arr_type->llvm_type, result_ptr, (LLVMValueRef[]){idx0, idx1}, 2, "append.len.gep"
+    );
     LLVMValueRef cur_len = LLVMBuildLoad2(ctx->builder, i64t, gep_len, "append.len");
 
-    LLVMValueRef gep_cap = LLVMBuildInBoundsGEP2(ctx->builder, arr_type->llvm_type, result_ptr, (LLVMValueRef[]){idx0, idx2}, 2, "append.cap.gep");
+    LLVMValueRef gep_cap = LLVMBuildInBoundsGEP2(
+        ctx->builder, arr_type->llvm_type, result_ptr, (LLVMValueRef[]){idx0, idx2}, 2, "append.cap.gep"
+    );
     LLVMValueRef cur_cap = LLVMBuildLoad2(ctx->builder, i64t, gep_cap, "append.cap");
 
     // elem_size constant for basic types
@@ -1920,52 +1988,91 @@ ir_gen_append_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     // 3. Compute total elements to append
     LLVMValueRef num_elements = LLVMConstInt(i64t, (unsigned long long)(node->list.count - 1), false);
     LLVMValueRef new_len = LLVMBuildAdd(ctx->builder, cur_len, num_elements, "append.new.len");
-    
+
     // 4. Check if we need to grow (before the loop)
     LLVMValueRef needs_grow = LLVMBuildICmp(ctx->builder, LLVMIntSGE, new_len, cur_cap, "append.needs.grow");
 
     // Compute new_cap = max(cur_cap * 2, 4, new_len)
     LLVMValueRef doubled = LLVMBuildMul(ctx->builder, cur_cap, one_i64, "append.cap.doubled");
-    LLVMValueRef new_cap_select = LLVMBuildSelect(ctx->builder, 
+    LLVMValueRef new_cap_select = LLVMBuildSelect(
+        ctx->builder,
         LLVMBuildICmp(ctx->builder, LLVMIntSLT, doubled, new_len, "append.cap.need_more"),
-        new_len, doubled, "append.new.cap");
-    LLVMValueRef new_cap = LLVMBuildSelect(ctx->builder,
+        new_len,
+        doubled,
+        "append.new.cap"
+    );
+    LLVMValueRef new_cap = LLVMBuildSelect(
+        ctx->builder,
         LLVMBuildICmp(ctx->builder, LLVMIntEQ, cur_cap, LLVMConstInt(i64t, 0, false), "append.cap.zero"),
-        LLVMConstInt(i64t, 4, false), new_cap_select, "append.final.cap");
+        LLVMConstInt(i64t, 4, false),
+        new_cap_select,
+        "append.final.cap"
+    );
 
     // Grow if needed using select
     LLVMValueRef should_grow = needs_grow;
     LLVMValueRef final_cap = LLVMBuildSelect(ctx->builder, should_grow, new_cap, cur_cap, "append.final.cap.val");
-    
+
     // Allocate new buffer if needed (using select to pick between old/new)
     LLVMValueRef new_total = LLVMBuildMul(ctx->builder, final_cap, elem_size, "append.new.total");
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
     LLVMValueRef malloc_fn = LLVMGetNamedFunction(ctx->module, "malloc");
     if (malloc_fn == NULL)
         malloc_fn = LLVMAddFunction(ctx->module, "malloc", LLVMFunctionType(i8ptr, (LLVMValueRef[]){i64t}, 1, false));
-    LLVMValueRef new_data = LLVMBuildCall2(ctx->builder, LLVMFunctionType(i8ptr, (LLVMValueRef[]){i64t}, 1, false), malloc_fn, (LLVMValueRef[]){new_total}, 1, "append.new.data");
-    
+    LLVMValueRef new_data = LLVMBuildCall2(
+        ctx->builder,
+        LLVMFunctionType(i8ptr, (LLVMValueRef[]){i64t}, 1, false),
+        malloc_fn,
+        (LLVMValueRef[]){new_total},
+        1,
+        "append.new.data"
+    );
+
     // Copy old data using memcpy if needed
     LLVMValueRef copy_size = LLVMBuildMul(ctx->builder, cur_len, elem_size, "append.copy.size");
     LLVMValueRef memcpy_fn = LLVMGetNamedFunction(ctx->module, "memcpy");
     if (memcpy_fn == NULL)
-        memcpy_fn = LLVMAddFunction(ctx->module, "memcpy", LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr, i64t}, 3, false));
-    LLVMBuildCall2(ctx->builder, LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr, i64t}, 3, false), memcpy_fn, (LLVMValueRef[]){new_data, data_ptr, copy_size}, 3, "append.memcpy");
-    
+        memcpy_fn = LLVMAddFunction(
+            ctx->module, "memcpy", LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr, i64t}, 3, false)
+        );
+    LLVMBuildCall2(
+        ctx->builder,
+        LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i8ptr, i8ptr, i64t}, 3, false),
+        memcpy_fn,
+        (LLVMValueRef[]){new_data, data_ptr, copy_size},
+        3,
+        "append.memcpy"
+    );
+
     // Free old data if needed (only if growing)
     LLVMValueRef free_fn = LLVMGetNamedFunction(ctx->module, "free");
     if (free_fn == NULL)
-        free_fn = LLVMAddFunction(ctx->module, "free", LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), (LLVMTypeRef[]){i8ptr}, 1, false));
-    LLVMValueRef data_to_free = LLVMBuildSelect(ctx->builder, should_grow, data_ptr, LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0)), "append.data.to.free");
-    LLVMBuildCall2(ctx->builder, LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), (LLVMTypeRef[]){i8ptr}, 1, false), free_fn, (LLVMValueRef[]){LLVMBuildPointerCast(ctx->builder, data_to_free, i8ptr, "")}, 1, "");
+        free_fn = LLVMAddFunction(
+            ctx->module, "free", LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), (LLVMTypeRef[]){i8ptr}, 1, false)
+        );
+    LLVMValueRef data_to_free = LLVMBuildSelect(
+        ctx->builder,
+        should_grow,
+        data_ptr,
+        LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0)),
+        "append.data.to.free"
+    );
+    LLVMBuildCall2(
+        ctx->builder,
+        LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), (LLVMTypeRef[]){i8ptr}, 1, false),
+        free_fn,
+        (LLVMValueRef[]){LLVMBuildPointerCast(ctx->builder, data_to_free, i8ptr, "")},
+        1,
+        ""
+    );
 
     // Update data and cap in the struct
     LLVMBuildStore(ctx->builder, new_data, gep_data);
     LLVMBuildStore(ctx->builder, final_cap, gep_cap);
-    
+
     // Reload data_ptr after potential grow
     data_ptr = LLVMBuildLoad2(ctx->builder, LLVMPointerType(elem_type->llvm_type, 0), gep_data, "append.data.reload");
-    
+
     // Don't reset cur_len - we append starting at the current len
 
     // 5. For each element to append (no branches in loop)
@@ -1986,7 +2093,8 @@ ir_gen_append_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 
         // Store element at data[len]
         LLVMValueRef store_idx[] = {cur_len};
-        LLVMValueRef store_ptr = LLVMBuildGEP2(ctx->builder, elem_type->llvm_type, data_ptr, store_idx, 1, "append.store.ptr");
+        LLVMValueRef store_ptr
+            = LLVMBuildGEP2(ctx->builder, elem_type->llvm_type, data_ptr, store_idx, 1, "append.store.ptr");
         LLVMBuildStore(ctx->builder, elem_val, store_ptr);
 
         // Increment len
@@ -2010,8 +2118,8 @@ ir_gen_delete_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
 
     TypeDescriptor const * target_type = target->resolved_type;
-    bool is_string = target_type && target_type->kind == TD_KIND_BASIC
-                     && strcmp(target_type->as.basic.name, "string") == 0;
+    bool is_string
+        = target_type && target_type->kind == TD_KIND_BASIC && strcmp(target_type->as.basic.name, "string") == 0;
     if (target_type
         && (target_type->kind == TD_KIND_SLICE || target_type->kind == TD_KIND_DYNAMIC_ARRAY
             || target_type->kind == TD_KIND_MAP || is_string))
@@ -2109,16 +2217,13 @@ ir_gen_compress_values_expr(IrGenContext * ctx, odin_grammar_node_t * node)
             if (field && field->type_desc && field->type_desc->llvm_type
                 && LLVMTypeOf(val) != field->type_desc->llvm_type)
             {
-                val = coerce_value_to_type(ctx, val, field->type_desc->llvm_type,
-                    false, "compress.field");
+                val = coerce_value_to_type(ctx, val, field->type_desc->llvm_type, false, "compress.field");
             }
         }
-        else if (target_type->kind == TD_KIND_ARRAY && target_type->element_type
-                 && target_type->element_type->llvm_type
+        else if (target_type->kind == TD_KIND_ARRAY && target_type->element_type && target_type->element_type->llvm_type
                  && LLVMTypeOf(val) != target_type->element_type->llvm_type)
         {
-            val = coerce_value_to_type(ctx, val, target_type->element_type->llvm_type,
-                false, "compress.elem");
+            val = coerce_value_to_type(ctx, val, target_type->element_type->llvm_type, false, "compress.elem");
         }
         result = LLVMBuildInsertValue(ctx->builder, result, val, field_idx, "compress.field");
     }
@@ -2144,8 +2249,7 @@ ir_gen_struct_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     odin_grammar_node_t * fields_node = NULL;
     for (size_t i = 1; i < node->list.count; i++)
     {
-        if (node->list.children[i] != NULL
-            && node->list.children[i]->type == AST_NODE_STRUCT_LIT_FIELDS)
+        if (node->list.children[i] != NULL && node->list.children[i]->type == AST_NODE_STRUCT_LIT_FIELDS)
         {
             fields_node = node->list.children[i];
             break;
@@ -2190,27 +2294,21 @@ ir_gen_struct_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         if (sf != NULL && sf->type_desc != NULL && sf->type_desc->llvm_type != NULL)
         {
             LLVMTypeRef val_type = LLVMTypeOf(val);
-            if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind
-                && val_type != sf->type_desc->llvm_type
-                && (sf->type_desc->kind == TD_KIND_ARRAY
-                    || sf->type_desc->kind == TD_KIND_STRUCT
+            if (LLVMGetTypeKind(val_type) == LLVMPointerTypeKind && val_type != sf->type_desc->llvm_type
+                && (sf->type_desc->kind == TD_KIND_ARRAY || sf->type_desc->kind == TD_KIND_STRUCT
                     || sf->type_desc->kind == TD_KIND_SLICE))
             {
-                val = LLVMBuildLoad2(ctx->builder, sf->type_desc->llvm_type,
-                                     val, "structlit.load");
+                val = LLVMBuildLoad2(ctx->builder, sf->type_desc->llvm_type, val, "structlit.load");
             }
             // Coerce scalar types when needed.
             if (LLVMTypeOf(val) != sf->type_desc->llvm_type)
             {
-                bool src_unsigned = (sf->type_desc->kind == TD_KIND_BASIC
-                                     && sf->type_desc->as.basic.is_unsigned);
-                val = coerce_value_to_type(ctx, val, sf->type_desc->llvm_type,
-                                           src_unsigned, "structlit.field");
+                bool src_unsigned = (sf->type_desc->kind == TD_KIND_BASIC && sf->type_desc->as.basic.is_unsigned);
+                val = coerce_value_to_type(ctx, val, sf->type_desc->llvm_type, src_unsigned, "structlit.field");
             }
         }
 
-        result = LLVMBuildInsertValue(ctx->builder, result, val,
-                                      (unsigned)field_idx, "structlit.field");
+        result = LLVMBuildInsertValue(ctx->builder, result, val, (unsigned)field_idx, "structlit.field");
     }
 
     return result;
@@ -2236,8 +2334,7 @@ ir_gen_array_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     odin_grammar_node_t * elements_node = NULL;
     for (size_t i = 1; i < node->list.count; i++)
     {
-        if (node->list.children[i] != NULL
-            && node->list.children[i]->type == AST_NODE_ARRAY_LIT_ELEMENTS)
+        if (node->list.children[i] != NULL && node->list.children[i]->type == AST_NODE_ARRAY_LIT_ELEMENTS)
         {
             elements_node = node->list.children[i];
             break;
@@ -2261,11 +2358,9 @@ ir_gen_array_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 
         // If element is a composite-typed identifier (array/struct/slice),
         // ir_gen_node returns the alloca pointer; load it.
-        if (elem_type != NULL && elem_llvm_type != NULL
-            && LLVMGetTypeKind(LLVMTypeOf(val)) == LLVMPointerTypeKind
+        if (elem_type != NULL && elem_llvm_type != NULL && LLVMGetTypeKind(LLVMTypeOf(val)) == LLVMPointerTypeKind
             && LLVMTypeOf(val) != elem_llvm_type
-            && (elem_type->kind == TD_KIND_ARRAY
-                || elem_type->kind == TD_KIND_STRUCT
+            && (elem_type->kind == TD_KIND_ARRAY || elem_type->kind == TD_KIND_STRUCT
                 || elem_type->kind == TD_KIND_SLICE))
         {
             val = LLVMBuildLoad2(ctx->builder, elem_llvm_type, val, "arrlit.load");
@@ -2274,10 +2369,8 @@ ir_gen_array_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         // Coerce scalar types when needed.
         if (elem_llvm_type != NULL && LLVMTypeOf(val) != elem_llvm_type)
         {
-            bool src_unsigned = (elem_type && elem_type->kind == TD_KIND_BASIC
-                                 && elem_type->as.basic.is_unsigned);
-            val = coerce_value_to_type(ctx, val, elem_llvm_type,
-                                       src_unsigned, "arrlit.elem");
+            bool src_unsigned = (elem_type && elem_type->kind == TD_KIND_BASIC && elem_type->as.basic.is_unsigned);
+            val = coerce_value_to_type(ctx, val, elem_llvm_type, src_unsigned, "arrlit.elem");
         }
 
         result = LLVMBuildInsertValue(ctx->builder, result, val, idx, "arrlit.elem");
@@ -2326,8 +2419,8 @@ ir_gen_soa_zip_expr(IrGenContext * ctx, odin_grammar_node_t * node)
             return NULL;
         }
         TypeDescriptor const * arg_type = ir_args[i]->resolved_type;
-        if (LLVMGetTypeKind(LLVMTypeOf(slice_val)) == LLVMPointerTypeKind
-            && arg_type != NULL && arg_type->llvm_type != NULL)
+        if (LLVMGetTypeKind(LLVMTypeOf(slice_val)) == LLVMPointerTypeKind && arg_type != NULL
+            && arg_type->llvm_type != NULL)
         {
             slice_val = LLVMBuildLoad2(ctx->builder, arg_type->llvm_type, slice_val, "sz.load");
         }
@@ -2367,8 +2460,7 @@ ir_gen_soa_unzip_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     if (soa_val == NULL)
         return NULL;
     TypeDescriptor const * arg_type = node->list.children[0]->resolved_type;
-    if (LLVMGetTypeKind(LLVMTypeOf(soa_val)) == LLVMPointerTypeKind
-        && arg_type != NULL && arg_type->llvm_type != NULL)
+    if (LLVMGetTypeKind(LLVMTypeOf(soa_val)) == LLVMPointerTypeKind && arg_type != NULL && arg_type->llvm_type != NULL)
     {
         soa_val = LLVMBuildLoad2(ctx->builder, arg_type->llvm_type, soa_val, "suz.load");
     }
@@ -2912,7 +3004,11 @@ static int ir_gen_evaluate_constant_bool(IrGenContext * ctx, odin_grammar_node_t
 static long long
 ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int * ok)
 {
-    if (node == NULL) { *ok = 0; return 0; }
+    if (node == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
 
     // Unwrap through expression chain to reach a node type we can evaluate
     while (1)
@@ -2940,8 +3036,7 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
             if (node->list.count >= 2 && node->list.children[1] != NULL)
             {
                 odin_grammar_node_t * postfix_ops = node->list.children[1];
-                if (postfix_ops->list.count > 0
-                    && postfix_ops->list.children[0] != NULL
+                if (postfix_ops->list.count > 0 && postfix_ops->list.children[0] != NULL
                     && postfix_ops->list.children[0]->type == AST_NODE_POSTFIX_MEMBER)
                     can_eval = 1;
             }
@@ -2954,15 +3049,20 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
         if ((node->type == AST_NODE_POSTFIX_EXPRESSION || node->list.count == 1) && node->list.children[0])
             node = node->list.children[0];
         else
-            { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
     }
 
     switch (node->type)
     {
     case AST_NODE_BOOL_TRUE:
-        *ok = 1; return 1;
+        *ok = 1;
+        return 1;
     case AST_NODE_BOOL_FALSE:
-        *ok = 1; return 0;
+        *ok = 1;
+        return 0;
 
     case AST_NODE_IDENTIFIER:
     {
@@ -2979,13 +3079,19 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
     case AST_NODE_POSTFIX_EXPRESSION:
     {
         if (node->list.count < 2 || node->list.children[0] == NULL || node->list.children[1] == NULL)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         odin_grammar_node_t * inner = node->list.children[0];
         while (inner != NULL && inner->type != AST_NODE_IDENTIFIER && inner->list.count >= 1)
             inner = inner->list.children[0];
         if (inner == NULL || inner->type != AST_NODE_IDENTIFIER)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         ImportedPackage * pkg = NULL;
         for (int i = 0; i < ctx->import_count; i++)
@@ -2998,18 +3104,30 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
             }
         }
         if (pkg == NULL || pkg->package_scope == NULL)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         odin_grammar_node_t * postfix_ops = node->list.children[1];
         if (postfix_ops == NULL || postfix_ops->list.count == 0)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         odin_grammar_node_t * member_op = postfix_ops->list.children[0];
         if (member_op == NULL || member_op->type != AST_NODE_POSTFIX_MEMBER)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         if (member_op->list.count < 1 || member_op->list.children[0] == NULL)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         char const * member_name = member_op->list.children[0]->text;
         symbol_t * sym = scope_find_symbol_entry(pkg->package_scope, member_name);
@@ -3024,10 +3142,18 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
 
     case AST_NODE_INTEGER_VALUE:
     {
-        if (node->text == NULL) { *ok = 0; return 0; }
+        if (node->text == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
         char * end = NULL;
         long long val = parse_odin_signed(node->text, &end, 0);
-        if (end == node->text) { *ok = 0; return 0; }
+        if (end == node->text)
+        {
+            *ok = 0;
+            return 0;
+        }
         *ok = 1;
         return val;
     }
@@ -3035,29 +3161,59 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
     case AST_NODE_UNARY_EXPRESSION:
     {
         odin_grammar_node_t * op_node = node_find_op(node);
-        if (op_node == NULL) { *ok = 0; return 0; }
+        if (op_node == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
         AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
-        if (md == NULL) { *ok = 0; return 0; }
+        if (md == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         odin_grammar_node_t * operand = NULL;
         for (size_t i = 0; i < node->list.count; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
-            if (child != NULL && child != op_node) { operand = child; break; }
+            if (child != NULL && child != op_node)
+            {
+                operand = child;
+                break;
+            }
         }
-        if (operand == NULL) { *ok = 0; return 0; }
+        if (operand == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         int inner_ok = 0;
         long long inner_val = ir_gen_evaluate_constant_int(ctx, operand, &inner_ok);
-        if (!inner_ok) { *ok = 0; return 0; }
+        if (!inner_ok)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         switch (md->kind)
         {
-        case OP_UNARY_NEG: *ok = 1; return -inner_val;
-        case OP_UNARY_POS: *ok = 1; return inner_val;
-        case OP_UNARY_XOR: *ok = 1; return ~inner_val;
-        case OP_UNARY_NOT: *ok = 1; return inner_val ? 0 : 1;
-        default: *ok = 0; return 0;
+        case OP_UNARY_NEG:
+            *ok = 1;
+            return -inner_val;
+        case OP_UNARY_POS:
+            *ok = 1;
+            return inner_val;
+        case OP_UNARY_XOR:
+            *ok = 1;
+            return ~inner_val;
+        case OP_UNARY_NOT:
+            *ok = 1;
+            return inner_val ? 0 : 1;
+        default:
+            *ok = 0;
+            return 0;
         }
     }
 
@@ -3072,37 +3228,103 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
     case AST_NODE_LOG_OR_EXPRESSION:
     {
         odin_grammar_node_t * op_node = node_find_op(node);
-        if (op_node == NULL) { *ok = 0; return 0; }
+        if (op_node == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
         AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
-        if (md == NULL) { *ok = 0; return 0; }
-        if (node->list.count < 3) { *ok = 0; return 0; }
+        if (md == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
+        if (node->list.count < 3)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         int lhs_ok = 0, rhs_ok = 0;
         long long lhs_val = ir_gen_evaluate_constant_int(ctx, node->list.children[0], &lhs_ok);
         long long rhs_val = ir_gen_evaluate_constant_int(ctx, node->list.children[node->list.count - 1], &rhs_ok);
-        if (!lhs_ok || !rhs_ok) { *ok = 0; return 0; }
+        if (!lhs_ok || !rhs_ok)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         switch (md->kind)
         {
-        case OP_ADD: *ok = 1; return lhs_val + rhs_val;
-        case OP_SUB: *ok = 1; return lhs_val - rhs_val;
-        case OP_MUL: *ok = 1; return lhs_val * rhs_val;
-        case OP_DIV: if (rhs_val == 0) { *ok = 0; return 0; } *ok = 1; return lhs_val / rhs_val;
-        case OP_MOD: if (rhs_val == 0) { *ok = 0; return 0; } *ok = 1; return lhs_val % rhs_val;
-        case OP_SHL: *ok = 1; return lhs_val << rhs_val;
-        case OP_SHR: *ok = 1; return lhs_val >> rhs_val;
-        case OP_BIT_AND: *ok = 1; return lhs_val & rhs_val;
-        case OP_BIT_OR:  *ok = 1; return lhs_val | rhs_val;
-        case OP_BIT_XOR: *ok = 1; return lhs_val ^ rhs_val;
-        case OP_EQ: *ok = 1; return (lhs_val == rhs_val) ? 1 : 0;
-        case OP_NE: *ok = 1; return (lhs_val != rhs_val) ? 1 : 0;
-        case OP_LT: *ok = 1; return (lhs_val < rhs_val) ? 1 : 0;
-        case OP_GT: *ok = 1; return (lhs_val > rhs_val) ? 1 : 0;
-        case OP_LE: *ok = 1; return (lhs_val <= rhs_val) ? 1 : 0;
-        case OP_GE: *ok = 1; return (lhs_val >= rhs_val) ? 1 : 0;
-        default: *ok = 0; return 0;
+        case OP_ADD:
+            *ok = 1;
+            return lhs_val + rhs_val;
+        case OP_SUB:
+            *ok = 1;
+            return lhs_val - rhs_val;
+        case OP_MUL:
+            *ok = 1;
+            return lhs_val * rhs_val;
+        case OP_DIV:
+            if (rhs_val == 0)
+            {
+                *ok = 0;
+                return 0;
+            }
+            *ok = 1;
+            return lhs_val / rhs_val;
+        case OP_MOD:
+            if (rhs_val == 0)
+            {
+                *ok = 0;
+                return 0;
+            }
+            *ok = 1;
+            return lhs_val % rhs_val;
+        case OP_SHL:
+            *ok = 1;
+            return lhs_val << rhs_val;
+        case OP_SHR:
+            *ok = 1;
+            return lhs_val >> rhs_val;
+        case OP_BIT_AND:
+            *ok = 1;
+            return lhs_val & rhs_val;
+        case OP_BIT_OR:
+            *ok = 1;
+            return lhs_val | rhs_val;
+        case OP_BIT_XOR:
+            *ok = 1;
+            return lhs_val ^ rhs_val;
+        case OP_EQ:
+            *ok = 1;
+            return (lhs_val == rhs_val) ? 1 : 0;
+        case OP_NE:
+            *ok = 1;
+            return (lhs_val != rhs_val) ? 1 : 0;
+        case OP_LT:
+            *ok = 1;
+            return (lhs_val < rhs_val) ? 1 : 0;
+        case OP_GT:
+            *ok = 1;
+            return (lhs_val > rhs_val) ? 1 : 0;
+        case OP_LE:
+            *ok = 1;
+            return (lhs_val <= rhs_val) ? 1 : 0;
+        case OP_GE:
+            *ok = 1;
+            return (lhs_val >= rhs_val) ? 1 : 0;
+        default:
+            *ok = 0;
+            return 0;
         }
     }
+
+    case AST_NODE_ARRAY_LIT_ELEMENTS:
+    case AST_NODE_MATRIX_TYPE:
+    case AST_NODE_COUNT:
+        *ok = 0;
+        return 0;
 
     default:
         *ok = 0;
@@ -3325,8 +3547,8 @@ ir_gen_pending_specialization(IrGenContext * ctx, PolySpecialization * spec)
             {
                 TypedValue tv = create_typed_value(NULL, i64_type, true);
                 generator_add_symbol(ctx->gen_ctx, spec->poly_int_names[pi], tv);
-                symbol_t * nsym = scope_find_symbol_entry(
-                    generator_current_scope(ctx->gen_ctx), spec->poly_int_names[pi]);
+                symbol_t * nsym
+                    = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), spec->poly_int_names[pi]);
                 if (nsym)
                 {
                     nsym->has_const_int_val = true;
@@ -3483,12 +3705,10 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
                 {
                     // Generate an Odin allocator wrapper that conforms to the 6-arg protocol:
                     // proc(data: rawptr, mode: int, size: int, alignment: int, nil: rawptr, zero: int) -> []byte
-                    LLVMTypeRef slice_type = LLVMStructTypeInContext(ctx->context, (LLVMTypeRef[]){i8ptr, i64t}, 2, false);
-                    LLVMTypeRef alloc_fn_type = LLVMFunctionType(
-                        slice_type,
-                        (LLVMTypeRef[]){i8ptr, i64t, i64t, i64t, i8ptr, i64t},
-                        6, false
-                    );
+                    LLVMTypeRef slice_type
+                        = LLVMStructTypeInContext(ctx->context, (LLVMTypeRef[]){i8ptr, i64t}, 2, false);
+                    LLVMTypeRef alloc_fn_type
+                        = LLVMFunctionType(slice_type, (LLVMTypeRef[]){i8ptr, i64t, i64t, i64t, i8ptr, i64t}, 6, false);
                     LLVMValueRef alloc_wrapper = LLVMAddFunction(ctx->module, "__odin_default_alloc", alloc_fn_type);
                     LLVMSetLinkage(alloc_wrapper, LLVMPrivateLinkage);
 
@@ -3502,12 +3722,14 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
 
                     // mode (arg1) == 0 means Alloc, anything else means Free
                     LLVMValueRef mode = LLVMGetParam(alloc_wrapper, 1);
-                    LLVMValueRef is_alloc = LLVMBuildICmp(ctx->builder, LLVMIntEQ, mode, LLVMConstInt(i64t, 0, false), "is.alloc");
+                    LLVMValueRef is_alloc
+                        = LLVMBuildICmp(ctx->builder, LLVMIntEQ, mode, LLVMConstInt(i64t, 0, false), "is.alloc");
                     LLVMBuildCondBr(ctx->builder, is_alloc, alloc_bb, free_bb);
 
                     // Free path: call free(ptr)
                     LLVMPositionBuilderAtEnd(ctx->builder, free_bb);
-                    LLVMTypeRef free_type = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), (LLVMTypeRef[]){i8ptr}, 1, false);
+                    LLVMTypeRef free_type
+                        = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), (LLVMTypeRef[]){i8ptr}, 1, false);
                     LLVMValueRef free_fn = LLVMGetNamedFunction(ctx->module, "free");
                     if (free_fn == NULL)
                         free_fn = LLVMAddFunction(ctx->module, "free", free_type);
@@ -3520,7 +3742,8 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
                     LLVMPositionBuilderAtEnd(ctx->builder, alloc_bb);
                     LLVMTypeRef malloc_type = LLVMFunctionType(i8ptr, (LLVMTypeRef[]){i64t}, 1, false);
                     LLVMValueRef alloc_size = LLVMGetParam(alloc_wrapper, 2);
-                    LLVMValueRef malloc_ptr = LLVMBuildCall2(ctx->builder, malloc_type, malloc_fn, &alloc_size, 1, "raw.ptr");
+                    LLVMValueRef malloc_ptr
+                        = LLVMBuildCall2(ctx->builder, malloc_type, malloc_fn, &alloc_size, 1, "raw.ptr");
                     LLVMValueRef slice_val = LLVMGetUndef(slice_type);
                     slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, malloc_ptr, 0, "sl.ptr");
                     slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, alloc_size, 1, "sl.len");
@@ -3539,20 +3762,22 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
 
                     // Cast wrapper to the allocator procedure pointer type
                     LLVMValueRef alloc_as_proc = LLVMBuildPointerCast(ctx->builder, alloc_wrapper, i8ptr, "alloc.proc");
-                    
+
                     // Create allocator struct: { procedure: alloc_wrapper, data: NULL }
                     LLVMValueRef alloc_fields[2];
                     alloc_fields[0] = alloc_as_proc;
                     alloc_fields[1] = LLVMConstNull(i8ptr);
-                    
+
                     // Create global for default allocator
-                    LLVMValueRef default_alloc_global = LLVMAddGlobal(ctx->module, allocator_type->llvm_type, "default_allocator");
+                    LLVMValueRef default_alloc_global
+                        = LLVMAddGlobal(ctx->module, allocator_type->llvm_type, "default_allocator");
                     LLVMSetInitializer(default_alloc_global, LLVMConstStruct(alloc_fields, 2, false));
-                    
+
                     // Create global for temp allocator (same as default for now)
-                    LLVMValueRef temp_alloc_global = LLVMAddGlobal(ctx->module, allocator_type->llvm_type, "temp_allocator");
+                    LLVMValueRef temp_alloc_global
+                        = LLVMAddGlobal(ctx->module, allocator_type->llvm_type, "temp_allocator");
                     LLVMSetInitializer(temp_alloc_global, LLVMConstStruct(alloc_fields, 2, false));
-                    
+
                     // Create context struct: { allocator, temp_allocator, user_ptr=NULL, user_index=0 }
                     // Use the VALUE of the global initializer (the {proc, data} struct), not the global pointer
                     LLVMValueRef ctx_fields[4];
@@ -3560,9 +3785,9 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
                     ctx_fields[1] = LLVMGetInitializer(temp_alloc_global);
                     ctx_fields[2] = LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
                     ctx_fields[3] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-                    
+
                     LLVMValueRef ctx_val = LLVMConstStruct(ctx_fields, 4, false);
-                    
+
                     LLVMValueRef ctx_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context");
                     LLVMBuildStore(ctx->builder, ctx_val, ctx_alloca);
                     context_ptr = ctx_alloca;
