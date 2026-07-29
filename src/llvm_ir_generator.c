@@ -1177,6 +1177,14 @@ ir_gen_top_level_variable(IrGenContext * ctx, odin_grammar_node_t * node)
         LLVMTypeRef llvm_type = var_type->llvm_type;
         symbol_t * var_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
         char const * global_name = (var_sym && var_sym->llvm_name) ? var_sym->llvm_name : name_node->text;
+        // Mangle names that conflict with libc symbols
+        if (strcmp(global_name, "stdin") == 0 || strcmp(global_name, "stdout") == 0 || strcmp(global_name, "stderr") == 0)
+        {
+            size_t len = strlen(global_name);
+            char * mangled = malloc(len + 8);
+            snprintf(mangled, len + 8, "__odin_%s", global_name);
+            global_name = mangled;
+        }
         LLVMValueRef global = LLVMAddGlobal(ctx->module, llvm_type, global_name);
 
         bool has_init = false;
@@ -1461,7 +1469,7 @@ ir_gen_cast_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     {
         return LLVMBuildFPToSI(ctx->builder, src_val, dest_llvm_type, "fptosi");
     }
-    else if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMPointerTypeKind)
+    else     if (src_kind == LLVMPointerTypeKind && dest_kind == LLVMPointerTypeKind)
     {
         return LLVMBuildPointerCast(ctx->builder, src_val, dest_llvm_type, "ptrcast");
     }
@@ -1472,6 +1480,18 @@ ir_gen_cast_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     else if (src_kind == LLVMIntegerTypeKind && dest_kind == LLVMPointerTypeKind)
     {
         return LLVMBuildIntToPtr(ctx->builder, src_val, dest_llvm_type, "intptr");
+    }
+    // Special case: casting string struct {ptr, i64} to a pointer type
+    // (cstring, rawptr). Extract the data pointer (field 0) instead of bitcasting.
+    if (dest_kind == LLVMPointerTypeKind
+        && src_kind == LLVMStructTypeKind
+        && expr_node->resolved_type != NULL
+        && expr_node->resolved_type->kind == TD_KIND_BASIC
+        && expr_node->resolved_type->as.basic.name != NULL
+        && strcmp(expr_node->resolved_type->as.basic.name, "string") == 0)
+    {
+        LLVMValueRef data_ptr = LLVMBuildExtractValue(ctx->builder, src_val, 0, "str2ptr");
+        return LLVMBuildPointerCast(ctx->builder, data_ptr, dest_llvm_type, "strcast");
     }
     return LLVMBuildBitCast(ctx->builder, src_val, dest_llvm_type, "cast");
 }

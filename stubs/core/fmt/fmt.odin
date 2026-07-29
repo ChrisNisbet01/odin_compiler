@@ -103,6 +103,16 @@ print_value :: proc(fd: int, v: any) {
         } else {
             print_string(fd, "false")
         }
+    } else if type_of(v) == type_of(cstring) {
+        cs := v.(cstring)
+        addr := uintptr(cs)
+        for {
+            p := cast(^u8)(addr)
+            b := p^
+            if b == 0 do break
+            print_byte(fd, b)
+            addr += 1
+        }
     } else {
         print_string(fd, "<?>")
     }
@@ -242,6 +252,16 @@ sb_print_value :: proc(b: ^strings.Builder, v: any) {
             sb_print_string(b, "true")
         } else {
             sb_print_string(b, "false")
+        }
+    } else if type_of(v) == type_of(cstring) {
+        cs := v.(cstring)
+        addr := uintptr(cs)
+        for {
+            p := cast(^u8)(addr)
+            ch := p^
+            if ch == 0 do break
+            sb_print_byte(b, ch)
+            addr += 1
         }
     } else {
         sb_print_string(b, "<?>")
@@ -1154,4 +1174,69 @@ wprintfln :: proc(w: io.Writer, format: string, args: ..any) {
     sb_print_byte(&b, '\n')
     s := strings.to_string(b)
     io.write_string(w, s)
+}
+
+// --- C string variants (return null-terminated cstring) ---
+// These build the output in a string builder, append a null byte,
+// then return cstring(raw_data(s)).
+// Simplified versions: no sep/allocator/newline named params.
+
+caprint :: proc(args: ..any) -> cstring {
+    b := strings.builder_make_none()
+    for i in 0..<len(args) {
+        if i > 0 {
+            sb_print_string(&b, " ")
+        }
+        sb_print_value(&b, args[i])
+    }
+    sb_print_byte(&b, 0)
+    s := strings.to_string(b)
+    return cstring(raw_data(s))
+}
+
+caprintf :: proc(format: string, args: ..any) -> cstring {
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, 0)
+    s := strings.to_string(b)
+    return cstring(raw_data(s))
+}
+
+caprintfln :: proc(format: string, args: ..any) -> cstring {
+    b := strings.builder_make_none()
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, '\n')
+    sb_print_byte(&b, 0)
+    s := strings.to_string(b)
+    return cstring(raw_data(s))
+}
+
+ctprint :: proc(args: ..any) -> cstring {
+    b := strings.builder_make_temp(64)
+    for i in 0..<len(args) {
+        if i > 0 {
+            sb_print_string(&b, " ")
+        }
+        sb_print_value(&b, args[i])
+    }
+    sb_print_byte(&b, 0)
+    s := strings.to_string(b)
+    return cstring(raw_data(s))
+}
+
+ctprintf :: proc(format: string, args: ..any) -> cstring {
+    b := strings.builder_make_temp(64)
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, 0)
+    s := strings.to_string(b)
+    return cstring(raw_data(s))
+}
+
+ctprintfln :: proc(format: string, args: ..any) -> cstring {
+    b := strings.builder_make_temp(64)
+    sb_format_parsed(&b, format, args)
+    sb_print_byte(&b, '\n')
+    sb_print_byte(&b, 0)
+    s := strings.to_string(b)
+    return cstring(raw_data(s))
 }

@@ -1009,14 +1009,17 @@ ir_gen_postfix_assertion(IrGenContext * ctx, odin_grammar_node_t * op, LLVMValue
         LLVMValueRef data_ptr = LLVMBuildLoad2(
             ctx->builder, LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0), data_field, "assert.data"
         );
+        bool is_ptr_valued_basic = (target_type->kind == TD_KIND_BASIC
+            && LLVMGetTypeKind(target_type->llvm_type) == LLVMPointerTypeKind);
         if (target_type->kind == TD_KIND_BASIC && !target_type->as.basic.is_float
-            && target_type->as.basic.width > 0 && target_type->as.basic.width <= 64)
+            && target_type->as.basic.width > 0 && target_type->as.basic.width <= 64
+            && !is_ptr_valued_basic)
         {
             LLVMValueRef typed_ptr = LLVMBuildBitCast(ctx->builder, data_ptr,
                 LLVMPointerType(target_type->llvm_type, 0), "assert.typed");
             *val = LLVMBuildLoad2(ctx->builder, target_type->llvm_type, typed_ptr, "assert.val");
         }
-        else if (target_type->kind == TD_KIND_POINTER)
+        else if (target_type->kind == TD_KIND_POINTER || is_ptr_valued_basic)
         {
             *val = LLVMBuildBitCast(ctx->builder, data_ptr, target_type->llvm_type, "assert.val");
         }
