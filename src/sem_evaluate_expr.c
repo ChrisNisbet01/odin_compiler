@@ -1472,6 +1472,70 @@ sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
             return result_type;
         }
 
+        // Matrix × Vector (matrix-vector multiplication)
+        if (op_md->kind == OP_MUL
+            && left_type && left_type->kind == TD_KIND_MATRIX
+            && right_type && right_type->kind == TD_KIND_ARRAY)
+        {
+            if (left_type->as.matrix.columns != (int64_t)right_type->as.array.count)
+            {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "matrix-vector multiplication dimension mismatch: cannot multiply matrix[%lld,%lld] by vector[%zu]",
+                    (long long)left_type->as.matrix.rows, (long long)left_type->as.matrix.columns,
+                    right_type->as.array.count);
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, op_node, buf);
+                node->resolved_type = (TypeDescriptor *)left_type;
+                return left_type;
+            }
+            if (left_type->as.matrix.element_type != right_type->element_type)
+            {
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+                    "matrix-vector multiplication element type mismatch");
+                node->resolved_type = (TypeDescriptor *)left_type;
+                return left_type;
+            }
+            TypeDescriptor const * result_type = get_or_create_array_type(
+                ctx->type_registry,
+                left_type->as.matrix.element_type,
+                (size_t)left_type->as.matrix.rows
+            );
+            node->resolved_type = (TypeDescriptor *)result_type;
+            return result_type;
+        }
+
+        // Vector × Matrix (vector-matrix multiplication)
+        if (op_md->kind == OP_MUL
+            && left_type && left_type->kind == TD_KIND_ARRAY
+            && right_type && right_type->kind == TD_KIND_MATRIX)
+        {
+            if ((int64_t)left_type->as.array.count != right_type->as.matrix.rows)
+            {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "vector-matrix multiplication dimension mismatch: cannot multiply vector[%zu] by matrix[%lld,%lld]",
+                    left_type->as.array.count,
+                    (long long)right_type->as.matrix.rows, (long long)right_type->as.matrix.columns);
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, op_node, buf);
+                node->resolved_type = (TypeDescriptor *)right_type;
+                return right_type;
+            }
+            if (left_type->element_type != right_type->as.matrix.element_type)
+            {
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+                    "vector-matrix multiplication element type mismatch");
+                node->resolved_type = (TypeDescriptor *)right_type;
+                return right_type;
+            }
+            TypeDescriptor const * result_type = get_or_create_array_type(
+                ctx->type_registry,
+                right_type->as.matrix.element_type,
+                (size_t)right_type->as.matrix.columns
+            );
+            node->resolved_type = (TypeDescriptor *)result_type;
+            return result_type;
+        }
+
         // Matrix * Scalar, Scalar * Matrix (broadcast)
         if (op_md->kind == OP_MUL)
         {

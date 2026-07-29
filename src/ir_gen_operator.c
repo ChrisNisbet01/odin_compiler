@@ -469,6 +469,130 @@ ir_gen_matrix_binop(IrGenContext * ctx, LLVMValueRef lhs_ptr, LLVMValueRef rhs_p
     return result_ptr;
 }
 
+static LLVMValueRef
+ir_gen_matrix_vector_mul(IrGenContext * ctx, LLVMValueRef matrix_ptr, LLVMValueRef vector_ptr,
+                          TypeDescriptor const * matrix_td, TypeDescriptor const * vector_td,
+                          TypeDescriptor const * result_td)
+{
+    int64_t rows = matrix_td->as.matrix.rows;
+    int64_t cols = matrix_td->as.matrix.columns;
+    TypeDescriptor const * elem_td = matrix_td->as.matrix.element_type;
+    LLVMTypeRef elem_llvm = elem_td->llvm_type;
+    LLVMTypeRef result_llvm = result_td->llvm_type;
+
+    bool is_float = (elem_td->kind == TD_KIND_BASIC
+        && (LLVMGetTypeKind(elem_llvm) == LLVMFloatTypeKind
+            || LLVMGetTypeKind(elem_llvm) == LLVMDoubleTypeKind));
+
+    // Allocate result array
+    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, result_llvm, "mmv.res");
+    LLVMBuildStore(ctx->builder, LLVMConstNull(result_llvm), result_ptr);
+
+    for (int64_t i = 0; i < rows; i++)
+    {
+        LLVMValueRef sum = LLVMConstNull(elem_llvm);
+        for (int64_t j = 0; j < cols; j++)
+        {
+            // matrix[i][j]
+            LLVMValueRef midx[] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
+            };
+            LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder,
+                matrix_td->llvm_type, matrix_ptr, midx, 3, "mmv.me");
+            LLVMValueRef mval = LLVMBuildLoad2(ctx->builder, elem_llvm, elem_ptr, "mmv.mv");
+
+            // vector[j]
+            LLVMValueRef vidx[] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
+            };
+            LLVMValueRef vec_ptr = LLVMBuildInBoundsGEP2(ctx->builder, vector_td->llvm_type,
+                vector_ptr, vidx, 2, "mmv.vidx");
+            LLVMValueRef vval = LLVMBuildLoad2(ctx->builder, elem_llvm, vec_ptr, "mmv.vv");
+
+            LLVMValueRef prod = is_float ? LLVMBuildFMul(ctx->builder, mval, vval, "mmv.pr")
+                                          : LLVMBuildMul(ctx->builder, mval, vval, "mmv.pr");
+            sum = is_float ? LLVMBuildFAdd(ctx->builder, sum, prod, "mmv.acc")
+                           : LLVMBuildAdd(ctx->builder, sum, prod, "mmv.acc");
+        }
+
+        // Store result[i]
+        LLVMValueRef ridx[] = {
+            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false)
+        };
+        LLVMValueRef res_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm,
+            result_ptr, ridx, 2, "mmv.se");
+        LLVMBuildStore(ctx->builder, sum, res_elem_ptr);
+    }
+
+    return result_ptr;
+}
+
+static LLVMValueRef
+ir_gen_vector_matrix_mul(IrGenContext * ctx, LLVMValueRef vector_ptr, LLVMValueRef matrix_ptr,
+                          TypeDescriptor const * vector_td, TypeDescriptor const * matrix_td,
+                          TypeDescriptor const * result_td)
+{
+    int64_t rows = matrix_td->as.matrix.rows;
+    int64_t cols = matrix_td->as.matrix.columns;
+    TypeDescriptor const * elem_td = matrix_td->as.matrix.element_type;
+    LLVMTypeRef elem_llvm = elem_td->llvm_type;
+    LLVMTypeRef result_llvm = result_td->llvm_type;
+
+    bool is_float = (elem_td->kind == TD_KIND_BASIC
+        && (LLVMGetTypeKind(elem_llvm) == LLVMFloatTypeKind
+            || LLVMGetTypeKind(elem_llvm) == LLVMDoubleTypeKind));
+
+    // Allocate result array
+    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, result_llvm, "vmv.res");
+    LLVMBuildStore(ctx->builder, LLVMConstNull(result_llvm), result_ptr);
+
+    for (int64_t k = 0; k < cols; k++)
+    {
+        LLVMValueRef sum = LLVMConstNull(elem_llvm);
+        for (int64_t j = 0; j < rows; j++)
+        {
+            // vector[j]
+            LLVMValueRef vidx[] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
+            };
+            LLVMValueRef vec_ptr = LLVMBuildInBoundsGEP2(ctx->builder, vector_td->llvm_type,
+                vector_ptr, vidx, 2, "vmv.vidx");
+            LLVMValueRef vval = LLVMBuildLoad2(ctx->builder, elem_llvm, vec_ptr, "vmv.vv");
+
+            // matrix[j][k]
+            LLVMValueRef midx[] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), k, false)
+            };
+            LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder,
+                matrix_td->llvm_type, matrix_ptr, midx, 3, "vmv.me");
+            LLVMValueRef mval = LLVMBuildLoad2(ctx->builder, elem_llvm, elem_ptr, "vmv.mv");
+
+            LLVMValueRef prod = is_float ? LLVMBuildFMul(ctx->builder, vval, mval, "vmv.pr")
+                                          : LLVMBuildMul(ctx->builder, vval, mval, "vmv.pr");
+            sum = is_float ? LLVMBuildFAdd(ctx->builder, sum, prod, "vmv.acc")
+                           : LLVMBuildAdd(ctx->builder, sum, prod, "vmv.acc");
+        }
+
+        // Store result[k]
+        LLVMValueRef ridx[] = {
+            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+            LLVMConstInt(LLVMInt32TypeInContext(ctx->context), k, false)
+        };
+        LLVMValueRef res_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm,
+            result_ptr, ridx, 2, "vmv.se");
+        LLVMBuildStore(ctx->builder, sum, res_elem_ptr);
+    }
+
+    return result_ptr;
+}
+
 LLVMValueRef
 ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -504,7 +628,7 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
 
     // Matrix operations — handle before type coercion (matrix vs scalar types differ)
     TypeDescriptor const * result_td = node->resolved_type;
-    if (result_td && result_td->kind == TD_KIND_MATRIX)
+    if (result_td && (result_td->kind == TD_KIND_MATRIX || result_td->kind == TD_KIND_ARRAY))
     {
         TypeDescriptor const * lhs_td = node->list.children[0]->resolved_type;
         TypeDescriptor const * rhs_td = node->list.children[node->list.count - 1]->resolved_type;
@@ -513,6 +637,14 @@ ir_gen_binary_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         // Matrix × Matrix
         if (op_kind == OP_MUL && lhs_td && lhs_td->kind == TD_KIND_MATRIX && rhs_td && rhs_td->kind == TD_KIND_MATRIX)
             return ir_gen_matrix_mul(ctx, node, lhs, rhs);
+
+        // Matrix × Vector (matrix * array)
+        if (op_kind == OP_MUL && lhs_td && lhs_td->kind == TD_KIND_MATRIX && rhs_td && rhs_td->kind == TD_KIND_ARRAY)
+            return ir_gen_matrix_vector_mul(ctx, lhs, rhs, lhs_td, rhs_td, result_td);
+
+        // Vector × Matrix (array * matrix)
+        if (op_kind == OP_MUL && lhs_td && lhs_td->kind == TD_KIND_ARRAY && rhs_td && rhs_td->kind == TD_KIND_MATRIX)
+            return ir_gen_vector_matrix_mul(ctx, lhs, rhs, lhs_td, rhs_td, result_td);
 
         // Matrix + Matrix, Matrix - Matrix (element-wise)
         if ((op_kind == OP_ADD || op_kind == OP_SUB)

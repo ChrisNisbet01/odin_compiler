@@ -146,7 +146,7 @@ The `check_binary_matrix` function handles matrix operations:
  4. ✅ Matrix × Scalar / Scalar × Matrix (broadcast) implemented
  5. ✅ Matrix + Matrix / Matrix - Matrix (element-wise) implemented
  6. ✅ Matrix / Scalar (broadcast) implemented
- 7. ❌ No special handling for matrix-vector operations
+ 7. ✅ Matrix × Vector / Vector × Matrix implemented
  8. ❌ No transpose, determinant, inverse functions
  9. ❌ No `#row_major` / `#column_major` directives
 10. ❌ No SIMD optimization for matrix operations
@@ -155,9 +155,9 @@ The `check_binary_matrix` function handles matrix operations:
 
 | Feature | Official Odin | Our Compiler |
 |---------|--------------|--------------|
-| `matrix[R, C]T` syntax | ✅ | ❌ |
-| Matrix multiplication (`*`) | ✅ | ❌ |
-| Matrix-vector multiply | ✅ | ❌ |
+| `matrix[R, C]T` syntax | ✅ | ✅ (as `[R][C]T` nested array) |
+| Matrix multiplication (`*`) | ✅ | ✅ |
+| Matrix-vector multiply | ✅ | ✅ |
 | Transpose | ✅ | ❌ |
 | Determinant | ✅ | ❌ |
 | Inverse | ✅ | ❌ |
