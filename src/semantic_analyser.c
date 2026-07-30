@@ -1855,8 +1855,46 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             // Tuple destructuring: a, b := some_tuple
             if (id_count > 1 && init_type != NULL && init_type->kind == TD_KIND_TUPLE)
             {
-                for (size_t vi = 0; vi < id_count && vi < (size_t)init_type->as.tuple.element_count; vi++)
+                // First pass: count new vs existing variables.
+                // In Odin, := with multiple vars is valid if at least one is new.
+                int new_count = 0;
+                bool new_flags[256];
+                size_t max_vi = id_count < (size_t)init_type->as.tuple.element_count ? id_count : (size_t)init_type->as.tuple.element_count;
+                for (size_t vi = 0; vi < max_vi; vi++)
                 {
+                    odin_grammar_node_t * name_node = id_list->list.children[vi];
+                    if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
+                    {
+                        new_flags[vi] = false;
+                        continue;
+                    }
+                    if (strcmp(name_node->text, "_") == 0)
+                    {
+                        new_flags[vi] = false;
+                        continue;
+                    }
+                    symbol_t * existing = scope_symbols_lookup_entry_by_name(
+                        &generator_current_scope(ctx->gen_ctx)->symbols, name_node->text);
+                    if (existing == NULL)
+                    {
+                        new_flags[vi] = true;
+                        new_count++;
+                    }
+                    else
+                    {
+                        new_flags[vi] = false;
+                    }
+                }
+                if (new_count == 0)
+                {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "no new variables on left side of ':='");
+                    sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
+                    break;
+                }
+                for (size_t vi = 0; vi < max_vi; vi++)
+                {
+                    if (!new_flags[vi]) continue;
                     odin_grammar_node_t * name_node = id_list->list.children[vi];
                     if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
                         continue;
@@ -1870,8 +1908,45 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             if (id_count > 1 && init_type != NULL && init_type->kind == TD_KIND_PROC)
             {
                 ProcMetadata const * pm = &init_type->proc_metadata;
-                for (size_t vi = 0; vi < id_count && vi < (size_t)pm->return_count; vi++)
+                // First pass: count new vs existing variables.
+                int new_count = 0;
+                bool new_flags[256];
+                size_t max_vi = id_count < (size_t)pm->return_count ? id_count : (size_t)pm->return_count;
+                for (size_t vi = 0; vi < max_vi; vi++)
                 {
+                    odin_grammar_node_t * name_node = id_list->list.children[vi];
+                    if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
+                    {
+                        new_flags[vi] = false;
+                        continue;
+                    }
+                    if (strcmp(name_node->text, "_") == 0)
+                    {
+                        new_flags[vi] = false;
+                        continue;
+                    }
+                    symbol_t * existing = scope_symbols_lookup_entry_by_name(
+                        &generator_current_scope(ctx->gen_ctx)->symbols, name_node->text);
+                    if (existing == NULL)
+                    {
+                        new_flags[vi] = true;
+                        new_count++;
+                    }
+                    else
+                    {
+                        new_flags[vi] = false;
+                    }
+                }
+                if (new_count == 0)
+                {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "no new variables on left side of ':='");
+                    sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
+                    break;
+                }
+                for (size_t vi = 0; vi < max_vi; vi++)
+                {
+                    if (!new_flags[vi]) continue;
                     odin_grammar_node_t * name_node = id_list->list.children[vi];
                     if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
                         continue;
@@ -1890,6 +1965,26 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 odin_grammar_node_t * name_node = id_list->list.children[0];
                 if (name_node && name_node->type == AST_NODE_IDENTIFIER)
                 {
+                    // Skip registering _ (blank identifier)
+                    if (strcmp(name_node->text, "_") == 0)
+                    {
+                        break;
+                    }
+                    // Check for duplicate variable in the same scope:
+                    // only for := style (no explicit type node), since top-level
+                    // variables with : type are re-processed in pass 2.
+                    if (type_node == NULL)
+                    {
+                        symbol_t * existing = scope_symbols_lookup_entry_by_name(
+                            &generator_current_scope(ctx->gen_ctx)->symbols, name_node->text);
+                        if (existing != NULL)
+                        {
+                            char buf[256];
+                            snprintf(buf, sizeof(buf), "duplicate variable '%s' in the same scope", name_node->text);
+                            sem_error_list_add(&ctx->errors, ctx->source_file_path, name_node, buf);
+                            break;
+                        }
+                    }
                     TypedValue tv = create_typed_value(NULL, var_type, true);
                     scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
                 }
