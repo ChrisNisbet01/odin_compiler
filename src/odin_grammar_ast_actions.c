@@ -299,6 +299,7 @@ DEFINE_ACTION(ast_action_package_clause_action, AST_NODE_PACKAGE_CLAUSE, false)
 DEFINE_ACTION(ast_action_import_action, AST_NODE_IMPORT, false)
 DEFINE_ACTION(ast_action_import_using_action, AST_NODE_IMPORT_USING, false)
 DEFINE_ACTION(ast_action_import_named_action, AST_NODE_IMPORT_NAMED, false)
+DEFINE_ACTION(ast_action_import_require_action, AST_NODE_IMPORT_REQUIRE, false)
 DEFINE_ACTION(ast_action_pointer_type_action, AST_NODE_POINTER_TYPE, false)
 DEFINE_ACTION(ast_action_array_type_action, AST_NODE_ARRAY_TYPE, false)
 DEFINE_ACTION(ast_action_dynamic_array_type_action, AST_NODE_DYNAMIC_ARRAY_TYPE, false)
@@ -475,6 +476,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_IMPORT, ast_action_import_action);
     REGISTER(AST_ACTION_IMPORT_USING, ast_action_import_using_action);
     REGISTER(AST_ACTION_IMPORT_NAMED, ast_action_import_named_action);
+    REGISTER(AST_ACTION_IMPORT_REQUIRE, ast_action_import_require_action);
     REGISTER(AST_ACTION_IDENTIFIER, ast_action_identifier_action);
     REGISTER(AST_ACTION_POLY_IDENT, ast_action_poly_ident_action);
     REGISTER(AST_ACTION_BASIC_TYPE, ast_action_basic_type_action);

@@ -1200,6 +1200,14 @@ sem_analyse_attributes(odin_grammar_node_t * decl_node)
         {
             attrs->is_builtin = true;
         }
+        else if (strcmp(name_node->text, "init") == 0)
+        {
+            attrs->is_init = true;
+        }
+        else if (strcmp(name_node->text, "fini") == 0)
+        {
+            attrs->is_fini = true;
+        }
     }
     decl_node->metadata = attrs;
 }
@@ -1327,6 +1335,14 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                 odin_grammar_node_t * top_decl = ext_decl->list.children[j];
                 if (top_decl == NULL)
                     continue;
+
+                // Handle @require import by unwrapping to the inner import node
+                if (top_decl->type == AST_NODE_IMPORT_REQUIRE)
+                {
+                    if (top_decl->list.count < 1 || top_decl->list.children[0] == NULL)
+                        continue;
+                    top_decl = top_decl->list.children[0];
+                }
 
                 if (top_decl->type == AST_NODE_PACKAGE_CLAUSE)
                 {

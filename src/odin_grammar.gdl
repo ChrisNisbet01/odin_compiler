@@ -164,7 +164,8 @@ AllReservedWords = KwPackage | KwImport | KwForeign
         | KwBitField | KwBitSet | KwIncl | KwExcl
         | KwMaybe
         | KwTypeidOf | KwTypeInfoOf
-        | KwMatrix | KwHashType | KwSimd | KwExpandValues | KwCompressValues | KwSoaZip | KwSoaUnzip;
+        | KwMatrix | KwHashType | KwSimd | KwExpandValues | KwCompressValues | KwSoaZip | KwSoaUnzip
+        | KwRequire;
 
 Identifier = lexeme(not(AllReservedWords) identifier) @AST_ACTION_IDENTIFIER;
 FieldName = lexeme(identifier) @AST_ACTION_IDENTIFIER;
@@ -180,6 +181,7 @@ KwForceInline = lexeme("force_inline" IdBoundary);
 KwNoInline = lexeme("no_inline" IdBoundary);
 KwLoad = lexeme("load" IdBoundary);
 KwAssert = lexeme("assert" IdBoundary);
+KwRequire = lexeme("require" IdBoundary);
 KwNoBoundsCheck = lexeme("no_bounds_check" IdBoundary);
 KwCallerLocation = lexeme("caller_location" IdBoundary);
 KwAlign = lexeme("align" IdBoundary);
@@ -574,6 +576,7 @@ ImportNamed = KwImport Identifier StringLiteral @AST_ACTION_IMPORT_NAMED;
 ImportUsing = KwImport KwUsing StringLiteral @AST_ACTION_IMPORT_USING;
 ImportSimple = KwImport StringLiteral @AST_ACTION_IMPORT;
 ImportDecl = ImportNamed | ImportUsing | ImportSimple;
+ImportRequire = At KwRequire ImportDecl @AST_ACTION_IMPORT_REQUIRE;
 
 IdentifierList = delimited_flex(Identifier, Comma) Comma? @AST_ACTION_IDENTIFIER_LIST;
 VariableDecl = IdentifierList (Colon TypePrefix (Assign ExpressionOrStructLit)? | ColonAssign ExpressionOrStructLit) @AST_ACTION_VARIABLE_DECL;
@@ -602,5 +605,5 @@ TopLevelDeclaration = ForeignImportDecl
                     | VariableDecl
                     | DirectiveWithArgs;
 
-ExternalDeclarations = (PackageClause | ImportDecl | TopLevelDeclaration)+ @AST_ACTION_EXTERNAL_DECLARATIONS;
+ExternalDeclarations = (PackageClause | ImportDecl | ImportRequire | TopLevelDeclaration)+ @AST_ACTION_EXTERNAL_DECLARATIONS;
 Program = ExternalDeclarations eoi @AST_ACTION_PROGRAM;

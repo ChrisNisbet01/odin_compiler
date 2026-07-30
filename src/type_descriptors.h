@@ -95,6 +95,8 @@ typedef struct
     bool require_results;
     bool is_private;
     bool is_builtin;
+    bool is_init;
+    bool is_fini;
 } ProcDeclAttributes;
 
 typedef struct TypeDescriptor
