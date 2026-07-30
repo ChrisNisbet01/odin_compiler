@@ -1973,28 +1973,56 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     }
 
                     case AST_NODE_POSTFIX_SUBSCRIPT:
-                        if (type
-                            && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
-                                || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
+                    {
+                        odin_grammar_node_t * index_node = op->list.children[0];
+                        int index_count = 1;
+                        
+                        if (index_node && index_node->type == AST_NODE_EXPRESSION && index_node->list.count >= 2)
                         {
-                            type = type->element_type;
-                            op->resolved_type = (TypeDescriptor *)type;
+                            index_count = (int)index_node->list.count;
                         }
-                        else if (type && type->kind == TD_KIND_MATRIX)
+                        
+                        for (int idx = 0; idx < index_count; idx++)
                         {
-                            // First subscript on a matrix returns a row (inner array)
-                            type = get_or_create_array_type(
-                                ctx->type_registry, type->as.matrix.element_type, (size_t)type->as.matrix.columns
-                            );
-                            op->resolved_type = (TypeDescriptor *)type;
+                            odin_grammar_node_t * single_index_node = index_node;
+                            if (index_count > 1 && index_node->type == AST_NODE_EXPRESSION)
+                            {
+                                single_index_node = index_node->list.children[idx];
+                            }
+                            
+                            if (type
+                                && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
+                                    || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
+                            {
+                                type = type->element_type;
+                            }
+                            else if (type && type->kind == TD_KIND_MATRIX)
+                            {
+                                if (idx == 0)
+                                {
+                                    type = get_or_create_array_type(
+                                        ctx->type_registry, type->as.matrix.element_type, (size_t)type->as.matrix.columns
+                                    );
+                                }
+                                else
+                                {
+                                    type = type->element_type;
+                                }
+                            }
+                            else if (type && type->kind == TD_KIND_MAP)
+                            {
+                                type = type->as.map.value_type;
+                            }
+                            else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
+                                     && strcmp(type->as.basic.name, "string") == 0)
+                            {
+                                type = get_basic_type_by_name(ctx->type_registry, "u8");
+                            }
                         }
-                        else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
-                                 && strcmp(type->as.basic.name, "string") == 0)
-                        {
-                            type = get_basic_type_by_name(ctx->type_registry, "u8");
-                            op->resolved_type = (TypeDescriptor *)type;
-                        }
-                        break;
+                        
+                        op->resolved_type = (TypeDescriptor *)type;
+                    }
+                    break;
 
                     case AST_NODE_POSTFIX_DEREF:
                         if (type && type->kind == TD_KIND_POINTER)
@@ -2481,30 +2509,59 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
             break;
 
         case AST_NODE_POSTFIX_SUBSCRIPT:
-            if (type
-                && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
-                    || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
             {
-                type = type->element_type;
-                op->resolved_type = (TypeDescriptor *)type;
-            }
-            else if (type && type->kind == TD_KIND_MATRIX)
-            {
-                // First subscript on a matrix returns a row (inner array)
-                type = get_or_create_array_type(
-                    ctx->type_registry, type->as.matrix.element_type, (size_t)type->as.matrix.columns
-                );
-                op->resolved_type = (TypeDescriptor *)type;
-            }
-            else if (type && type->kind == TD_KIND_MAP)
-            {
-                type = type->as.map.value_type;
-                op->resolved_type = (TypeDescriptor *)type;
-            }
-            else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
-                     && strcmp(type->as.basic.name, "string") == 0)
-            {
-                type = get_basic_type_by_name(ctx->type_registry, "u8");
+                odin_grammar_node_t * index_node = op->list.children[0];
+                int index_count = 1;
+                
+                // Check if this is a multi-index subscript (comma-separated indices)
+                // e.g., m[0, 1] should be treated as m[0][1]
+                if (index_node && index_node->type == AST_NODE_EXPRESSION && index_node->list.count >= 2)
+                {
+                    index_count = (int)index_node->list.count;
+                }
+                
+                for (int idx = 0; idx < index_count; idx++)
+                {
+                    odin_grammar_node_t * single_index_node = index_node;
+                    if (index_count > 1 && index_node->type == AST_NODE_EXPRESSION)
+                    {
+                        single_index_node = index_node->list.children[idx];
+                    }
+                    
+                    if (type
+                        && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
+                            || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
+                    {
+                        type = type->element_type;
+                    }
+                    else if (type && type->kind == TD_KIND_MATRIX)
+                    {
+                        // Subscript on a matrix: returns row (inner array) for first index,
+                        // or element for second index when used as multi-index
+                        if (idx == 0)
+                        {
+                            // First index: return row
+                            type = get_or_create_array_type(
+                                ctx->type_registry, type->as.matrix.element_type, (size_t)type->as.matrix.columns
+                            );
+                        }
+                        else
+                        {
+                            // Second index (or subsequent): return element
+                            type = type->element_type;
+                        }
+                    }
+                    else if (type && type->kind == TD_KIND_MAP)
+                    {
+                        type = type->as.map.value_type;
+                    }
+                    else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
+                             && strcmp(type->as.basic.name, "string") == 0)
+                    {
+                        type = get_basic_type_by_name(ctx->type_registry, "u8");
+                    }
+                }
+                
                 op->resolved_type = (TypeDescriptor *)type;
             }
             break;

@@ -318,16 +318,71 @@ ir_gen_lvalue_postfix_subscript(IrGenContext * ctx, LLVMValueRef * ptr,
         return false;
     }
 
+    if (*cur_type == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, op, "subscript target has unknown type");
+        return false;
+    }
+
+    // Check for multi-index subscript (comma-separated indices) for matrices
+    if (index_expr->type == AST_NODE_EXPRESSION && index_expr->list.count >= 2
+        && (*cur_type)->kind == TD_KIND_MATRIX)
+    {
+        int index_count = (int)index_expr->list.count;
+        if (index_count == 2)
+        {
+            odin_grammar_node_t * row_node = index_expr->list.children[0];
+            odin_grammar_node_t * col_node = index_expr->list.children[1];
+            
+            if (row_node == NULL || col_node == NULL)
+            {
+                ir_gen_error_collection_add(&ctx->errors, NULL, op, "invalid multi-index subscript");
+                return false;
+            }
+            
+            LLVMValueRef row_idx = ir_gen_node(ctx, row_node);
+            LLVMValueRef col_idx = ir_gen_node(ctx, col_node);
+            
+            if (row_idx == NULL || col_idx == NULL)
+            {
+                ir_gen_error_collection_add(&ctx->errors, NULL, index_expr, "failed to evaluate subscript index");
+                return false;
+            }
+            
+            TypeDescriptor const * mtx = *cur_type;
+            TypeDescriptor const * elem_type = mtx->as.matrix.element_type;
+            
+            if (ctx->bounds_checking_enabled)
+            {
+                LLVMValueRef row_len = LLVMConstInt(
+                    LLVMInt64TypeInContext(ctx->context), mtx->as.matrix.rows, false
+                );
+                row_idx = ir_gen_emit_bounds_check(ctx, row_idx, row_len, op);
+                
+                LLVMValueRef col_len = LLVMConstInt(
+                    LLVMInt64TypeInContext(ctx->context), mtx->as.matrix.columns, false
+                );
+                col_idx = ir_gen_emit_bounds_check(ctx, col_idx, col_len, op);
+            }
+            
+            // Use combined GEP with 3 indices: [0, row, col]
+            // This is equivalent to m[row][col] for a matrix [rows x [cols x T]]
+            LLVMTypeRef mtx_type = mtx->llvm_type;
+            LLVMValueRef combined_indices[] = {
+                LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false),
+                row_idx,
+                col_idx
+            };
+            *ptr = LLVMBuildInBoundsGEP2(ctx->builder, mtx_type, *ptr, combined_indices, 3, "mat.elem");
+            *cur_type = elem_type;
+            return true;
+        }
+    }
+
     LLVMValueRef index_val = ir_gen_node(ctx, index_expr);
     if (index_val == NULL)
     {
         ir_gen_error_collection_add(&ctx->errors, NULL, op, "failed to evaluate subscript index");
-        return false;
-    }
-
-    if (*cur_type == NULL)
-    {
-        ir_gen_error_collection_add(&ctx->errors, NULL, op, "subscript target has unknown type");
         return false;
     }
 
@@ -359,7 +414,7 @@ ir_gen_lvalue_postfix_subscript(IrGenContext * ctx, LLVMValueRef * ptr,
             index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
         }
         LLVMTypeRef mtx_type = mtx->llvm_type;
-        LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false), index_val};
+        LLVMValueRef indices[] = {LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false), index_val};
         *ptr = LLVMBuildInBoundsGEP2(ctx->builder, mtx_type, *ptr, indices, 2, "row");
 
         // Update cur_type to inner array type [cols x T] so the next subscript works
