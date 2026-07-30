@@ -4,12 +4,11 @@
 #include "package_resolver.h"
 #include "polymorphism.h"
 #include "scope.h"
+#include "sem_check.h"
+#include "sem_context.h"
+#include "sem_type_resolver.h"
 #include "symbols.h"
 #include "typed_value.h"
-
-#include "sem_context.h"
-#include "sem_check.h"
-#include "sem_type_resolver.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +26,11 @@ static void sem_analyse_attributes(odin_grammar_node_t * decl_node);
 long long
 sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok)
 {
-    if (node == NULL) { *ok = 0; return 0; }
+    if (node == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
 
     // Unwrap through expression chain to reach a node type we can evaluate
     while (1)
@@ -56,8 +59,7 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
             if (node->list.count >= 2 && node->list.children[1] != NULL)
             {
                 odin_grammar_node_t * postfix_ops = node->list.children[1];
-                if (postfix_ops->list.count > 0
-                    && postfix_ops->list.children[0] != NULL
+                if (postfix_ops->list.count > 0 && postfix_ops->list.children[0] != NULL
                     && postfix_ops->list.children[0]->type == AST_NODE_POSTFIX_MEMBER)
                     can_eval = 1;
             }
@@ -70,15 +72,20 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
         if ((node->type == AST_NODE_POSTFIX_EXPRESSION || node->list.count == 1) && node->list.children[0])
             node = node->list.children[0];
         else
-            { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
     }
 
     switch (node->type)
     {
     case AST_NODE_BOOL_TRUE:
-        *ok = 1; return 1;
+        *ok = 1;
+        return 1;
     case AST_NODE_BOOL_FALSE:
-        *ok = 1; return 0;
+        *ok = 1;
+        return 0;
 
     case AST_NODE_IDENTIFIER:
     {
@@ -96,29 +103,47 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
     {
         // Package-qualified constant: e.g. os.O_WRONLY
         if (node->list.count < 2 || node->list.children[0] == NULL || node->list.children[1] == NULL)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         odin_grammar_node_t * inner = node->list.children[0];
         // Unwrap to identifier
         while (inner != NULL && inner->type != AST_NODE_IDENTIFIER && inner->list.count >= 1)
             inner = inner->list.children[0];
         if (inner == NULL || inner->type != AST_NODE_IDENTIFIER)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         ImportedPackage * pkg = find_imported_package_by_name(ctx, inner->text);
         if (pkg == NULL || pkg->package_scope == NULL)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         odin_grammar_node_t * postfix_ops = node->list.children[1];
         if (postfix_ops == NULL || postfix_ops->list.count == 0)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         odin_grammar_node_t * member_op = postfix_ops->list.children[0];
         if (member_op == NULL || member_op->type != AST_NODE_POSTFIX_MEMBER)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         if (member_op->list.count < 1 || member_op->list.children[0] == NULL)
-        { *ok = 0; return 0; }
+        {
+            *ok = 0;
+            return 0;
+        }
 
         char const * member_name = member_op->list.children[0]->text;
         symbol_t * sym = scope_find_symbol_entry(pkg->package_scope, member_name);
@@ -133,10 +158,18 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
 
     case AST_NODE_INTEGER_VALUE:
     {
-        if (node->text == NULL) { *ok = 0; return 0; }
+        if (node->text == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
         char * end = NULL;
         long long val = parse_odin_signed(node->text, &end, 0);
-        if (end == node->text) { *ok = 0; return 0; }
+        if (end == node->text)
+        {
+            *ok = 0;
+            return 0;
+        }
         *ok = 1;
         return val;
     }
@@ -144,29 +177,59 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
     case AST_NODE_UNARY_EXPRESSION:
     {
         odin_grammar_node_t * op_node = node_find_op(node);
-        if (op_node == NULL) { *ok = 0; return 0; }
+        if (op_node == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
         AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
-        if (md == NULL) { *ok = 0; return 0; }
+        if (md == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         odin_grammar_node_t * operand = NULL;
         for (size_t i = 0; i < node->list.count; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
-            if (child != NULL && child != op_node) { operand = child; break; }
+            if (child != NULL && child != op_node)
+            {
+                operand = child;
+                break;
+            }
         }
-        if (operand == NULL) { *ok = 0; return 0; }
+        if (operand == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         int inner_ok = 0;
         long long inner_val = sem_evaluate_constant_int(ctx, operand, &inner_ok);
-        if (!inner_ok) { *ok = 0; return 0; }
+        if (!inner_ok)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         switch (md->kind)
         {
-        case OP_UNARY_NEG: *ok = 1; return -inner_val;
-        case OP_UNARY_POS: *ok = 1; return inner_val;
-        case OP_UNARY_XOR: *ok = 1; return ~inner_val;
-        case OP_UNARY_NOT: *ok = 1; return inner_val ? 0 : 1;
-        default: *ok = 0; return 0;
+        case OP_UNARY_NEG:
+            *ok = 1;
+            return -inner_val;
+        case OP_UNARY_POS:
+            *ok = 1;
+            return inner_val;
+        case OP_UNARY_XOR:
+            *ok = 1;
+            return ~inner_val;
+        case OP_UNARY_NOT:
+            *ok = 1;
+            return inner_val ? 0 : 1;
+        default:
+            *ok = 0;
+            return 0;
         }
     }
 
@@ -181,35 +244,95 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
     case AST_NODE_LOG_OR_EXPRESSION:
     {
         odin_grammar_node_t * op_node = node_find_op(node);
-        if (op_node == NULL) { *ok = 0; return 0; }
+        if (op_node == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
         AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
-        if (md == NULL) { *ok = 0; return 0; }
-        if (node->list.count < 3) { *ok = 0; return 0; }
+        if (md == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
+        if (node->list.count < 3)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         int lhs_ok = 0, rhs_ok = 0;
         long long lhs_val = sem_evaluate_constant_int(ctx, node->list.children[0], &lhs_ok);
         long long rhs_val = sem_evaluate_constant_int(ctx, node->list.children[node->list.count - 1], &rhs_ok);
-        if (!lhs_ok || !rhs_ok) { *ok = 0; return 0; }
+        if (!lhs_ok || !rhs_ok)
+        {
+            *ok = 0;
+            return 0;
+        }
 
         switch (md->kind)
         {
-        case OP_ADD: *ok = 1; return lhs_val + rhs_val;
-        case OP_SUB: *ok = 1; return lhs_val - rhs_val;
-        case OP_MUL: *ok = 1; return lhs_val * rhs_val;
-        case OP_DIV: if (rhs_val == 0) { *ok = 0; return 0; } *ok = 1; return lhs_val / rhs_val;
-        case OP_MOD: if (rhs_val == 0) { *ok = 0; return 0; } *ok = 1; return lhs_val % rhs_val;
-        case OP_SHL: *ok = 1; return lhs_val << rhs_val;
-        case OP_SHR: *ok = 1; return lhs_val >> rhs_val;
-        case OP_BIT_AND: *ok = 1; return lhs_val & rhs_val;
-        case OP_BIT_OR:  *ok = 1; return lhs_val | rhs_val;
-        case OP_BIT_XOR: *ok = 1; return lhs_val ^ rhs_val;
-        case OP_EQ: *ok = 1; return (lhs_val == rhs_val) ? 1 : 0;
-        case OP_NE: *ok = 1; return (lhs_val != rhs_val) ? 1 : 0;
-        case OP_LT: *ok = 1; return (lhs_val < rhs_val) ? 1 : 0;
-        case OP_GT: *ok = 1; return (lhs_val > rhs_val) ? 1 : 0;
-        case OP_LE: *ok = 1; return (lhs_val <= rhs_val) ? 1 : 0;
-        case OP_GE: *ok = 1; return (lhs_val >= rhs_val) ? 1 : 0;
-        default: *ok = 0; return 0;
+        case OP_ADD:
+            *ok = 1;
+            return lhs_val + rhs_val;
+        case OP_SUB:
+            *ok = 1;
+            return lhs_val - rhs_val;
+        case OP_MUL:
+            *ok = 1;
+            return lhs_val * rhs_val;
+        case OP_DIV:
+            if (rhs_val == 0)
+            {
+                *ok = 0;
+                return 0;
+            }
+            *ok = 1;
+            return lhs_val / rhs_val;
+        case OP_MOD:
+            if (rhs_val == 0)
+            {
+                *ok = 0;
+                return 0;
+            }
+            *ok = 1;
+            return lhs_val % rhs_val;
+        case OP_SHL:
+            *ok = 1;
+            return lhs_val << rhs_val;
+        case OP_SHR:
+            *ok = 1;
+            return lhs_val >> rhs_val;
+        case OP_BIT_AND:
+            *ok = 1;
+            return lhs_val & rhs_val;
+        case OP_BIT_OR:
+            *ok = 1;
+            return lhs_val | rhs_val;
+        case OP_BIT_XOR:
+            *ok = 1;
+            return lhs_val ^ rhs_val;
+        case OP_EQ:
+            *ok = 1;
+            return (lhs_val == rhs_val) ? 1 : 0;
+        case OP_NE:
+            *ok = 1;
+            return (lhs_val != rhs_val) ? 1 : 0;
+        case OP_LT:
+            *ok = 1;
+            return (lhs_val < rhs_val) ? 1 : 0;
+        case OP_GT:
+            *ok = 1;
+            return (lhs_val > rhs_val) ? 1 : 0;
+        case OP_LE:
+            *ok = 1;
+            return (lhs_val <= rhs_val) ? 1 : 0;
+        case OP_GE:
+            *ok = 1;
+            return (lhs_val >= rhs_val) ? 1 : 0;
+        default:
+            *ok = 0;
+            return 0;
         }
     }
 
@@ -353,10 +476,16 @@ sem_analyse_compound_statement(
 }
 
 static TypeDescriptor const *
-sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
-                                TypeDescriptor const *** out_param_types, int * out_param_count,
-                                TypeDescriptor const ** out_return_type, int * out_return_count,
-                                calling_convention_t * out_cc, bool * out_is_variadic)
+sem_resolve_procedure_signature(
+    SemContext * ctx,
+    odin_grammar_node_t * node,
+    TypeDescriptor const *** out_param_types,
+    int * out_param_count,
+    TypeDescriptor const ** out_return_type,
+    int * out_return_count,
+    calling_convention_t * out_cc,
+    bool * out_is_variadic
+)
 {
     TypeDescriptor const * return_type = NULL;
     TypeDescriptor const ** return_types = NULL;
@@ -471,9 +600,11 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
                     odin_grammar_node_t * child = param->list.children[ci];
                     if (child == NULL)
                         continue;
-                    if ((child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT) && param_ident == NULL)
+                    if ((child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT)
+                        && param_ident == NULL)
                         param_ident = child;
-                    else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child) || child->type == AST_NODE_POLY_IDENT)
+                    else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child)
+                             || child->type == AST_NODE_POLY_IDENT)
                         param_type_node = child;
                 }
                 // Detect default value: last child that is not the identifier,
@@ -519,8 +650,7 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
                 bool is_variadic_param = false;
                 for (size_t ci = 0; ci < param->list.count; ci++)
                 {
-                    if (param->list.children[ci] != NULL
-                        && param->list.children[ci]->type == AST_NODE_ELLIPSIS)
+                    if (param->list.children[ci] != NULL && param->list.children[ci]->type == AST_NODE_ELLIPSIS)
                     {
                         is_variadic_param = true;
                         break;
@@ -618,7 +748,14 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
     }
 
     TypeDescriptor const * proc_type = get_or_create_proc_type(
-        ctx->type_registry, return_type, param_types, param_count, return_types, return_count, is_variadic, cc,
+        ctx->type_registry,
+        return_type,
+        param_types,
+        param_count,
+        return_types,
+        return_count,
+        is_variadic,
+        cc,
         has_any_defaults
     );
 
@@ -636,12 +773,20 @@ sem_resolve_procedure_signature(SemContext * ctx, odin_grammar_node_t * node,
     }
     free(default_value_nodes);
 
-    if (out_param_types) *out_param_types = param_types; else free(param_types);
-    if (out_param_count) *out_param_count = param_count;
-    if (out_return_type) *out_return_type = return_type;
-    if (out_return_count) *out_return_count = return_count;
-    if (out_cc) *out_cc = cc;
-    if (out_is_variadic) *out_is_variadic = is_variadic;
+    if (out_param_types)
+        *out_param_types = param_types;
+    else
+        free(param_types);
+    if (out_param_count)
+        *out_param_count = param_count;
+    if (out_return_type)
+        *out_return_type = return_type;
+    if (out_return_count)
+        *out_return_count = return_count;
+    if (out_cc)
+        *out_cc = cc;
+    if (out_is_variadic)
+        *out_is_variadic = is_variadic;
 
     if (return_types && out_return_count == NULL)
         free((void *)return_types);
@@ -820,8 +965,8 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
 
     if (comp_stmt_node)
     {
-        TypeDescriptor const * expected_ret = node->resolved_type
-            ? node->resolved_type : type_descriptor_get_void_type(ctx->type_registry);
+        TypeDescriptor const * expected_ret
+            = node->resolved_type ? node->resolved_type : type_descriptor_get_void_type(ctx->type_registry);
         sem_analyse_compound_statement(ctx, comp_stmt_node, expected_ret);
     }
 
@@ -871,69 +1016,66 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-        TypeDescriptor const * resolved_type = NULL;
-        if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_DEFINITION)
+    TypeDescriptor const * resolved_type = NULL;
+    if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_DEFINITION)
+    {
+        resolved_type = sem_resolve_procedure_signature(ctx, value_node, NULL, NULL, NULL, NULL, NULL, NULL);
+    }
+    else if (value_node != NULL && value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
+    {
+        int candidate_count = (int)value_node->list.count;
+        if (candidate_count > 0)
         {
-            resolved_type = sem_resolve_procedure_signature(ctx, value_node, NULL, NULL, NULL, NULL, NULL, NULL);
-        }
-        else if (value_node != NULL && value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
-        {
-            int candidate_count = (int)value_node->list.count;
-            if (candidate_count > 0)
+            TypeDescriptor const ** candidate_types
+                = (TypeDescriptor const **)malloc((size_t)candidate_count * sizeof(TypeDescriptor const *));
+            symbol_t ** candidate_symbols = (symbol_t **)malloc((size_t)candidate_count * sizeof(symbol_t *));
+            int valid_count = 0;
+            for (int i = 0; i < candidate_count; i++)
             {
-                TypeDescriptor const ** candidate_types = (TypeDescriptor const **)malloc(
-                    (size_t)candidate_count * sizeof(TypeDescriptor const *)
-                );
-                symbol_t ** candidate_symbols = (symbol_t **)malloc(
-                    (size_t)candidate_count * sizeof(symbol_t *)
-                );
-                int valid_count = 0;
-                for (int i = 0; i < candidate_count; i++)
+                odin_grammar_node_t * id_node = value_node->list.children[i];
+                if (id_node == NULL || id_node->type != AST_NODE_IDENTIFIER || id_node->text == NULL)
+                    continue;
+                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), id_node->text);
+                if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
                 {
-                    odin_grammar_node_t * id_node = value_node->list.children[i];
-                    if (id_node == NULL || id_node->type != AST_NODE_IDENTIFIER || id_node->text == NULL)
-                        continue;
-                    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), id_node->text);
-                    if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
-                    {
-                        candidate_types[valid_count] = sym->value.type_info;
-                        candidate_symbols[valid_count] = sym;
-                        valid_count++;
-                    }
-                    else if (sym && sym->is_polymorphic)
-                    {
-                        candidate_types[valid_count] = NULL;
-                        candidate_symbols[valid_count] = sym;
-                        valid_count++;
-                    }
-                    else
-                    {
-                        char buf[256];
-                        snprintf(buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text);
-                        sem_error_list_add(&ctx->errors, NULL, id_node, buf);
-                    }
+                    candidate_types[valid_count] = sym->value.type_info;
+                    candidate_symbols[valid_count] = sym;
+                    valid_count++;
                 }
-                if (valid_count > 0)
+                else if (sym && sym->is_polymorphic)
                 {
-                    resolved_type = get_or_create_overload_bundle_type(
-                        ctx->type_registry, candidate_types, candidate_symbols, valid_count
-                    );
-                    value_node->resolved_type = (TypeDescriptor *)resolved_type;
+                    candidate_types[valid_count] = NULL;
+                    candidate_symbols[valid_count] = sym;
+                    valid_count++;
                 }
-                free(candidate_types);
-                free(candidate_symbols);
+                else
+                {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text);
+                    sem_error_list_add(&ctx->errors, NULL, id_node, buf);
+                }
             }
+            if (valid_count > 0)
+            {
+                resolved_type = get_or_create_overload_bundle_type(
+                    ctx->type_registry, candidate_types, candidate_symbols, valid_count
+                );
+                value_node->resolved_type = (TypeDescriptor *)resolved_type;
+            }
+            free(candidate_types);
+            free(candidate_symbols);
         }
-        else if (value_node != NULL && is_type_node(value_node))
-        {
-            resolved_type = sem_resolve_type_expr(ctx, value_node);
-            value_node->resolved_type = (TypeDescriptor *)resolved_type;
-        }
-        else if (value_node != NULL && value_node->type == AST_NODE_IDENTIFIER)
-        {
-            resolved_type = sem_resolve_type_expr(ctx, value_node);
-            value_node->resolved_type = (TypeDescriptor *)resolved_type;
-        }
+    }
+    else if (value_node != NULL && is_type_node(value_node))
+    {
+        resolved_type = sem_resolve_type_expr(ctx, value_node);
+        value_node->resolved_type = (TypeDescriptor *)resolved_type;
+    }
+    else if (value_node != NULL && value_node->type == AST_NODE_IDENTIFIER)
+    {
+        resolved_type = sem_resolve_type_expr(ctx, value_node);
+        value_node->resolved_type = (TypeDescriptor *)resolved_type;
+    }
 
     if (name_node->type == AST_NODE_IDENTIFIER)
     {
@@ -978,8 +1120,7 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         // $T / $N poly identifiers in its parameter list. Polymorphic struct
         // types are NOT resolved standalone; usage sites instantiate
         // specializations via TypeApplication (e.g., Box(int)).
-        if (value_node != NULL && value_node->type == AST_NODE_STRUCT_TYPE
-            && poly_struct_has_type_params(value_node))
+        if (value_node != NULL && value_node->type == AST_NODE_STRUCT_TYPE && poly_struct_has_type_params(value_node))
         {
             symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
             if (sym)
@@ -993,8 +1134,7 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
 
         // Mark the symbol as polymorphic if its enum type uses any
         // $T / $N poly identifiers in its parameter list.
-        if (value_node != NULL && value_node->type == AST_NODE_ENUM_TYPE
-            && poly_type_has_type_params(value_node))
+        if (value_node != NULL && value_node->type == AST_NODE_ENUM_TYPE && poly_type_has_type_params(value_node))
         {
             symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
             if (sym)
@@ -1007,8 +1147,7 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
 
         // Mark the symbol as polymorphic if its union type uses any
         // $T / $N poly identifiers in its parameter list.
-        if (value_node != NULL && value_node->type == AST_NODE_UNION_TYPE
-            && poly_type_has_type_params(value_node))
+        if (value_node != NULL && value_node->type == AST_NODE_UNION_TYPE && poly_type_has_type_params(value_node))
         {
             symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
             if (sym)
@@ -1020,7 +1159,8 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
         }
 
         // Try to evaluate as a compile-time integer constant
-        if (value_node != NULL && value_node->type != AST_NODE_PROCEDURE_DEFINITION && value_node->type != AST_NODE_PROC_OVERLOAD_BUNDLE)
+        if (value_node != NULL && value_node->type != AST_NODE_PROCEDURE_DEFINITION
+            && value_node->type != AST_NODE_PROC_OVERLOAD_BUNDLE)
         {
             int const_ok = 0;
             long long const_val = sem_evaluate_constant_int(ctx, value_node, &const_ok);
@@ -1215,7 +1355,8 @@ sem_analyse_attributes(odin_grammar_node_t * decl_node)
 static bool
 has_odin_extension(char const * path)
 {
-    if (path == NULL) return false;
+    if (path == NULL)
+        return false;
     size_t len = strlen(path);
     return (len > 5 && strcmp(path + len - 5, ".odin") == 0);
 }
@@ -1237,7 +1378,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
     if (program_ast == NULL)
         return;
 
-    // Auto-import core:runtime as an implicit using import (prelude)
+    // Auto-import base:runtime as an implicit using import (prelude)
     // Check if runtime is already imported by checking all existing imports
     bool runtime_already_imported = false;
     for (int ri = 0; ri < ctx->import_count; ri++)
@@ -1250,7 +1391,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
     }
     if (!runtime_already_imported)
     {
-        char * runtime_path = resolve_import_path("core:runtime", ctx->source_dir, ctx->odin_root);
+        char * runtime_path = resolve_import_path("base:runtime", ctx->source_dir, ctx->odin_root);
         if (runtime_path)
         {
             ImportedPackage * rp = parse_imported_path(runtime_path, ctx->parser, ctx->hook_registry);
@@ -1313,9 +1454,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
             if (cur != ctx->imports[ri]->package_scope)
             {
                 generic_hash_table_iterate(
-                    ctx->imports[ri]->package_scope->symbols.by_name,
-                    import_using_copy_symbol,
-                    cur
+                    ctx->imports[ri]->package_scope->symbols.by_name, import_using_copy_symbol, cur
                 );
             }
             break;
@@ -1875,7 +2014,9 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 // In Odin, := with multiple vars is valid if at least one is new.
                 int new_count = 0;
                 bool new_flags[256];
-                size_t max_vi = id_count < (size_t)init_type->as.tuple.element_count ? id_count : (size_t)init_type->as.tuple.element_count;
+                size_t max_vi = id_count < (size_t)init_type->as.tuple.element_count
+                                    ? id_count
+                                    : (size_t)init_type->as.tuple.element_count;
                 for (size_t vi = 0; vi < max_vi; vi++)
                 {
                     odin_grammar_node_t * name_node = id_list->list.children[vi];
@@ -1890,7 +2031,8 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                         continue;
                     }
                     symbol_t * existing = scope_symbols_lookup_entry_by_name(
-                        &generator_current_scope(ctx->gen_ctx)->symbols, name_node->text);
+                        &generator_current_scope(ctx->gen_ctx)->symbols, name_node->text
+                    );
                     if (existing == NULL)
                     {
                         new_flags[vi] = true;
@@ -1910,7 +2052,8 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 }
                 for (size_t vi = 0; vi < max_vi; vi++)
                 {
-                    if (!new_flags[vi]) continue;
+                    if (!new_flags[vi])
+                        continue;
                     odin_grammar_node_t * name_node = id_list->list.children[vi];
                     if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
                         continue;
@@ -1942,7 +2085,8 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                         continue;
                     }
                     symbol_t * existing = scope_symbols_lookup_entry_by_name(
-                        &generator_current_scope(ctx->gen_ctx)->symbols, name_node->text);
+                        &generator_current_scope(ctx->gen_ctx)->symbols, name_node->text
+                    );
                     if (existing == NULL)
                     {
                         new_flags[vi] = true;
@@ -1962,7 +2106,8 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 }
                 for (size_t vi = 0; vi < max_vi; vi++)
                 {
-                    if (!new_flags[vi]) continue;
+                    if (!new_flags[vi])
+                        continue;
                     odin_grammar_node_t * name_node = id_list->list.children[vi];
                     if (name_node == NULL || name_node->type != AST_NODE_IDENTIFIER)
                         continue;
@@ -1992,7 +2137,8 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                     if (type_node == NULL)
                     {
                         symbol_t * existing = scope_symbols_lookup_entry_by_name(
-                            &generator_current_scope(ctx->gen_ctx)->symbols, name_node->text);
+                            &generator_current_scope(ctx->gen_ctx)->symbols, name_node->text
+                        );
                         if (existing != NULL)
                         {
                             char buf[256];
@@ -2047,12 +2193,10 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             if (attrs == NULL || !attrs->is_builtin)
             {
                 char mangled[512];
-                int len = snprintf(mangled, sizeof(mangled), "%s.%s",
-                                   ctx->package_name, name_node->text);
+                int len = snprintf(mangled, sizeof(mangled), "%s.%s", ctx->package_name, name_node->text);
                 if (len > 0 && len < (int)sizeof(mangled))
                 {
-                    symbol_t * sym = scope_find_symbol_entry(
-                        generator_current_scope(ctx->gen_ctx), name_node->text);
+                    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
                     if (sym)
                         sym->llvm_name = strdup(mangled);
                 }
@@ -2136,12 +2280,9 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             int candidate_count = (int)value_node->list.count;
             if (candidate_count > 0)
             {
-                TypeDescriptor const ** candidate_types = (TypeDescriptor const **)malloc(
-                    (size_t)candidate_count * sizeof(TypeDescriptor const *)
-                );
-                symbol_t ** candidate_symbols = (symbol_t **)malloc(
-                    (size_t)candidate_count * sizeof(symbol_t *)
-                );
+                TypeDescriptor const ** candidate_types
+                    = (TypeDescriptor const **)malloc((size_t)candidate_count * sizeof(TypeDescriptor const *));
+                symbol_t ** candidate_symbols = (symbol_t **)malloc((size_t)candidate_count * sizeof(symbol_t *));
                 int valid_count = 0;
                 for (int i = 0; i < candidate_count; i++)
                 {
@@ -2164,7 +2305,9 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                     else
                     {
                         char buf[256];
-                        snprintf(buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text);
+                        snprintf(
+                            buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text
+                        );
                         sem_error_list_add(&ctx->errors, NULL, id_node, buf);
                     }
                 }
@@ -2207,13 +2350,16 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         // Error: main proc must not have a return type; use os.exit() to set exit codes
         if (value_node->type == AST_NODE_PROCEDURE_DEFINITION && strcmp(name_node->text, "main") == 0)
         {
-            if (val_type != NULL && val_type->kind == TD_KIND_PROC
-                && val_type->proc_metadata.return_count > 0
+            if (val_type != NULL && val_type->kind == TD_KIND_PROC && val_type->proc_metadata.return_count > 0
                 && val_type->proc_metadata.return_type != NULL
                 && val_type->proc_metadata.return_type != type_descriptor_get_void_type(ctx->type_registry))
             {
-                sem_error_list_add(&ctx->errors, NULL, name_node,
-                                   "main procedure must not return a value; use os.exit() to set exit codes");
+                sem_error_list_add(
+                    &ctx->errors,
+                    NULL,
+                    name_node,
+                    "main procedure must not return a value; use os.exit() to set exit codes"
+                );
             }
         }
         break;
@@ -2260,18 +2406,12 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             {
                 sem_pass2_node(ctx, child, expected_return_type);
             }
-            else if (child->type == AST_NODE_EXPRESSION_STATEMENT
-                     || child->type == AST_NODE_ASSIGN_STATEMENT
-                     || child->type == AST_NODE_VARIABLE_DECL
-                     || child->type == AST_NODE_CONSTANT_DECL
-                     || child->type == AST_NODE_RETURN_STATEMENT
-                     || child->type == AST_NODE_BREAK_STATEMENT
-                     || child->type == AST_NODE_CONTINUE_STATEMENT
-                     || child->type == AST_NODE_DEFER_STATEMENT
-                     || child->type == AST_NODE_FALLTHROUGH_STATEMENT
-                     || child->type == AST_NODE_FOR_STATEMENT
-                     || child->type == AST_NODE_SWITCH_STATEMENT
-                     || child->type == AST_NODE_WHEN_STATEMENT)
+            else if (child->type == AST_NODE_EXPRESSION_STATEMENT || child->type == AST_NODE_ASSIGN_STATEMENT
+                     || child->type == AST_NODE_VARIABLE_DECL || child->type == AST_NODE_CONSTANT_DECL
+                     || child->type == AST_NODE_RETURN_STATEMENT || child->type == AST_NODE_BREAK_STATEMENT
+                     || child->type == AST_NODE_CONTINUE_STATEMENT || child->type == AST_NODE_DEFER_STATEMENT
+                     || child->type == AST_NODE_FALLTHROUGH_STATEMENT || child->type == AST_NODE_FOR_STATEMENT
+                     || child->type == AST_NODE_SWITCH_STATEMENT || child->type == AST_NODE_WHEN_STATEMENT)
             {
                 // `if cond do stmt` form — analyse the statement directly
                 generator_push_scope(ctx->gen_ctx);
@@ -2409,10 +2549,10 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         // Only relevant if the switch type is an enum
         long long covered_values[64];
         int covered_count = 0;
-        bool can_check_exhaustiveness = (switch_type != NULL && switch_type->kind == TD_KIND_ENUM
-                                         && !has_default && !is_partial
-                                         && switch_type->as.enum_type.enumerator_count > 0
-                                         && switch_type->as.enum_type.enumerator_values != NULL);
+        bool can_check_exhaustiveness
+            = (switch_type != NULL && switch_type->kind == TD_KIND_ENUM && !has_default && !is_partial
+               && switch_type->as.enum_type.enumerator_count > 0
+               && switch_type->as.enum_type.enumerator_values != NULL);
 
         for (size_t i = 0; i < node->list.count; i++)
         {
@@ -2450,16 +2590,15 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                             symbol_t * case_sym = NULL;
                             odin_grammar_node_t * ident = case_child;
                             // Unwrap expression wrappers to find identifier
-                            while (ident != NULL
-                                   && ident->type != AST_NODE_IDENTIFIER
-                                   && ident->list.count > 0)
+                            while (ident != NULL && ident->type != AST_NODE_IDENTIFIER && ident->list.count > 0)
                             {
                                 ident = ident->list.children[0];
                             }
                             // Try to get the constant int value of the case expression
                             if (ident != NULL && ident->type == AST_NODE_IDENTIFIER && ident->text != NULL)
                             {
-                                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
+                                symbol_t * sym
+                                    = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
                                 if (sym && sym->has_const_int_val)
                                     covered_values[covered_count++] = sym->const_int_val;
                             }
@@ -2518,8 +2657,12 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 if (!found)
                 {
                     char buf[256];
-                    snprintf(buf, sizeof(buf), "switch is not exhaustive: missing case for enum value '%s'",
-                             enum_names[ei] ? enum_names[ei] : "<unknown>");
+                    snprintf(
+                        buf,
+                        sizeof(buf),
+                        "switch is not exhaustive: missing case for enum value '%s'",
+                        enum_names[ei] ? enum_names[ei] : "<unknown>"
+                    );
                     sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
                 }
             }
