@@ -456,6 +456,8 @@ DEFINE_TERMINAL_ACTION(ast_action_ellipsis_action, AST_NODE_ELLIPSIS)
 DEFINE_TERMINAL_ACTION(ast_action_triple_dash_action, AST_NODE_TRIPLE_DASH)
 DEFINE_TERMINAL_ACTION(ast_action_directive_action, AST_NODE_DIRECTIVE)
 DEFINE_TERMINAL_ACTION(ast_action_directive_with_args_action, AST_NODE_DIRECTIVE_WITH_ARGS)
+DEFINE_TERMINAL_ACTION(ast_action_spec_operator_action, AST_NODE_SPEC_OPERATOR)
+DEFINE_ACTION(ast_action_spec_type_action, AST_NODE_SPEC_TYPE, false)
 
 #undef DEFINE_ACTION
 #undef DEFINE_TERMINAL_ACTION
@@ -560,6 +562,8 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_PROCEDURE_DEFINITION, ast_action_procedure_definition_action);
     REGISTER(AST_ACTION_VECTOR_TYPE, ast_action_vector_type_action);
     REGISTER(AST_ACTION_MATRIX_TYPE, ast_action_matrix_type_action);
+    REGISTER(AST_ACTION_SPEC_OPERATOR, ast_action_spec_operator_action);
+    REGISTER(AST_ACTION_SPEC_TYPE, ast_action_spec_type_action);
     REGISTER(AST_ACTION_TUPLE_TYPE, ast_action_tuple_type_action);
     REGISTER(AST_ACTION_IDENTIFIER_LIST, ast_action_identifier_list_action);
     REGISTER(AST_ACTION_VARIABLE_DECL, ast_action_variable_decl_action);

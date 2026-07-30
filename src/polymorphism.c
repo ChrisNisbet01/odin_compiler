@@ -1020,6 +1020,30 @@ poly_unify_poly_idents_in_type(
     {
         poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
     }
+    // SpecType: $M/[pattern] — bind $M to full concrete type and validate
+    // pattern against it.
+    else if (param_ast->type == AST_NODE_SPEC_TYPE)
+    {
+        // Children: [PolyIdent($M), SpecOperator, PatternType]
+        odin_grammar_node_t * poly_ident = (param_ast->list.count >= 1)
+            ? param_ast->list.children[0] : NULL;
+        odin_grammar_node_t * pattern = (param_ast->list.count >= 3)
+            ? param_ast->list.children[2] : NULL;
+        if (poly_ident && poly_ident->type == AST_NODE_POLY_IDENT)
+        {
+            // Bind $M to the full concrete arg type
+            poly_bind_poly_ident_type(poly_ident, arg_td, env);
+        }
+        if (pattern)
+        {
+            // Recurse into the pattern to bind nested polys and validate
+            // structural constraints. If pattern type mismatches arg type
+            // (e.g. matrix[1,1]$T with arg_td->kind != TD_KIND_MATRIX),
+            // the recursive call is a no-op, so $T will remain unbound
+            // and the overall binding will fail at the where-clause level.
+            poly_unify_poly_idents_in_type(ctx, pattern, arg_td, env);
+        }
+    }
     // Matrix: matrix[2, 2]$T
     else if (param_ast->type == AST_NODE_MATRIX_TYPE && arg_td->kind == TD_KIND_MATRIX)
     {

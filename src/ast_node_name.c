@@ -319,6 +319,10 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "VectorType";
     case AST_NODE_MATRIX_TYPE:
         return "MatrixType";
+    case AST_NODE_SPEC_OPERATOR:
+        return "SpecOperator";
+    case AST_NODE_SPEC_TYPE:
+        return "SpecType";
     case AST_NODE_TUPLE_TYPE:
         return "TupleType";
     case AST_NODE_EXPAND_VALUES_EXPR:

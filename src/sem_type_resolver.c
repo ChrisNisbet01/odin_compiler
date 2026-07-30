@@ -47,6 +47,7 @@ static TypeDescriptor const * sem_resolve_type_identifier(SemContext * ctx, odin
 TypeDescriptor const * sem_resolve_union_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_vector_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_matrix_type(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_resolve_spec_type(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_resolve_qualified_type_name(SemContext * ctx, odin_grammar_node_t * node);
 
 static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *, odin_grammar_node_t *) = {
@@ -73,6 +74,7 @@ static TypeDescriptor const * (* const sem_resolve_type_dispatch[])(SemContext *
     [AST_NODE_UNION_TYPE] = sem_resolve_union_type,
     [AST_NODE_VECTOR_TYPE] = sem_resolve_vector_type,
     [AST_NODE_MATRIX_TYPE] = sem_resolve_matrix_type,
+    [AST_NODE_SPEC_TYPE] = sem_resolve_spec_type,
     [AST_NODE_QUALIFIED_TYPE_NAME] = sem_resolve_qualified_type_name,
 };
 
@@ -1511,6 +1513,28 @@ sem_resolve_matrix_type(SemContext * ctx, odin_grammar_node_t * node)
         node->resolved_type = (TypeDescriptor *)mtx_type;
     return mtx_type;
     
+}
+
+static TypeDescriptor const *
+sem_resolve_spec_type(SemContext * ctx, odin_grammar_node_t * node)
+{
+    // SpecType = PolyIdent SpecOperator TypePrefix
+    // At instantiation time, the PolyIdent ($M) is bound in the poly env.
+    // Look it up and return the bound concrete type.
+    if (node->list.count < 3)
+        return NULL;
+    odin_grammar_node_t * poly_ident = node->list.children[0];
+    if (poly_ident == NULL || poly_ident->type != AST_NODE_POLY_IDENT)
+        return NULL;
+    char const * name = poly_ident->text;
+    if (name == NULL)
+        return NULL;
+    if (name[0] == '$')
+        name++;
+    TypeDescriptor const * td = poly_env_lookup_type(ctx, name);
+    if (td)
+        node->resolved_type = (TypeDescriptor *)td;
+    return td;
 }
 
 static TypeDescriptor const *
