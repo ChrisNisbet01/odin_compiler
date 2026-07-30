@@ -914,6 +914,26 @@ poly_scan_children_for_poly_idents(
     }
 }
 
+// Walk an expression chain to extract a compile-time integer value.
+// Used to compare concrete matrix dimensions; avoids SemContext dependency.
+static long long
+poly_extract_matrix_dim(odin_grammar_node_t * child)
+{
+    while (child != NULL)
+    {
+        if (child->type == AST_NODE_INTEGER_VALUE && child->text != NULL)
+            return atoll(child->text);
+        // Unwrap single-child expression wrappers
+        if (child->list.count == 1 && child->list.children[0] != NULL)
+            child = child->list.children[0];
+        else if (child->type == AST_NODE_POSTFIX_EXPRESSION && child->list.count >= 1)
+            child = child->list.children[0];
+        else
+            break;
+    }
+    return 0;
+}
+
 static void
 poly_unify_poly_idents_in_type(
     SemContext * ctx,
@@ -999,6 +1019,33 @@ poly_unify_poly_idents_in_type(
     else if (param_ast->type == AST_NODE_MAYBE_TYPE && arg_td->kind == TD_KIND_MAYBE)
     {
         poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+    }
+    // Matrix: matrix[2, 2]$T
+    else if (param_ast->type == AST_NODE_MATRIX_TYPE && arg_td->kind == TD_KIND_MATRIX)
+    {
+        // MatrixType children: [rows_Expr, columns_Expr, ElementType]
+        // Check concrete (IntegerLiteral) dimensions match the arg type.
+        // If rows/cols are POLY_IDENTs ($N, $M), they'll be bound below.
+        bool dims_match = true;
+        if (param_ast->list.count >= 2)
+        {
+            odin_grammar_node_t * rows_child = param_ast->list.children[0];
+            odin_grammar_node_t * cols_child = param_ast->list.children[1];
+            if (rows_child)
+            {
+                long long expected_rows = poly_extract_matrix_dim(rows_child);
+                if (expected_rows > 0 && expected_rows != arg_td->as.matrix.rows)
+                    dims_match = false;
+            }
+            if (cols_child)
+            {
+                long long expected_cols = poly_extract_matrix_dim(cols_child);
+                if (expected_cols > 0 && expected_cols != arg_td->as.matrix.columns)
+                    dims_match = false;
+            }
+        }
+        if (dims_match)
+            poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
     }
     // Other composite types could be extended here in the future.
 }

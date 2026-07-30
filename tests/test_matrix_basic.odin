@@ -49,5 +49,10 @@ main :: proc() {
     // det = 1.5*4.5 - 2.5*3.5 = 6.75 - 8.75 = -2.0
     if d != -2.0 { result = result + 65536 }
 
+    o: matrix[1,1]u8
+    o[0,0] = 3
+    od := linalg.determinant(o)
+    if od != 3 { result = result + 65536 * 2 } 
+
     os.exit(result)
 }
