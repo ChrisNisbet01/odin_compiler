@@ -528,7 +528,7 @@ poly_find_ident_in_subtree(odin_grammar_node_t * node)
 // Instead, the caller (sem_evaluate_expr.c) evaluates args BEFORE calling
 // poly_build_env_from_args, and passes the arg_list_node with resolved types.
 
-static void poly_unify_poly_idents_in_type(
+static bool poly_unify_poly_idents_in_type(
     SemContext * ctx,
     odin_grammar_node_t * param_ast,
     const TypeDescriptor * arg_td,
@@ -815,7 +815,7 @@ poly_build_env_from_args(
             {
                 // Recursively walk the type AST to find POLY_IDENT nodes
                 // that need binding from the concrete arg type.
-                poly_unify_poly_idents_in_type(ctx, param_type_ast,
+                (void)poly_unify_poly_idents_in_type(ctx, param_type_ast,
                     arg_types[param_idx], out_env);
             }
         }
@@ -893,12 +893,14 @@ poly_bind_poly_ident_type(odin_grammar_node_t * node,
 
 // Scan children of a type AST node for POLY_IDENTs and recurse into
 // nested type nodes, binding against the given element type.
-static void
+// Returns true if any poly ident was bound or type recursion succeeded.
+static bool
 poly_scan_children_for_poly_idents(
     odin_grammar_node_t * param_ast,
     TypeDescriptor const * elem_td,
     PolyEnv * env)
 {
+    bool any = false;
     for (size_t i = 0; i < param_ast->list.count; i++)
     {
         odin_grammar_node_t * child = param_ast->list.children[i];
@@ -906,12 +908,15 @@ poly_scan_children_for_poly_idents(
         if (child->type == AST_NODE_POLY_IDENT)
         {
             poly_bind_poly_ident_type(child, elem_td, env);
+            any = true;
         }
         else if (is_type_node(child))
         {
-            poly_unify_poly_idents_in_type(NULL, child, elem_td, env);
+            if (poly_unify_poly_idents_in_type(NULL, child, elem_td, env))
+                any = true;
         }
     }
+    return any;
 }
 
 // Walk an expression chain to extract a compile-time integer value.
@@ -934,7 +939,7 @@ poly_extract_matrix_dim(odin_grammar_node_t * child)
     return 0;
 }
 
-static void
+static bool
 poly_unify_poly_idents_in_type(
     SemContext * ctx,
     odin_grammar_node_t * param_ast,
@@ -943,13 +948,14 @@ poly_unify_poly_idents_in_type(
 )
 {
     if (param_ast == NULL || arg_td == NULL)
-        return;
+        return false;
 
     if (param_ast->type == AST_NODE_ARRAY_TYPE && arg_td->kind == TD_KIND_ARRAY)
     {
         // Walk children: find POLY_IDENTs and recurse into type nodes.
         // For [$N]$T: first POLY_IDENT is size (bind int), remaining
         // type subtree contains the element type.
+        bool any = false;
         for (size_t i = 0; i < param_ast->list.count; i++)
         {
             odin_grammar_node_t * child = param_ast->list.children[i];
@@ -982,70 +988,76 @@ poly_unify_poly_idents_in_type(
                     // more children, it's the size position (bind int).
                     // Otherwise, it's the element type (bind type).
                     if (i == 0 && param_ast->list.count > 1)
+                    {
                         poly_env_bind_int(env, name,
                                           (long long)arg_td->as.array.count);
+                        any = true;
+                    }
                     else if (arg_td->element_type != NULL)
+                    {
                         poly_env_bind_type(env, name, arg_td->element_type);
+                        any = true;
+                    }
                 }
             }
             else if (is_type_node(child) || child->type == AST_NODE_IDENTIFIER)
             {
-                poly_unify_poly_idents_in_type(
-                    ctx, child, arg_td->element_type, env);
+                if (poly_unify_poly_idents_in_type(
+                        ctx, child, arg_td->element_type, env))
+                    any = true;
             }
         }
+        return any;
     }
     // Slice: []$T
-    else if (param_ast->type == AST_NODE_SLICE_TYPE && arg_td->kind == TD_KIND_SLICE)
+    if (param_ast->type == AST_NODE_SLICE_TYPE && arg_td->kind == TD_KIND_SLICE)
     {
-        poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+        return poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
     }
     // Dynamic array: [dynamic]$T
-    else if (param_ast->type == AST_NODE_DYNAMIC_ARRAY_TYPE && arg_td->kind == TD_KIND_DYNAMIC_ARRAY)
+    if (param_ast->type == AST_NODE_DYNAMIC_ARRAY_TYPE && arg_td->kind == TD_KIND_DYNAMIC_ARRAY)
     {
-        poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+        return poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
     }
     // Multi-pointer: [|^]$T
-    else if (param_ast->type == AST_NODE_MULTI_POINTER_TYPE && arg_td->kind == TD_KIND_MULTI_POINTER)
+    if (param_ast->type == AST_NODE_MULTI_POINTER_TYPE && arg_td->kind == TD_KIND_MULTI_POINTER)
     {
-        poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+        return poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
     }
     // Pointer: ^$T
-    else if (param_ast->type == AST_NODE_POINTER_TYPE && arg_td->kind == TD_KIND_POINTER)
+    if (param_ast->type == AST_NODE_POINTER_TYPE && arg_td->kind == TD_KIND_POINTER)
     {
-        poly_scan_children_for_poly_idents(param_ast, arg_td->pointee, env);
+        return poly_scan_children_for_poly_idents(param_ast, arg_td->pointee, env);
     }
     // Maybe: Maybe($T)
-    else if (param_ast->type == AST_NODE_MAYBE_TYPE && arg_td->kind == TD_KIND_MAYBE)
+    if (param_ast->type == AST_NODE_MAYBE_TYPE && arg_td->kind == TD_KIND_MAYBE)
     {
-        poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+        return poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
     }
-    // SpecType: $M/[pattern] — bind $M to full concrete type and validate
-    // pattern against it.
-    else if (param_ast->type == AST_NODE_SPEC_TYPE)
+    // SpecType: $M/[pattern] — bind $M to full concrete type ONLY when
+    // the pattern matches the arg type structure.
+    if (param_ast->type == AST_NODE_SPEC_TYPE)
     {
         // Children: [PolyIdent($M), SpecOperator, PatternType]
         odin_grammar_node_t * poly_ident = (param_ast->list.count >= 1)
             ? param_ast->list.children[0] : NULL;
         odin_grammar_node_t * pattern = (param_ast->list.count >= 3)
             ? param_ast->list.children[2] : NULL;
-        if (poly_ident && poly_ident->type == AST_NODE_POLY_IDENT)
-        {
-            // Bind $M to the full concrete arg type
-            poly_bind_poly_ident_type(poly_ident, arg_td, env);
-        }
         if (pattern)
         {
-            // Recurse into the pattern to bind nested polys and validate
-            // structural constraints. If pattern type mismatches arg type
-            // (e.g. matrix[1,1]$T with arg_td->kind != TD_KIND_MATRIX),
-            // the recursive call is a no-op, so $T will remain unbound
-            // and the overall binding will fail at the where-clause level.
-            poly_unify_poly_idents_in_type(ctx, pattern, arg_td, env);
+            // Recurse into pattern first. Only bind $M if the pattern
+            // structurally matches the arg type (returned true).
+            if (poly_unify_poly_idents_in_type(ctx, pattern, arg_td, env))
+            {
+                if (poly_ident && poly_ident->type == AST_NODE_POLY_IDENT)
+                    poly_bind_poly_ident_type(poly_ident, arg_td, env);
+                return true;
+            }
         }
+        return false;
     }
     // Matrix: matrix[2, 2]$T
-    else if (param_ast->type == AST_NODE_MATRIX_TYPE && arg_td->kind == TD_KIND_MATRIX)
+    if (param_ast->type == AST_NODE_MATRIX_TYPE && arg_td->kind == TD_KIND_MATRIX)
     {
         // MatrixType children: [rows_Expr, columns_Expr, ElementType]
         // Check concrete (IntegerLiteral) dimensions match the arg type.
@@ -1069,9 +1081,11 @@ poly_unify_poly_idents_in_type(
             }
         }
         if (dims_match)
-            poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+            return poly_scan_children_for_poly_idents(param_ast, arg_td->element_type, env);
+        return false;
     }
     // Other composite types could be extended here in the future.
+    return false;
 }
 
 // =========================================================================
