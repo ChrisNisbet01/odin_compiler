@@ -38,6 +38,8 @@ LLVMValueRef ir_gen_map_subscript(
     char const * prefix
 );
 
+static LLVMValueRef ir_gen_directive(IrGenContext * ctx, odin_grammar_node_t * node);
+
 bool ir_gen_resolve_aggregate_field(
     IrGenContext * ctx,
     TypeDescriptor const * agg_type,
@@ -1053,6 +1055,22 @@ ir_gen_os_args_init(IrGenContext * ctx)
     LLVMBuildStore(ctx->builder, slice_val, os_args_global);
 }
 
+static void
+ir_gen_process_proc_sig_directives(IrGenContext * ctx, odin_grammar_node_t * proc_definition)
+{
+    odin_grammar_node_t * sig_node = node_find_child(proc_definition, AST_NODE_PROCEDURE_SIGNATURE);
+    if (sig_node == NULL)
+        return;
+    for (size_t i = 0; i < sig_node->list.count; i++)
+    {
+        if (sig_node->list.children[i] != NULL
+            && sig_node->list.children[i]->type == AST_NODE_DIRECTIVE)
+        {
+            ir_gen_directive(ctx, sig_node->list.children[i]);
+        }
+    }
+}
+
 static LLVMValueRef
 ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -1104,6 +1122,13 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
         if (body_node || is_builtin)
         {
+            // Save and reset bounds checking state for this procedure
+            bool saved_bounds_checking = ctx->bounds_checking_enabled;
+            ctx->bounds_checking_enabled = true;
+
+            // Process directives from ProcedureSignature (e.g. #no_bounds_check after returns)
+            ir_gen_process_proc_sig_directives(ctx, value_node);
+
             LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
             LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
@@ -1162,6 +1187,8 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             generator_pop_scope(ctx->gen_ctx);
 
             func_pop(ctx);
+
+            ctx->bounds_checking_enabled = saved_bounds_checking;
         }
 
         return func;
@@ -1297,8 +1324,13 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
         return NULL;
 
-    // Save outer insertion block
+    // Save outer insertion block and bounds checking state
     LLVMBasicBlockRef outer_block = LLVMGetInsertBlock(ctx->builder);
+    bool saved_bounds_checking = ctx->bounds_checking_enabled;
+    ctx->bounds_checking_enabled = true;
+
+    // Process directives from ProcedureSignature (e.g. #no_bounds_check after returns)
+    ir_gen_process_proc_sig_directives(ctx, value_node);
 
     // Build nested function
     ProcDeclAttributes * attrs = (ProcDeclAttributes *)node->metadata;
@@ -1366,8 +1398,9 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 
     generator_pop_scope(ctx->gen_ctx);
 
-    // Restore outer function context
+    // Restore outer function context and bounds checking state
     func_pop(ctx);
+    ctx->bounds_checking_enabled = saved_bounds_checking;
     if (outer_block != NULL)
     {
         LLVMPositionBuilderAtEnd(ctx->builder, outer_block);
@@ -2990,6 +3023,11 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
 
+    case AST_NODE_SPEC_OPERATOR:
+    case AST_NODE_SPEC_TYPE:
+        // Handled during type resolution and polymorphism; no IR gen needed
+        return NULL;
+
     default:
         return NULL;
     }
@@ -3014,6 +3052,8 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
     while (1)
     {
         int can_eval = 0;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
         switch (node->type)
         {
         case AST_NODE_BOOL_TRUE:
@@ -3322,6 +3362,8 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
 
     case AST_NODE_ARRAY_LIT_ELEMENTS:
     case AST_NODE_MATRIX_TYPE:
+    case AST_NODE_SPEC_OPERATOR:
+    case AST_NODE_SPEC_TYPE:
     case AST_NODE_COUNT:
         *ok = 0;
         return 0;
@@ -3330,6 +3372,7 @@ ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int
         *ok = 0;
         return 0;
     }
+#pragma GCC diagnostic pop
 }
 
 static int

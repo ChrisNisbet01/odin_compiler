@@ -345,7 +345,7 @@ Returns = Arrow (LParen (ReturnList | ReturnTypeList) RParen | TypePrefix) @AST_
 WhereClause = KwWhere Expression @AST_ACTION_WHERE_CLAUSE;
 CallingConvention = StringLiteral @AST_ACTION_CALLING_CONVENTION;
 ContextExpr = KwContext @AST_ACTION_CONTEXT_EXPR;
-ProcedureSignature = KwHashType? KwProc CallingConvention? Directive? ParameterList Returns? WhereClause? @AST_ACTION_PROCEDURE_SIGNATURE;
+ProcedureSignature = KwHashType? KwProc CallingConvention? Directive? ParameterList Returns? WhereClause? Directive? @AST_ACTION_PROCEDURE_SIGNATURE;
 
 DistinctType = KwDistinct TypePrefix @AST_ACTION_DISTINCT_TYPE;
 

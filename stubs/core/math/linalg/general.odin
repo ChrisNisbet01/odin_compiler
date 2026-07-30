@@ -1,17 +1,17 @@
 package linalg
 
 @(require_results)
-matrix1x1_determinant :: proc "contextless" (m: $M/matrix[1, 1]$T) -> T {
+matrix1x1_determinant :: proc "contextless" (m: $M/matrix[1, 1]$T) -> T #no_bounds_check {
     return m[0, 0]
 }
 
 @(require_results)
-matrix2x2_determinant :: proc "contextless" (m: $M/matrix[2, 2]$T) -> T {
+matrix2x2_determinant :: proc "contextless" (m: $M/matrix[2, 2]$T) -> T #no_bounds_check {
     return m[0, 0]*m[1, 1] - m[0, 1]*m[1, 0]
 }
 
 @(require_results)
-matrix3x3_determinant :: proc "contextless" (m: $M/matrix[3, 3]$T) -> T {
+matrix3x3_determinant :: proc "contextless" (m: $M/matrix[3, 3]$T) -> T #no_bounds_check {
     a := +m[0, 0] * (m[1, 1] * m[2, 2] - m[1, 2] * m[2, 1])
     b := -m[0, 1] * (m[1, 0] * m[2, 2] - m[1, 2] * m[2, 0])
     c := +m[0, 2] * (m[1, 0] * m[2, 1] - m[1, 1] * m[2, 0])
@@ -19,7 +19,7 @@ matrix3x3_determinant :: proc "contextless" (m: $M/matrix[3, 3]$T) -> T {
 }
 
 @(require_results)
-matrix4x4_determinant :: proc "contextless" (m: $M/matrix[4, 4]$T) -> T {
+matrix4x4_determinant :: proc "contextless" (m: $M/matrix[4, 4]$T) -> (det: T) #no_bounds_check {
 	s0 := m[0, 0] * m[1, 1] - m[1, 0] * m[0, 1]
 	s1 := m[0, 0] * m[1, 2] - m[1, 0] * m[0, 2]
 	s2 := m[0, 0] * m[1, 3] - m[1, 0] * m[0, 3]
@@ -34,32 +34,32 @@ matrix4x4_determinant :: proc "contextless" (m: $M/matrix[4, 4]$T) -> T {
 	c1 := m[2, 0] * m[3, 2] - m[3, 0] * m[2, 2]
 	c0 := m[2, 0] * m[3, 1] - m[3, 0] * m[2, 1]
 
-    det: T = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0
-	return det
+	det = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0
+	return
 }
 
 @(require_results)
-matrix5x5_determinant :: proc "contextless" (m: $M/matrix[5, 5]$T) -> (det: T) {
+matrix5x5_determinant :: proc "contextless" (m: $M/matrix[5, 5]$T) -> (det: T) #no_bounds_check {
 	return matrix_determinant_generic(m)
 }
 
 @(require_results)
-matrix6x6_determinant :: proc "contextless" (m: $M/matrix[6, 6]$T) -> (det: T) {
+matrix6x6_determinant :: proc "contextless" (m: $M/matrix[6, 6]$T) -> (det: T) #no_bounds_check {
 	return matrix_determinant_generic(m)
 }
 
 @(require_results)
-matrix7x7_determinant :: proc "contextless" (m: $M/matrix[7, 7]$T) -> (det: T) {
+matrix7x7_determinant :: proc "contextless" (m: $M/matrix[7, 7]$T) -> (det: T) #no_bounds_check {
 	return matrix_determinant_generic(m)
 }
 
 @(require_results)
-matrix8x8_determinant :: proc "contextless" (m: $M/matrix[8, 8]$T) -> (det: T) {
+matrix8x8_determinant :: proc "contextless" (m: $M/matrix[8, 8]$T) -> (det: T) #no_bounds_check {
 	return matrix_determinant_generic(m)
 }
 
 @(require_results)
-matrix_determinant_generic :: proc "contextless" (a: $M/matrix[$N, N]$T) -> T {
+matrix_determinant_generic :: proc "contextless" (a: $M/matrix[$N, N]$T) -> T #no_bounds_check {
 	when N == 1 {
 		return matrix1x1_determinant(a)
 	} else when N == 2 {
