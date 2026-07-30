@@ -1,6 +1,7 @@
 package main
 
 import "core:os"
+import "core:math/linalg"
 
 main :: proc() {
     result := 0
@@ -34,7 +35,7 @@ main :: proc() {
     if z[0][0] != 0 { result = result + 256 }
     if z[2][3] != 0 { result = result + 512 }
 
-    // 4. Transpose
+    // 4. Transpose (builtin)
     t := transpose(m)
     if t[0][0] != 1 { result = result + 1024 }
     if t[0][1] != 4 { result = result + 2048 }
@@ -42,6 +43,20 @@ main :: proc() {
     if t[1][1] != 5 { result = result + 8192 }
     if t[2][0] != 3 { result = result + 16384 }
     if t[2][1] != 6 { result = result + 32768 }
+
+        // 4. Transpose (builtin)
+    t := transpose(m)
+    if t[0][0] != 1 { result = result + 1024 }
+    if t[0][1] != 4 { result = result + 2048 }
+    if t[1][0] != 2 { result = result + 4096 }
+    if t[1][1] != 5 { result = result + 8192 }
+    if t[2][0] != 3 { result = result + 16384 }
+    if t[2][1] != 6 { result = result + 32768 }
+
+    // 5. Determinant of 2x2 matrix
+    d := linalg.determinant(n)
+    // det = 1.5*4.5 - 2.5*3.5 = 6.75 - 8.75 = -2.0
+    if d != -2.0 { result = result + 65536 }
 
     os.exit(result)
 }
