@@ -234,6 +234,52 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
 {
     TypeDescriptor const * proc_type = NULL;
 
+    LLVMValueRef args[128];
+    TypeDescriptor const * arg_types[128];
+    int arg_count = 0;
+
+    if (op->list.count > 0 && op->list.children[0] != NULL)
+    {
+        odin_grammar_node_t * arg_expr = op->list.children[0];
+        if (arg_expr->type == AST_NODE_ARGUMENT_LIST && arg_expr->list.count > 0)
+            arg_expr = arg_expr->list.children[0];
+        arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, arg_types, 128);
+    }
+
+    // Special handling for transpose builtin - must happen before 'any' packing
+    {
+        char const * func_name = NULL;
+        
+        if (op->resolved_symbol)
+            func_name = op->resolved_symbol->llvm_name ? op->resolved_symbol->llvm_name : op->resolved_symbol->name;
+        if (func_name == NULL && node->list.count > 0 && node->list.children[0] != NULL)
+        {
+            odin_grammar_node_t * base = node->list.children[0];
+            while (base->type == AST_NODE_PRIMARY_EXPRESSION && base->list.count > 0)
+                base = base->list.children[0];
+            if (base && base->type == AST_NODE_IDENTIFIER && base->text)
+                func_name = base->text;
+        }
+        
+        if (func_name && strcmp(func_name, "transpose") == 0 && arg_count > 0)
+        {
+            LLVMValueRef m_param = args[0];
+            TypeDescriptor const * m_type = arg_types[0];
+            TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
+            
+            if (result_type && result_type->kind == TD_KIND_MATRIX)
+            {
+                LLVMValueRef transposed = ir_gen_postfix_transpose(ctx, m_param, m_type, result_type);
+                if (transposed != NULL)
+                {
+                    *val = transposed;
+                    *cur_type = result_type;
+                    return false;
+                }
+            }
+        }
+    }
+
     // Priority 1: semantic analyser resolved this to a concrete symbol
     // (e.g., polymorphic specialization or overload resolution).
     if (op->resolved_symbol != NULL)
@@ -308,18 +354,6 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
 
     LLVMTypeRef func_type = proc_type->proc_metadata.func_type;
 
-    LLVMValueRef args[128];
-    TypeDescriptor const * arg_types[128];
-    int arg_count = 0;
-
-    if (op->list.count > 0 && op->list.children[0] != NULL)
-    {
-        odin_grammar_node_t * arg_expr = op->list.children[0];
-        if (arg_expr->type == AST_NODE_ARGUMENT_LIST && arg_expr->list.count > 0)
-            arg_expr = arg_expr->list.children[0];
-        arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, arg_types, 128);
-    }
-
     // Fill in omitted arguments with default values
     {
         int param_count = proc_type->proc_metadata.param_count;
@@ -344,58 +378,6 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
                         "failed to generate code for default parameter value"
                     );
                     break;
-                }
-            }
-        }
-    }
-
-    // Special handling for transpose builtin - handle before 'any' packing
-    {
-        char const * func_name = NULL;
-        
-        // Try op->resolved_symbol first
-        if (op->resolved_symbol)
-        {
-            func_name = op->resolved_symbol->llvm_name ? op->resolved_symbol->llvm_name : op->resolved_symbol->name;
-        }
-        // Fall back to checking the base identifier
-        if (func_name == NULL && node->list.count > 0 && node->list.children[0] != NULL)
-        {
-            odin_grammar_node_t * base = node->list.children[0];
-            // Unwrap PrimaryExpression if needed
-            while (base->type == AST_NODE_PRIMARY_EXPRESSION && base->list.count > 0)
-                base = base->list.children[0];
-            if (base && base->type == AST_NODE_IDENTIFIER && base->text)
-            {
-                func_name = base->text;
-            }
-        }
-        // Fall back to proc_type
-        if (func_name == NULL && proc_type && proc_type->proc_metadata.func_type)
-        {
-            // Get function name from the function type
-            LLVMValueRef func = *val;
-            if (func)
-                func_name = LLVMGetValueName(func);
-        }
-        
-        if (func_name && strcmp(func_name, "transpose") == 0 && arg_count > 0)
-        {
-            LLVMValueRef m_param = args[0];
-            TypeDescriptor const * m_type = arg_types[0];
-
-            // Get the result type (transposed matrix dimensions)
-            // Use op->resolved_type (set by semantic analyser for builtin transpose),
-            // fallback to node->resolved_type
-            TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
-            if (result_type && result_type->kind == TD_KIND_MATRIX)
-            {
-                LLVMValueRef transposed = ir_gen_postfix_transpose(ctx, m_param, m_type, result_type);
-                if (transposed != NULL)
-                {
-                    *val = transposed;
-                    *cur_type = result_type;
-                    return false;
                 }
             }
         }
