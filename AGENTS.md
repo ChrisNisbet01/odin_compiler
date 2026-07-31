@@ -16,6 +16,25 @@
 - **Type resolution**: Extended `sem_resolve_type_application` to handle `AST_NODE_ENUM_TYPE` and `AST_NODE_UNION_TYPE` origins.
 - **Tests**: `test_poly_enum_union.odin` verifies poly enum syntax works. **All 188 tests pass**.
 
+## Accomplishments (session 2026-07-31)
+
+### Implemented bare `@private` attribute form
+- **Grammar** (`odin_grammar.gdl`): Changed `Attribute = At LParen AttrList? RParen` to `Attribute = (At LParen AttrList? RParen) | (At Identifier)`. Enables `@private IS_NUMERIC :: true` (no parens). No conflict with `@require` since `Require` is a keyword lexeme, not an `Identifier`.
+- **Semantic analyser** (`semantic_analyser.c`): Extracted `sem_apply_attr_item(attrs, name_node, value_node)` helper (handles link_name/require_results/private/builtin/init/fini matching). `sem_analyse_attributes` now iterates both bare-Identifier children and `@(...)` ATTR_LIST children, applying each via the helper. `decl_node->metadata` is now always set (calloc'd attrs).
+- **Enforcement was already wired**: `attrs->is_private` → pass1 `sem_set_symbol_private` → cross-package access blocked (private error) + `import_using_copy_symbol` skips private symbols. Verified both forms blocked cross-package; private symbols invisible via `import using`.
+
+### Implemented multi-name procedure params (`a, b: $T`)
+- **Grammar** (`odin_grammar.gdl`): `Parameter = KwUsing? ((PolyIdent Colon TypePrefix) | (Identifier (Comma Identifier)* Colon VariadicMarker? TypePrefix)) (ColonAssign AssignExpression)?`. Verified this was a grammar limitation for BOTH known (`add(a, b: int)`) and poly (`scalar_dot(a, b: $T)`) types — identical `Expected: : Found: ,` errors before the fix.
+- **New helper** `sem_extract_param_names(param, names_out, max, type_out, is_poly_decl)` (`sem_type_resolver.h/.c`): extracts all name nodes + type node. `$T: typeid` → is_poly_decl=true (typeid is a BASIC_TYPE, name_count=0). All-Identifier params → last Identifier is the type.
+- **Five consumers updated** to register one runtime slot per name:
+  - `sem_resolve_procedure_signature` (semantic_analyser.c): default value stored only on the LAST name (`(ni == name_count-1) ? default_node : NULL`) — matches user-confirmed Odin semantics.
+  - `sem_analyse_procedure_literal` body-scope registration (semantic_analyser.c).
+  - `sem_resolve_proc_sig_type` (sem_type_resolver.c): `param_idx`/params array grown per name.
+  - `poly_build_env_from_args` (polymorphism.c): rewrote param loop — POLY_IDENT scan runs BEFORE the name_count guard (critical: `$T: typeid` registers the poly name unbound so a later `x: T` binds it), `param_idx += name_count`.
+  - `ir_gen_register_params` (llvm_ir_generator.c): one alloca/store per name, `param_index++` per name.
+- **Tests**: `test_multi_name_params.odin` (known-type, mixed groups, poly, contextless+where), `test_grouped_defaults.odin` (default only on last), `test_private_directive.odin` + `expected_to_fail/test_private_directive_external.odin` (bare `@private` const in `private_helper`). **All 224 tests pass**.
+- **Key gotcha**: `git stash` reverted the git-tracked generated parser output but left it NEWER than the `.gdl`, so `cmake --build build` skipped regeneration — after a stash/pop cycle, `touch src/odin_grammar.gdl` before rebuilding.
+
 ## Accomplishments (session 2026-07-24)
 
 ### Implemented array literal syntax (`[N]T{...}`)

@@ -13,6 +13,7 @@
 #include "operator_kind.h"
 #include "polymorphism.h"
 #include "scope.h"
+#include "sem_type_resolver.h"
 #include "symbols.h"
 #include "typed_value.h"
 
@@ -704,83 +705,68 @@ ir_gen_register_params(
         if (param == NULL || param->type != AST_NODE_PARAMETER)
             continue;
 
-        odin_grammar_node_t * param_ident = NULL;
+        // Handle multi-name params: "a, b: T" -> one alloca per name.
+        odin_grammar_node_t * param_names[32];
         odin_grammar_node_t * param_type_node = NULL;
-        for (size_t ci = 0; ci < param->list.count; ci++)
-        {
-            odin_grammar_node_t * child = param->list.children[ci];
-            if (child == NULL)
-                continue;
-            if ((child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT) && param_ident == NULL)
-                param_ident = child;
-            else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child) || child->type == AST_NODE_POLY_IDENT)
-                param_type_node = child;
-        }
-        if (param_type_node == NULL)
-        {
-            for (size_t ci = param->list.count; ci > 0; ci--)
-            {
-                odin_grammar_node_t * child = param->list.children[ci - 1];
-                if (child == NULL)
-                    continue;
-                if (child->type == AST_NODE_IDENTIFIER && child != param_ident)
-                {
-                    param_type_node = child;
-                    break;
-                }
-            }
-        }
-        if (param_ident == NULL || param_type_node == NULL)
+        bool is_poly_decl_param = false;
+        int name_count = sem_extract_param_names(
+            param, param_names, 32, &param_type_node, &is_poly_decl_param);
+        if (name_count == 0 || param_type_node == NULL)
             continue;
 
         // Skip poly type parameters ($T: typeid) — they don't consume runtime
         // parameter slots in the LLVM function.
-        if (param_ident->type == AST_NODE_POLY_IDENT)
+        if (is_poly_decl_param)
             continue;
 
-        // Use specialization-specific param type when available (prevents
-        // AST corruption from shared proc_def across multiple instantiations).
-        // spec_proc_type->proc_metadata.params excludes the context pointer,
-        // so subtract 1 from param_index for ODIN convention.
-        TypeDescriptor const * param_type = NULL;
-        if (spec_proc_type && spec_proc_type->kind == TD_KIND_PROC)
+        for (int ni = 0; ni < name_count; ni++)
         {
-            int spec_idx = (int)param_index;
-            if (proc_literal->resolved_type && proc_literal->resolved_type->kind == TD_KIND_PROC
-                && proc_literal->resolved_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
-                spec_idx--;
-            if (spec_idx >= 0 && spec_idx < spec_proc_type->proc_metadata.param_count)
-                param_type = spec_proc_type->proc_metadata.params[spec_idx];
-        }
-        if (param_type == NULL)
-            param_type = param_type_node->resolved_type;
-        if (param_type == NULL)
-            continue;
+            odin_grammar_node_t * param_ident = param_names[ni];
 
-        // For poly params ($T), strip the $ prefix for the scope name
-        char const * param_name = param_ident->text;
-        char poly_name_buf[128];
-        if (param_ident->type == AST_NODE_POLY_IDENT && param_name != NULL && param_name[0] == '$')
-        {
-            size_t plen = strlen(param_name + 1);
-            if (plen < sizeof(poly_name_buf))
+            // Use specialization-specific param type when available (prevents
+            // AST corruption from shared proc_def across multiple instantiations).
+            // spec_proc_type->proc_metadata.params excludes the context pointer,
+            // so subtract 1 from param_index for ODIN convention.
+            TypeDescriptor const * param_type = NULL;
+            if (spec_proc_type && spec_proc_type->kind == TD_KIND_PROC)
             {
-                memcpy(poly_name_buf, param_name + 1, plen);
-                poly_name_buf[plen] = '\0';
-                param_name = poly_name_buf;
+                int spec_idx = (int)param_index;
+                if (proc_literal->resolved_type && proc_literal->resolved_type->kind == TD_KIND_PROC
+                    && proc_literal->resolved_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
+                    spec_idx--;
+                if (spec_idx >= 0 && spec_idx < spec_proc_type->proc_metadata.param_count)
+                    param_type = spec_proc_type->proc_metadata.params[spec_idx];
             }
+            if (param_type == NULL)
+                param_type = param_type_node->resolved_type;
+            if (param_type == NULL)
+                continue;
+
+            // For poly params ($T), strip the $ prefix for the scope name
+            char const * param_name = param_ident->text;
+            char poly_name_buf[128];
+            if (param_ident->type == AST_NODE_POLY_IDENT && param_name != NULL && param_name[0] == '$')
+            {
+                size_t plen = strlen(param_name + 1);
+                if (plen < sizeof(poly_name_buf))
+                {
+                    memcpy(poly_name_buf, param_name + 1, plen);
+                    poly_name_buf[plen] = '\0';
+                    param_name = poly_name_buf;
+                }
+            }
+
+            LLVMValueRef param_val = LLVMGetParam(func, param_index);
+            LLVMTypeRef llvm_type = param_type->llvm_type;
+            LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, llvm_type, param_name);
+            LLVMSetAlignment(alloca, LLVMABIAlignmentOfType(ctx->data_layout, llvm_type));
+            LLVMBuildStore(ctx->builder, param_val, alloca);
+
+            TypedValue tv = create_typed_value(alloca, param_type, true);
+            generator_add_symbol(ctx->gen_ctx, param_name, tv);
+
+            param_index++;
         }
-
-        LLVMValueRef param_val = LLVMGetParam(func, param_index);
-        LLVMTypeRef llvm_type = param_type->llvm_type;
-        LLVMValueRef alloca = LLVMBuildAlloca(ctx->builder, llvm_type, param_name);
-        LLVMSetAlignment(alloca, LLVMABIAlignmentOfType(ctx->data_layout, llvm_type));
-        LLVMBuildStore(ctx->builder, param_val, alloca);
-
-        TypedValue tv = create_typed_value(alloca, param_type, true);
-        generator_add_symbol(ctx->gen_ctx, param_name, tv);
-
-        param_index++;
     }
 }
 

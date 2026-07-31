@@ -592,29 +592,31 @@ sem_resolve_procedure_signature(
                 if (param == NULL || param->type != AST_NODE_PARAMETER)
                     continue;
 
-                odin_grammar_node_t * param_ident = NULL;
+                // Handle multi-name params: "a, b: T" -> names {a, b}, one type.
+                odin_grammar_node_t * param_names[32];
                 odin_grammar_node_t * param_type_node = NULL;
-                odin_grammar_node_t * default_value_node = NULL;
-                for (size_t ci = 0; ci < param->list.count; ci++)
-                {
-                    odin_grammar_node_t * child = param->list.children[ci];
-                    if (child == NULL)
-                        continue;
-                    if ((child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT)
-                        && param_ident == NULL)
-                        param_ident = child;
-                    else if (child->type == AST_NODE_IDENTIFIER || is_type_node(child)
-                             || child->type == AST_NODE_POLY_IDENT)
-                        param_type_node = child;
-                }
-                // Detect default value: last child that is not the identifier,
+                bool is_poly_decl_param = false;
+                int name_count = sem_extract_param_names(
+                    param, param_names, 32, &param_type_node, &is_poly_decl_param);
+
+                // Detect default value: last child that is not a name,
                 // not the type node, and not an ellipsis
+                odin_grammar_node_t * default_value_node = NULL;
                 for (size_t ci = param->list.count; ci > 0; ci--)
                 {
                     odin_grammar_node_t * child = param->list.children[ci - 1];
                     if (child == NULL)
                         continue;
-                    if (child == param_ident || child == param_type_node)
+                    bool is_name = false;
+                    for (int ni = 0; ni < name_count; ni++)
+                    {
+                        if (child == param_names[ni])
+                        {
+                            is_name = true;
+                            break;
+                        }
+                    }
+                    if (is_name || child == param_type_node)
                         continue;
                     if (child->type == AST_NODE_ELLIPSIS)
                         continue;
@@ -624,21 +626,7 @@ sem_resolve_procedure_signature(
                         break;
                     }
                 }
-                if (param_type_node == NULL)
-                {
-                    for (size_t ci = param->list.count; ci > 0; ci--)
-                    {
-                        odin_grammar_node_t * child = param->list.children[ci - 1];
-                        if (child == NULL)
-                            continue;
-                        if ((child->type == AST_NODE_IDENTIFIER && child != param_ident))
-                        {
-                            param_type_node = child;
-                            break;
-                        }
-                    }
-                }
-                if (param_ident == NULL || param_type_node == NULL)
+                if (name_count == 0 || param_type_node == NULL)
                     continue;
 
                 TypeDescriptor const * pt = sem_resolve_type_expr(ctx, param_type_node);
@@ -667,43 +655,50 @@ sem_resolve_procedure_signature(
 
                 // Skip poly type parameters ($T: typeid) — they don't consume
                 // runtime parameter slots in the LLVM function type.
-                if (param_ident != NULL && param_ident->type == AST_NODE_POLY_IDENT)
+                if (is_poly_decl_param)
                 {
                     continue;
                 }
 
-                if (param_count >= (int)param_cap)
+                // Register each name as a separate runtime param slot.
+                // The default value applies only to the last name in the group
+                // (a, b: int = 10 -> b defaults to 10, a does not).
+                for (int ni = 0; ni < name_count; ni++)
                 {
-                    size_t new_cap = param_cap == 0 ? 4 : param_cap * 2;
-                    TypeDescriptor const ** tmp = realloc(param_types, new_cap * sizeof(TypeDescriptor const *));
-                    if (tmp == NULL)
+                    if (param_count >= (int)param_cap)
                     {
-                        free(param_types);
-                        free(default_value_nodes);
-                        return NULL;
+                        size_t new_cap = param_cap == 0 ? 4 : param_cap * 2;
+                        TypeDescriptor const ** tmp = realloc(param_types, new_cap * sizeof(TypeDescriptor const *));
+                        if (tmp == NULL)
+                        {
+                            free(param_types);
+                            free(default_value_nodes);
+                            return NULL;
+                        }
+                        param_types = tmp;
+                        param_cap = new_cap;
                     }
-                    param_types = tmp;
-                    param_cap = new_cap;
-                }
-                // Store default value node (NULL if no default)
-                if (param_count >= (int)default_val_cap)
-                {
-                    size_t new_cap = default_val_cap == 0 ? 4 : default_val_cap * 2;
-                    odin_grammar_node_t ** tmp2 = realloc(default_value_nodes, new_cap * sizeof(odin_grammar_node_t *));
-                    if (tmp2 == NULL)
+                    // Store default value node (NULL if no default)
+                    if (param_count >= (int)default_val_cap)
                     {
-                        free(param_types);
-                        free(default_value_nodes);
-                        return NULL;
+                        size_t new_cap = default_val_cap == 0 ? 4 : default_val_cap * 2;
+                        odin_grammar_node_t ** tmp2 = realloc(default_value_nodes, new_cap * sizeof(odin_grammar_node_t *));
+                        if (tmp2 == NULL)
+                        {
+                            free(param_types);
+                            free(default_value_nodes);
+                            return NULL;
+                        }
+                        // Zero-initialize newly allocated slots
+                        for (size_t zi = default_val_cap; zi < new_cap; zi++)
+                            tmp2[zi] = NULL;
+                        default_value_nodes = tmp2;
+                        default_val_cap = new_cap;
                     }
-                    // Zero-initialize newly allocated slots
-                    for (size_t zi = default_val_cap; zi < new_cap; zi++)
-                        tmp2[zi] = NULL;
-                    default_value_nodes = tmp2;
-                    default_val_cap = new_cap;
+                    default_value_nodes[param_count]
+                        = (ni == name_count - 1) ? default_value_node : NULL;
+                    param_types[param_count++] = pt;
                 }
-                default_value_nodes[param_count] = default_value_node;
-                param_types[param_count++] = pt;
             }
         }
     }
@@ -880,46 +875,30 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                     if (param == NULL || param->type != AST_NODE_PARAMETER)
                         continue;
 
-                    odin_grammar_node_t * param_ident = NULL;
+                    // Handle multi-name params: "a, b: T" -> register each name.
+                    odin_grammar_node_t * param_names[32];
                     odin_grammar_node_t * param_type_node = NULL;
-                    for (size_t ci = 0; ci < param->list.count; ci++)
-                    {
-                        odin_grammar_node_t * pc = param->list.children[ci];
-                        if (pc == NULL)
-                            continue;
-                        if ((pc->type == AST_NODE_IDENTIFIER || pc->type == AST_NODE_POLY_IDENT) && param_ident == NULL)
-                            param_ident = pc;
-                        else if (pc->type == AST_NODE_IDENTIFIER || is_type_node(pc) || pc->type == AST_NODE_POLY_IDENT)
-                            param_type_node = pc;
-                    }
-                    if (param_type_node == NULL)
-                    {
-                        for (size_t ci = param->list.count; ci > 0; ci--)
-                        {
-                            odin_grammar_node_t * pc = param->list.children[ci - 1];
-                            if (pc == NULL)
-                                continue;
-                            if (pc->type == AST_NODE_IDENTIFIER && pc != param_ident)
-                            {
-                                param_type_node = pc;
-                                break;
-                            }
-                        }
-                    }
-                    if (param_ident == NULL || param_type_node == NULL)
+                    bool is_poly_decl_param = false;
+                    int name_count = sem_extract_param_names(
+                        param, param_names, 32, &param_type_node, &is_poly_decl_param);
+                    if (name_count == 0 || param_type_node == NULL)
                         continue;
-
-                    // For poly params ($T), register with the base name (strip $)
-                    char const * param_name = param_ident->text;
-                    if (param_ident->type == AST_NODE_POLY_IDENT && param_name != NULL && param_name[0] == '$')
-                        param_name = param_name + 1;
 
                     TypeDescriptor const * param_type = param_type_node->resolved_type;
                     if (param_type == NULL)
                         continue;
 
-                    TypedValue tv = create_typed_value(NULL, param_type, true);
-                    generator_add_symbol(ctx->gen_ctx, param_name, tv);
+                    for (int ni = 0; ni < name_count; ni++)
+                    {
+                        char const * param_name = param_names[ni]->text;
+                        // For poly params ($T), register with the base name (strip $)
+                        if (param_names[ni]->type == AST_NODE_POLY_IDENT && param_name != NULL
+                            && param_name[0] == '$')
+                            param_name = param_name + 1;
+
+                        TypedValue tv = create_typed_value(NULL, param_type, true);
+                        generator_add_symbol(ctx->gen_ctx, param_name, tv);
+                    }
                 }
             }
         }
@@ -1279,6 +1258,43 @@ import_pop_path(SemContext * ctx)
 }
 
 static void
+sem_apply_attr_item(ProcDeclAttributes * attrs, odin_grammar_node_t * name_node,
+                    odin_grammar_node_t * value_node)
+{
+    if (attrs == NULL || name_node == NULL || name_node->text == NULL)
+        return;
+
+    if (strcmp(name_node->text, "link_name") == 0 && value_node != NULL && value_node->text)
+    {
+        size_t len = strlen(value_node->text);
+        if (len >= 2 && (value_node->text[0] == '"' || value_node->text[0] == '`'))
+        {
+            attrs->link_name = strndup(value_node->text + 1, len - 2);
+        }
+    }
+    else if (strcmp(name_node->text, "require_results") == 0)
+    {
+        attrs->require_results = true;
+    }
+    else if (strcmp(name_node->text, "private") == 0)
+    {
+        attrs->is_private = true;
+    }
+    else if (strcmp(name_node->text, "builtin") == 0)
+    {
+        attrs->is_builtin = true;
+    }
+    else if (strcmp(name_node->text, "init") == 0)
+    {
+        attrs->is_init = true;
+    }
+    else if (strcmp(name_node->text, "fini") == 0)
+    {
+        attrs->is_fini = true;
+    }
+}
+
+static void
 sem_analyse_attributes(odin_grammar_node_t * decl_node)
 {
     if (decl_node == NULL || decl_node->list.count < 3)
@@ -1287,68 +1303,46 @@ sem_analyse_attributes(odin_grammar_node_t * decl_node)
     if (first == NULL || first->type != AST_NODE_ATTRIBUTE)
         return;
 
-    odin_grammar_node_t * attr_list = NULL;
+    ProcDeclAttributes * attrs = calloc(1, sizeof(ProcDeclAttributes));
+
+    // Bare attribute form: @private, @builtin, etc. — the child is an
+    // Identifier (name) with no value.
     for (size_t i = 0; i < first->list.count; i++)
     {
-        if (first->list.children[i] && first->list.children[i]->type == AST_NODE_ATTR_LIST)
+        odin_grammar_node_t * child = first->list.children[i];
+        if (child != NULL && child->type == AST_NODE_IDENTIFIER)
         {
-            attr_list = first->list.children[i];
-            break;
+            sem_apply_attr_item(attrs, child, NULL);
         }
     }
-    if (attr_list == NULL)
-        return;
 
-    ProcDeclAttributes * attrs = calloc(1, sizeof(ProcDeclAttributes));
-    for (size_t i = 0; i < attr_list->list.count; i++)
+    // Parenthesized form: @(attr, ...) — the child is an ATTR_LIST.
+    for (size_t i = 0; i < first->list.count; i++)
     {
-        odin_grammar_node_t * item = attr_list->list.children[i];
-        if (item == NULL || item->type != AST_NODE_ATTR_ITEM)
+        odin_grammar_node_t * attr_list = first->list.children[i];
+        if (attr_list == NULL || attr_list->type != AST_NODE_ATTR_LIST)
             continue;
-        odin_grammar_node_t * name_node = NULL;
-        odin_grammar_node_t * value_node = NULL;
-        for (size_t j = 0; j < item->list.count; j++)
+        for (size_t j = 0; j < attr_list->list.count; j++)
         {
-            odin_grammar_node_t * child = item->list.children[j];
-            if (child == NULL)
+            odin_grammar_node_t * item = attr_list->list.children[j];
+            if (item == NULL || item->type != AST_NODE_ATTR_ITEM)
                 continue;
-            if (child->type == AST_NODE_IDENTIFIER)
-                name_node = child;
-            else
-                value_node = child;
-        }
-        if (name_node == NULL || name_node->text == NULL)
-            continue;
-
-        if (strcmp(name_node->text, "link_name") == 0 && value_node != NULL && value_node->text)
-        {
-            size_t len = strlen(value_node->text);
-            if (len >= 2 && (value_node->text[0] == '"' || value_node->text[0] == '`'))
+            odin_grammar_node_t * name_node = NULL;
+            odin_grammar_node_t * value_node = NULL;
+            for (size_t k = 0; k < item->list.count; k++)
             {
-                attrs->link_name = strndup(value_node->text + 1, len - 2);
+                odin_grammar_node_t * child = item->list.children[k];
+                if (child == NULL)
+                    continue;
+                if (child->type == AST_NODE_IDENTIFIER)
+                    name_node = child;
+                else
+                    value_node = child;
             }
-        }
-        else if (strcmp(name_node->text, "require_results") == 0)
-        {
-            attrs->require_results = true;
-        }
-        else if (strcmp(name_node->text, "private") == 0)
-        {
-            attrs->is_private = true;
-        }
-        else if (strcmp(name_node->text, "builtin") == 0)
-        {
-            attrs->is_builtin = true;
-        }
-        else if (strcmp(name_node->text, "init") == 0)
-        {
-            attrs->is_init = true;
-        }
-        else if (strcmp(name_node->text, "fini") == 0)
-        {
-            attrs->is_fini = true;
+            sem_apply_attr_item(attrs, name_node, value_node);
         }
     }
+
     decl_node->metadata = attrs;
 }
 

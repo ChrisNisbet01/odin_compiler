@@ -674,19 +674,12 @@ poly_build_env_from_args(
             continue;
         }
 
-        // Determine if this param has a poly ident as its NAME (i.e. $T: typeid)
-        // vs. in its TYPE position (x: $T). The first Identifier-like child is the name.
-        odin_grammar_node_t * first_name_child = NULL;
-        for (size_t ci = 0; ci < param->list.count; ci++)
-        {
-            odin_grammar_node_t * child = param->list.children[ci];
-            if (child && (child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT))
-            {
-                first_name_child = child;
-                break;
-            }
-        }
-        bool is_poly_name = (first_name_child && first_name_child->type == AST_NODE_POLY_IDENT);
+        // Extract names + type node (handles multi-name params: "a, b: $T").
+        odin_grammar_node_t * param_names[32];
+        odin_grammar_node_t * type_node = NULL;
+        bool is_poly_name = false;
+        int name_count = sem_extract_param_names(
+            param, param_names, 32, &type_node, &is_poly_name);
 
         // Find the type node for this param and check if its type is a poly ident reference
         odin_grammar_node_t * poly_type_node = NULL;
@@ -733,94 +726,55 @@ poly_build_env_from_args(
         if (has_poly_decl && is_poly_name)
         {
             // $T: typeid — the poly type declaration doesn't consume an arg slot
-            // (it's a compile-time construct). Skip param_idx increment.
+            // (it's a compile-time construct). The scan above already registered
+            // the $T name (unbound); a later "x: T" param binds it from its arg.
             continue;
         }
 
-        // Find Identifier referencing a poly type in the parameter's type position
-        // For non-poly params (x: T), the type T is an Identifier that should match
-        // a poly param name. If so, bind the poly name to this arg's type.
-        // NOTE: TypePrefix rule has no action, so its matched nodes are flattened
-        // into the Parameter children. For x: T, the children are:
-        // [Identifier("x"), Identifier("T")] — "T" is the second identifier.
-        // The param name is the first Identifier child; subsequent Identifiers are types.
-        int poly_ident_count = 0;
-        for (size_t ci = 0; ci < param->list.count; ci++)
+        if (name_count == 0 || type_node == NULL)
+            continue;
+
+        // For non-poly params (x: T), if the type references a poly param
+        // name (a bare Identifier or an Identifier inside the type subtree),
+        // bind that poly name to this arg's type.
+        if (type_node != NULL && param_idx < arg_count)
         {
-            odin_grammar_node_t * child = param->list.children[ci];
-            if (child == NULL)
-                continue;
-            // Count Identifier children that could be poly type references
-            // (the first Identifier is the param name, skip it)
-            if (child->type == AST_NODE_IDENTIFIER)
+            odin_grammar_node_t * found = NULL;
+            if (type_node->type == AST_NODE_IDENTIFIER)
+                found = type_node;
+            else if (is_type_node(type_node))
+                found = poly_find_ident_in_subtree(type_node);
+            if (found && found->type == AST_NODE_IDENTIFIER)
             {
-                poly_ident_count++;
-                if (poly_ident_count <= 1)
-                    continue; // skip param name
-            }
-            // Check for type nodes or additional identifiers
-            if (is_type_node(child) || child->type == AST_NODE_IDENTIFIER)
-            {
-                odin_grammar_node_t * found = child;
-                if (is_type_node(child))
-                    found = poly_find_ident_in_subtree(child);
-                if (found && found->type == AST_NODE_IDENTIFIER)
+                char const * candidate = found->text;
+                if (candidate)
                 {
-                    if (param_idx < arg_count)
+                    for (int ei = 0; ei < out_env->count; ei++)
                     {
-                        char const * candidate = found->text;
-                        if (candidate)
+                        if (strcmp(out_env->entries[ei].name, candidate) == 0
+                            && out_env->entries[ei].bound_type == NULL)
                         {
-                            for (int ei = 0; ei < out_env->count; ei++)
-                            {
-                                if (strcmp(out_env->entries[ei].name, candidate) == 0
-                                    && out_env->entries[ei].bound_type == NULL)
-                                {
-                                    out_env->entries[ei].bound_type = arg_types[param_idx];
-                                    break;
-                                }
-                            }
+                            out_env->entries[ei].bound_type = arg_types[param_idx];
+                            break;
                         }
                     }
                 }
-                break;
             }
         }
 
         // Walk the param's type subtree for POLY_IDENT references (e.g., $N
         // in array sizes like [$N]int). When found, bind from the corresponding
         // position in the arg type descriptor.
-        // Skip the param name (first Identifier child) and find the type AST.
+        if (type_node != NULL && param_idx < arg_count && arg_types[param_idx])
         {
-            odin_grammar_node_t * param_type_ast = NULL;
-            int type_ident_count = 0;
-            for (size_t ci = 0; ci < param->list.count; ci++)
-            {
-                odin_grammar_node_t * child = param->list.children[ci];
-                if (child == NULL)
-                    continue;
-                if (child->type == AST_NODE_IDENTIFIER)
-                {
-                    type_ident_count++;
-                    if (type_ident_count <= 1)
-                        continue;
-                }
-                if (is_type_node(child) || child->type == AST_NODE_IDENTIFIER)
-                {
-                    param_type_ast = child;
-                    break;
-                }
-            }
-            if (param_type_ast && param_idx < arg_count && arg_types[param_idx])
-            {
-                // Recursively walk the type AST to find POLY_IDENT nodes
-                // that need binding from the concrete arg type.
-                (void)poly_unify_poly_idents_in_type(ctx, param_type_ast,
-                    arg_types[param_idx], out_env);
-            }
+            // Recursively walk the type AST to find POLY_IDENT nodes
+            // that need binding from the concrete arg type.
+            (void)poly_unify_poly_idents_in_type(ctx, type_node,
+                arg_types[param_idx], out_env);
         }
 
-        param_idx++;
+        // Multi-name params consume one arg slot per name.
+        param_idx += name_count;
     }
 
     return out_env->count > 0;

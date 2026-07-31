@@ -190,7 +190,7 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
                     if (param->type != AST_NODE_PARAMETER)
                         continue;
 
-                    // Parameter = KwUsing? (PolyIdent Colon)? Identifier Colon VariadicMarker? TypePrefix
+                    // Parameter = KwUsing? (PolyIdent Colon)? Identifier (Comma Identifier)* Colon VariadicMarker? TypePrefix
                     // Check for VariadicMarker child (AST_NODE_ELLIPSIS from ..)
                     bool is_variadic_param = false;
                     for (size_t ci = 0; ci < param->list.count; ci++)
@@ -204,16 +204,13 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
                         }
                     }
 
-                    // Find the TypePrefix child (last non-NULL child)
+                    // Extract names + type node (handles multi-name params: "a, b: T")
+                    odin_grammar_node_t * param_names[32];
                     odin_grammar_node_t * type_node = NULL;
-                    for (size_t ci = 0; ci < param->list.count; ci++)
-                    {
-                        odin_grammar_node_t * pc = param->list.children[ci];
-                        if (pc != NULL && pc->type != AST_NODE_ELLIPSIS)
-                            type_node = pc;
-                    }
-
-                    if (type_node == NULL)
+                    bool is_poly_decl_param = false;
+                    int name_count = sem_extract_param_names(
+                        param, param_names, 32, &type_node, &is_poly_decl_param);
+                    if (name_count == 0 || type_node == NULL)
                         continue;
 
                     TypeDescriptor const * pt = sem_resolve_type_expr(ctx, type_node);
@@ -230,22 +227,27 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
                         type_node->resolved_type = (TypeDescriptor *)pt;
                     }
 
-                    // Grow params array
-                    if (param_count >= (int)param_cap)
+                    // Register the type once per name (multi-name params consume
+                    // one runtime slot per name).
+                    for (int ni = 0; ni < name_count; ni++)
                     {
-                        size_t new_cap = param_cap == 0 ? 4 : param_cap * 2;
-                        TypeDescriptor const ** tmp = (TypeDescriptor const **)realloc(
-                            (void *)params, new_cap * sizeof(TypeDescriptor const *)
-                        );
-                        if (tmp == NULL)
+                        // Grow params array
+                        if (param_count >= (int)param_cap)
                         {
-                            free((void *)params);
-                            return NULL;
+                            size_t new_cap = param_cap == 0 ? 4 : param_cap * 2;
+                            TypeDescriptor const ** tmp = (TypeDescriptor const **)realloc(
+                                (void *)params, new_cap * sizeof(TypeDescriptor const *)
+                            );
+                            if (tmp == NULL)
+                            {
+                                free((void *)params);
+                                return NULL;
+                            }
+                            params = tmp;
+                            param_cap = new_cap;
                         }
-                        params = tmp;
-                        param_cap = new_cap;
+                        params[param_count++] = pt;
                     }
-                    params[param_count++] = pt;
                 }
             }
         }
@@ -1625,6 +1627,77 @@ collect_parameters_from_param_list(odin_grammar_node_t * param_list,
         }
     }
     return count;
+}
+
+// Extract param name AST nodes and the type node from a PARAMETER node.
+// Grammar: Parameter = KwUsing? (PolyIdent Colon TypePrefix | Identifier (Comma Identifier)* Colon VariadicMarker? TypePrefix) (ColonAssign AssignExpression)?
+// For "a, b: T": names = {a, b}, type = T.
+// If every child is an Identifier, the last one is the type (e.g. "x: T").
+int
+sem_extract_param_names(odin_grammar_node_t * param, odin_grammar_node_t ** names_out,
+                        int max_names, odin_grammar_node_t ** type_out, bool * is_poly_decl)
+{
+    if (names_out != NULL && max_names > 0)
+        memset(names_out, 0, (size_t)max_names * sizeof(*names_out));
+    if (type_out != NULL)
+        *type_out = NULL;
+    if (is_poly_decl != NULL)
+        *is_poly_decl = false;
+    if (param == NULL)
+        return 0;
+
+    // "$T: typeid" declarations have a PolyIdent in the name position.
+    bool poly_decl_form = false;
+    for (size_t ci = 0; ci < param->list.count; ci++)
+    {
+        odin_grammar_node_t * child = param->list.children[ci];
+        if (child == NULL)
+            continue;
+        if (child->type == AST_NODE_IDENTIFIER || child->type == AST_NODE_POLY_IDENT)
+        {
+            poly_decl_form = (child->type == AST_NODE_POLY_IDENT);
+            break;
+        }
+    }
+    if (is_poly_decl != NULL)
+        *is_poly_decl = poly_decl_form;
+
+    int name_count = 0;
+    odin_grammar_node_t * type_node = NULL;
+    bool skip_poly_name = poly_decl_form;
+    for (size_t ci = 0; ci < param->list.count; ci++)
+    {
+        odin_grammar_node_t * child = param->list.children[ci];
+        if (child == NULL)
+            continue;
+        // Skip the $T in "$T: typeid" — it's the name, not the type.
+        if (skip_poly_name && child->type == AST_NODE_POLY_IDENT)
+        {
+            skip_poly_name = false;
+            continue;
+        }
+        if (child->type == AST_NODE_IDENTIFIER)
+        {
+            if (names_out != NULL && name_count < max_names)
+                names_out[name_count] = child;
+            name_count++;
+        }
+        else if (child->type != AST_NODE_ELLIPSIS && child->type != AST_NODE_DIRECTIVE
+                 && type_node == NULL)
+        {
+            // First non-Identifier, non-marker child is the type
+            type_node = child;
+        }
+    }
+    // If all children were identifiers, the last one is the type (e.g. "x: T")
+    if (type_node == NULL && name_count > 1)
+    {
+        type_node = names_out[name_count - 1];
+        name_count--;
+    }
+    if (type_out != NULL)
+        *type_out = type_node;
+    return name_count;
 }
 
 // --- Poly struct instantiation cache ---
