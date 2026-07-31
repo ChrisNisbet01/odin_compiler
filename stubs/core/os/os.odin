@@ -60,8 +60,9 @@ __odin_track_handle :: proc(fd: int) {
 __odin_untrack_handle :: proc(fd: int) {
     for i in 0..<__odin_num_handles {
         if __odin_open_handles[i] == fd {
-            for j in i..<__odin_num_handles - 1 {
-                __odin_open_handles[j] = __odin_open_handles[j + 1]
+            n := __odin_num_handles - 1
+            if i != n {
+                __odin_open_handles[i] = __odin_open_handles[n]
             }
             __odin_num_handles -= 1
             return
