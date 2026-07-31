@@ -655,6 +655,10 @@ type_descriptors_destroy_registry(TypeDescriptors * registry)
         {
             free((void *)registry->types[i]->proc_metadata.default_values);
         }
+        if (registry->types[i]->proc_metadata.named_return_names)
+        {
+            free((void *)registry->types[i]->proc_metadata.named_return_names);
+        }
         if (registry->types[i]->kind == TD_KIND_OVERLOAD_BUNDLE)
         {
             free(registry->types[i]->as.overload_bundle.candidate_types);
@@ -1035,6 +1039,7 @@ get_or_create_proc_type(
     int return_count,
     bool is_variadic,
     calling_convention_t calling_convention,
+    char const ** named_return_names,
     bool force_unique
 )
 {
@@ -1104,6 +1109,20 @@ get_or_create_proc_type(
         memcpy((void *)td->proc_metadata.returns, returns, (size_t)return_count * sizeof(*td->proc_metadata.returns));
     }
 
+    // Copy named return names (if any)
+    if (named_return_names != NULL && return_count > 0)
+    {
+        td->proc_metadata.named_return_names = malloc((size_t)return_count * sizeof(char const *));
+        for (int i = 0; i < return_count; i++)
+        {
+            td->proc_metadata.named_return_names[i] = named_return_names[i];
+        }
+    }
+    else if (return_count > 0)
+    {
+        td->proc_metadata.named_return_names = calloc((size_t)return_count, sizeof(char const *));
+    }
+
     // Initialize default_values array (all NULL initially)
     if (param_count > 0)
     {
@@ -1139,7 +1158,10 @@ get_or_create_proc_type(
     }
     else
     {
-        ret_llvm = return_type ? return_type->llvm_type : LLVMVoidTypeInContext(registry->context);
+        if (returns != NULL && return_count > 0 && returns[0] != NULL)
+            ret_llvm = returns[0]->llvm_type;
+        else
+            ret_llvm = return_type ? return_type->llvm_type : LLVMVoidTypeInContext(registry->context);
     }
 
     // LLVM variadic only for bare ... (not ..any which uses a slice param)

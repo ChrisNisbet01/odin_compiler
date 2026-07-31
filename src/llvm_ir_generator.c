@@ -110,12 +110,13 @@ ir_gen_context_destroy(IrGenContext * ctx)
 // --- Function context stack ---
 
 void
-func_push(IrGenContext * ctx, LLVMValueRef func, TypeDescriptor const * return_type)
+func_push(IrGenContext * ctx, LLVMValueRef func, TypeDescriptor const * return_type, TypeDescriptor const * proc_type)
 {
     if (ctx->func_depth < MAX_FUNC_DEPTH)
     {
         ctx->func_stack[ctx->func_depth].function = func;
         ctx->func_stack[ctx->func_depth].return_type = return_type;
+        ctx->func_stack[ctx->func_depth].proc_type = proc_type;
         ctx->func_depth++;
     }
 }
@@ -131,6 +132,12 @@ LLVMValueRef
 func_current_function(IrGenContext * ctx)
 {
     return ctx->func_depth > 0 ? ctx->func_stack[ctx->func_depth - 1].function : NULL;
+}
+
+TypeDescriptor const *
+func_current_proc_type(IrGenContext * ctx)
+{
+    return ctx->func_depth > 0 ? ctx->func_stack[ctx->func_depth - 1].proc_type : NULL;
 }
 
 void
@@ -1085,7 +1092,7 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     if (sym && sym->is_polymorphic)
         return NULL;
 
-    if (value_node->type == AST_NODE_PROCEDURE_DEFINITION)
+    if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_DEFINITION)
     {
         TypeDescriptor const * proc_type = value_node->resolved_type;
         if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
@@ -1119,10 +1126,29 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
             LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
-            func_push(ctx, func, proc_type->proc_metadata.return_type);
+            func_push(ctx, func, proc_type->proc_metadata.return_type, proc_type);
 
             generator_push_scope(ctx->gen_ctx);
             ir_gen_register_params(ctx, value_node, func, NULL);
+
+            // Register named return variables in the function scope
+            if (proc_type->proc_metadata.named_return_names != NULL
+                && proc_type->proc_metadata.return_count > 0)
+            {
+                for (int ri = 0; ri < proc_type->proc_metadata.return_count; ri++)
+                {
+                    char const * name = proc_type->proc_metadata.named_return_names[ri];
+                    if (name == NULL)
+                        continue;
+                    TypeDescriptor const * ret_type = proc_type->proc_metadata.returns[ri];
+                    if (ret_type == NULL)
+                        continue;
+                    LLVMValueRef named_ret_alloca = LLVMBuildAlloca(ctx->builder, ret_type->llvm_type, name);
+                    LLVMBuildStore(ctx->builder, LLVMConstNull(ret_type->llvm_type), named_ret_alloca);
+                    TypedValue tv = create_typed_value(named_ret_alloca, ret_type, true);
+                    generator_add_symbol(ctx->gen_ctx, name, tv);
+                }
+            }
 
             // Inject implicit context parameter for ODIN calling convention
             if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
@@ -1168,7 +1194,77 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             if (last_inst == NULL || !LLVMIsATerminatorInst(last_inst))
             {
                 ir_gen_emit_defers_at_depth(ctx, ctx->current_scope_depth);
-                ir_gen_implicit_return(ctx);
+
+                // Emit implicit return - handle named returns if any
+                if (proc_type->proc_metadata.named_return_names != NULL
+                    && proc_type->proc_metadata.return_count > 0)
+                {
+                    // Delegate to ir_gen_return_statement logic via inline handling
+                    // (same as empty return statement with named returns)
+                    TypeDescriptor const * named_proc_type = proc_type;
+                    if (named_proc_type->proc_metadata.return_count == 1)
+                    {
+                        char const * name = named_proc_type->proc_metadata.named_return_names[0];
+                        if (name != NULL)
+                        {
+                            symbol_t * named_sym = scope_find_symbol_entry(
+                                generator_current_scope(ctx->gen_ctx), name);
+                            if (named_sym != NULL && named_sym->value.value != NULL)
+                            {
+                                LLVMValueRef ret_val = named_sym->value.value;
+                                TypeDescriptor const * ret_type = named_proc_type->proc_metadata.returns[0];
+                                if (ret_type != NULL)
+                                {
+                                    ret_val = LLVMBuildLoad2(ctx->builder, ret_type->llvm_type, ret_val, "ret.load");
+                                }
+                                LLVMBuildRet(ctx->builder, ret_val);
+                            }
+                            else
+                            {
+                                LLVMBuildRet(ctx->builder, LLVMConstNull(
+                                    LLVMGetReturnType(LLVMGlobalGetValueType(func))));
+                            }
+                        }
+                        else
+                        {
+                            LLVMBuildRet(ctx->builder, LLVMConstNull(
+                                LLVMGetReturnType(LLVMGlobalGetValueType(func))));
+                        }
+                    }
+                    else
+                    {
+                        // Multiple named returns
+                        LLVMValueRef ret_llvm_type = LLVMGetReturnType(LLVMGlobalGetValueType(func));
+                        LLVMValueRef struct_val = LLVMGetUndef(ret_llvm_type);
+                        for (int i = 0; i < named_proc_type->proc_metadata.return_count; i++)
+                        {
+                            char const * name = named_proc_type->proc_metadata.named_return_names[i];
+                            if (name == NULL) continue;
+                            symbol_t * named_sym = scope_find_symbol_entry(
+                                generator_current_scope(ctx->gen_ctx), name);
+                            if (named_sym != NULL && named_sym->value.value != NULL)
+                            {
+                                LLVMValueRef field_val = named_sym->value.value;
+                                TypeDescriptor const * field_type = named_proc_type->proc_metadata.returns[i];
+                                if (field_type != NULL)
+                                {
+                                    field_val = LLVMBuildLoad2(ctx->builder, field_type->llvm_type, field_val, "ret.field.load");
+                                }
+                                struct_val = LLVMBuildInsertValue(ctx->builder, struct_val, field_val,
+                                                                  (unsigned)i, "ret.field");
+                            }
+                        }
+                        LLVMBuildRet(ctx->builder, struct_val);
+                    }
+                }
+                else if (LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(func))) == LLVMVoidTypeKind)
+                {
+                    LLVMBuildRetVoid(ctx->builder);
+                }
+                else
+                {
+                    LLVMBuildRet(ctx->builder, LLVMConstNull(LLVMGetReturnType(LLVMGlobalGetValueType(func))));
+                }
             }
 
             generator_pop_scope(ctx->gen_ctx);
@@ -1350,10 +1446,29 @@ ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node)
     TypedValue tv = create_typed_value(func, proc_type, false);
     generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
 
-    func_push(ctx, func, proc_type->proc_metadata.return_type);
+    func_push(ctx, func, proc_type->proc_metadata.return_type, proc_type);
 
     generator_push_scope(ctx->gen_ctx);
     ir_gen_register_params(ctx, value_node, func, NULL);
+
+    // Register named return variables in the function scope
+    if (proc_type->proc_metadata.named_return_names != NULL
+        && proc_type->proc_metadata.return_count > 0)
+    {
+        for (int ri = 0; ri < proc_type->proc_metadata.return_count; ri++)
+        {
+            char const * name = proc_type->proc_metadata.named_return_names[ri];
+            if (name == NULL)
+                continue;
+            TypeDescriptor const * ret_type = proc_type->proc_metadata.returns[ri];
+            if (ret_type == NULL)
+                continue;
+            LLVMValueRef named_ret_alloca = LLVMBuildAlloca(ctx->builder, ret_type->llvm_type, name);
+            LLVMBuildStore(ctx->builder, LLVMConstNull(ret_type->llvm_type), named_ret_alloca);
+            TypedValue tv = create_typed_value(named_ret_alloca, ret_type, true);
+            generator_add_symbol(ctx->gen_ctx, name, tv);
+        }
+    }
 
     // Inject implicit context parameter for ODIN calling convention
     if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
@@ -3636,7 +3751,7 @@ ir_gen_pending_specialization(IrGenContext * ctx, PolySpecialization * spec)
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, func, "entry");
     LLVMPositionBuilderAtEnd(ctx->builder, entry);
 
-    func_push(ctx, func, proc_type->proc_metadata.return_type);
+    func_push(ctx, func, proc_type->proc_metadata.return_type, proc_type);
     generator_push_scope(ctx->gen_ctx);
 
     // Register polymorphic integer constants ($N) in the specialization's scope

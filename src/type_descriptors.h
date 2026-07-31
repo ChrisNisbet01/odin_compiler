@@ -37,6 +37,10 @@ typedef struct
     // A NULL entry means no default value; non-NULL is the expression AST node
     // containing the default value (re-evaluated at each call site)
     struct odin_grammar_node_t * * default_values;
+
+    // Named return variable names (NULL if no named returns)
+    // Allocated as array of return_count char* pointers
+    char const ** named_return_names;
 } ProcMetadata;
 
 typedef struct
@@ -234,6 +238,7 @@ TypeDescriptor const * get_or_create_proc_type(
     int return_count,
     bool is_variadic,
     calling_convention_t calling_convention,
+    char const ** named_return_names,
     bool force_unique
 );
 

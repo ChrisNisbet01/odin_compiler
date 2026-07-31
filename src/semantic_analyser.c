@@ -405,6 +405,12 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
         ProcMetadata const * pm = &expected_return_type->proc_metadata;
         if (pm->return_count > 1)
         {
+            // For named multi-return with bare return, allow it
+            if (node->list.count == 0 && pm->named_return_names != NULL && pm->return_count > 0)
+            {
+                // Named multi-return - bare return is valid, all named vars will be used
+                return;
+            }
             size_t expr_count = node->list.count;
             if ((int)expr_count != pm->return_count)
             {
@@ -445,10 +451,22 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
         }
         else if (pm->return_count == 1)
         {
+            // Check for named return before updating expected_return_type
+            if (node->list.count == 0 && pm->named_return_names != NULL)
+            {
+                // Named single return - bare return is valid
+                return;
+            }
             expected_return_type = pm->returns[0];
         }
         else
         {
+            // Multiple return types - if no expression, check for named returns
+            if (node->list.count == 0 && pm->named_return_names != NULL && pm->return_count > 0)
+            {
+                // Named multi-return - bare return is valid
+                return;
+            }
             if (node->list.count > 0)
                 sem_error_list_add(&ctx->errors, NULL, node, "unexpected return value in void procedure");
             return;
@@ -457,9 +475,19 @@ sem_analyse_return_statement(SemContext * ctx, odin_grammar_node_t * node, TypeD
 
     if (node->list.count == 0)
     {
+        // Check for single or multi named return - this is valid
+        if (expected_return_type != NULL && expected_return_type->kind == TD_KIND_PROC)
+        {
+            ProcMetadata const * pm = &expected_return_type->proc_metadata;
+            if (pm->named_return_names != NULL && pm->return_count > 0)
+            {
+                // Named return with implicit return - valid, IR gen will handle it
+                return;
+            }
+        }
         if (expected_return_type != NULL && expected_return_type != type_descriptor_get_void_type(ctx->type_registry))
         {
-            sem_error_list_add(&ctx->errors, NULL, node, "expected return value");
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "expected return value");
         }
         return;
     }
@@ -537,6 +565,12 @@ sem_resolve_procedure_signature(
 
     odin_grammar_node_t * param_list_node = NULL;
 
+    // Variables for named return handling
+    odin_grammar_node_t ** default_value_nodes = NULL;
+    size_t default_val_cap = 0;
+    char const ** named_return_names_array = NULL;
+    bool have_named_return_names = false;
+
     for (size_t i = 0; i < node->list.count; i++)
     {
         odin_grammar_node_t * child = node->list.children[i];
@@ -579,23 +613,35 @@ sem_resolve_procedure_signature(
                         return_type = NULL;
                         return_count = 0;
                         return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+                        named_return_names_array = calloc(ret_child->list.count, sizeof(char const *));
+                        have_named_return_names = true;
                         for (size_t ri = 0; ri < ret_child->list.count; ri++)
                         {
                             odin_grammar_node_t * named = ret_child->list.children[ri];
                             if (named == NULL || named->type != AST_NODE_NAMED_RETURN)
                                 continue;
-                            odin_grammar_node_t * tn = NULL;
+                            odin_grammar_node_t * name_node = NULL;
+                            odin_grammar_node_t * type_node = NULL;
                             for (size_t ci = 0; ci < named->list.count; ci++)
                             {
-                                if (named->list.children[ci] != NULL)
-                                    tn = named->list.children[ci];
+                                odin_grammar_node_t * ch = named->list.children[ci];
+                                if (ch == NULL)
+                                    continue;
+                                if (ch->type == AST_NODE_IDENTIFIER && name_node == NULL)
+                                    name_node = ch;
+                                else if (ch->type != AST_NODE_DIRECTIVE && ch->type != AST_NODE_DIRECTIVE_WITH_ARGS)
+                                    type_node = ch;
                             }
-                            if (tn == NULL)
+                            if (type_node == NULL)
                                 continue;
-                            TypeDescriptor const * td = sem_resolve_type_expr(ctx, tn);
-                            tn->resolved_type = (TypeDescriptor *)td;
+                            TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+                            type_node->resolved_type = (TypeDescriptor *)td;
                             if (td)
-                                return_types[return_count++] = td;
+                            {
+                                return_types[return_count] = td;
+                                named_return_names_array[return_count] = name_node ? name_node->text : NULL;
+                                return_count++;
+                            }
                         }
                     }
                     else
@@ -618,8 +664,6 @@ sem_resolve_procedure_signature(
     }
 
     // Extract param type descriptors and default values from the parameter list
-    odin_grammar_node_t ** default_value_nodes = NULL;
-    size_t default_val_cap = 0;
     if (param_list_node != NULL && param_list_node->list.count > 0)
     {
         odin_grammar_node_t * params = param_list_node->list.children[0];
@@ -790,8 +834,19 @@ sem_resolve_procedure_signature(
         return_count,
         is_variadic,
         cc,
-        has_any_defaults
+        named_return_names_array,
+        has_any_defaults || have_named_return_names  // force_unique
     );
+
+    // Free the named_return_names array if we allocated it
+    if (have_named_return_names && named_return_names_array != NULL)
+    {
+        for (int i = 0; i < return_count; i++)
+        {
+            // Names are string literals, no need to free individual entries
+        }
+        free((void *)named_return_names_array);
+    }
 
     // Populate default parameter values in the proc type metadata
     if (proc_type != NULL && default_value_nodes != NULL && param_count > 0)
@@ -943,6 +998,30 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
         }
     }
 
+    // Register named return variables in the body scope
+    // (they need to be declared for the semantic analyzer to resolve them)
+    if (node->resolved_type != NULL && node->resolved_type->kind == TD_KIND_PROC)
+    {
+        TypeDescriptor const * proc_type = node->resolved_type;
+        if (proc_type->proc_metadata.named_return_names != NULL
+            && proc_type->proc_metadata.return_count > 0)
+        {
+            for (int ri = 0; ri < proc_type->proc_metadata.return_count; ri++)
+            {
+                char const * name = proc_type->proc_metadata.named_return_names[ri];
+                if (name == NULL)
+                    continue;
+                TypeDescriptor const * ret_type = proc_type->proc_metadata.returns[ri];
+                if (ret_type == NULL)
+                    continue;
+                TypedValue tv = create_typed_value(NULL, ret_type, true);
+                scope_add_symbol(generator_current_scope(ctx->gen_ctx), name, tv);
+            }
+        }
+    }
+
+    // Register polymorphic integer slots ($N) as i64 constants in body scope
+
     // Register polymorphic integer slots ($N) as i64 constants in body scope
     if (ctx->poly_env_stack_depth > 0)
     {
@@ -1092,6 +1171,12 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
     else if (value_node != NULL && value_node->type == AST_NODE_IDENTIFIER)
     {
         resolved_type = sem_resolve_type_expr(ctx, value_node);
+        value_node->resolved_type = (TypeDescriptor *)resolved_type;
+    }
+
+    // Store resolved type on value_node for procedure definitions
+    if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_DEFINITION)
+    {
         value_node->resolved_type = (TypeDescriptor *)resolved_type;
     }
 

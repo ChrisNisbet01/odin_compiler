@@ -134,8 +134,65 @@ ir_gen_return_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     // Emit all pending defers before the return instruction
     ir_gen_emit_all_defers(ctx);
 
-    if (expr_count == 0)
+if (expr_count == 0)
     {
+        // Check for named returns: emit return of named variable(s)
+        TypeDescriptor const * proc_type = func_current_proc_type(ctx);
+        if (proc_type != NULL && proc_type->kind == TD_KIND_PROC
+            && proc_type->proc_metadata.named_return_names != NULL
+            && proc_type->proc_metadata.return_count > 0)
+        {
+            // Single named return
+            if (proc_type->proc_metadata.return_count == 1)
+            {
+                char const * name = proc_type->proc_metadata.named_return_names[0];
+                if (name != NULL)
+                {
+                    symbol_t * named_sym = scope_find_symbol_entry(
+                        generator_current_scope(ctx->gen_ctx), name);
+                    if (named_sym != NULL && named_sym->value.value != NULL)
+                    {
+                        LLVMValueRef ret_val = named_sym->value.value;
+                        TypeDescriptor const * ret_type = proc_type->proc_metadata.returns[0];
+                        // Load from alloca (for basic types, the alloca holds the value)
+                        if (ret_type != NULL)
+                        {
+                            ret_val = LLVMBuildLoad2(ctx->builder, ret_type->llvm_type, ret_val, "ret.load");
+                        }
+                        return LLVMBuildRet(ctx->builder, ret_val);
+                    }
+                }
+            }
+            else
+            {
+                // Multiple named returns: pack into struct
+                LLVMValueRef ret_llvm_type
+                    = LLVMGetReturnType(LLVMGlobalGetValueType(func_current_function(ctx)));
+                LLVMValueRef struct_val = LLVMGetUndef(ret_llvm_type);
+                for (int i = 0; i < proc_type->proc_metadata.return_count; i++)
+                {
+                    char const * name = proc_type->proc_metadata.named_return_names[i];
+                    if (name == NULL)
+                        continue;
+                    symbol_t * named_sym = scope_find_symbol_entry(
+                        generator_current_scope(ctx->gen_ctx), name);
+                    if (named_sym != NULL && named_sym->value.value != NULL)
+                    {
+                        LLVMValueRef field_val = named_sym->value.value;
+                        TypeDescriptor const * field_type
+                            = proc_type->proc_metadata.returns[i];
+                        // Load from alloca (for basic types, the alloca holds the value)
+                        if (field_type != NULL)
+                        {
+                            field_val = LLVMBuildLoad2(ctx->builder, field_type->llvm_type, field_val, "ret.field.load");
+                        }
+                        struct_val = LLVMBuildInsertValue(ctx->builder, struct_val, field_val,
+                                                          (unsigned)i, "ret.field");
+                    }
+                }
+                return LLVMBuildRet(ctx->builder, struct_val);
+            }
+        }
         return LLVMBuildRetVoid(ctx->builder);
     }
 

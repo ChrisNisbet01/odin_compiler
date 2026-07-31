@@ -40,6 +40,7 @@ typedef struct
 {
     LLVMValueRef function;
     TypeDescriptor const * return_type;
+    TypeDescriptor const * proc_type;  // Full proc type descriptor (for named return lookup)
 } FuncContext;
 
 typedef struct
@@ -110,7 +111,7 @@ int write_llvm_ir_to_file(LLVMModuleRef module, char const * file_path);
 int emit_to_file(LLVMModuleRef module, char const * file_path, char const * march, LLVMCodeGenFileType file_type);
 
 // Shared IR gen helpers (used across extracted modules)
-void func_push(IrGenContext * ctx, LLVMValueRef func, TypeDescriptor const * return_type);
+void func_push(IrGenContext * ctx, LLVMValueRef func, TypeDescriptor const * return_type, TypeDescriptor const * proc_type);
 void func_pop(IrGenContext * ctx);
 LLVMValueRef func_current_function(IrGenContext * ctx);
 void ir_gen_implicit_return(IrGenContext * ctx);
@@ -131,6 +132,7 @@ LLVMValueRef ir_gen_map_subscript(IrGenContext * ctx, LLVMValueRef map_val,
                                   LLVMValueRef index_val,
                                   TypeDescriptor const ** out_val_type,
                                   bool is_lvalue, char const * prefix);
+TypeDescriptor const * func_current_proc_type(IrGenContext * ctx);
 
 // Postfix expression codegen
 LLVMValueRef ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node);

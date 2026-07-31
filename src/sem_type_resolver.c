@@ -102,6 +102,7 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
     size_t param_cap = 0;
     bool is_variadic = false;
     calling_convention_t cc = CALLING_CONV_ODIN;
+    char const ** named_return_names = NULL;
 
     for (size_t i = 0; i < node->list.count; i++)
     {
@@ -115,57 +116,73 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
                 cc = parse_calling_convention(str_child->text);
         }
         else if (child->type == AST_NODE_RETURNS && child->list.count > 0)
-        {
-            odin_grammar_node_t * ret_child = child->list.children[0];
-            if (ret_child->type == AST_NODE_RETURN_TYPE_LIST)
-            {
-                return_count = 0;
-                return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
-                for (size_t ri = 0; ri < ret_child->list.count; ri++)
                 {
-                    odin_grammar_node_t * type_node = ret_child->list.children[ri];
-                    if (type_node == NULL)
-                        continue;
-                    TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
-                    type_node->resolved_type = (TypeDescriptor *)td;
-                    if (td)
-                        return_types[return_count++] = td;
-                }
-            }
-            else if (ret_child->type == AST_NODE_RETURN_LIST)
-            {
-                return_count = 0;
-                return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
-                for (size_t ri = 0; ri < ret_child->list.count; ri++)
-                {
-                    odin_grammar_node_t * named = ret_child->list.children[ri];
-                    if (named == NULL || named->type != AST_NODE_NAMED_RETURN)
-                        continue;
-                    odin_grammar_node_t * type_node = NULL;
-                    for (size_t ci = 0; ci < named->list.count; ci++)
+                    odin_grammar_node_t * ret_child = child->list.children[0];
+                    if (ret_child->type == AST_NODE_RETURN_TYPE_LIST)
                     {
-                        if (named->list.children[ci] != NULL)
-                            type_node = named->list.children[ci];
+                        return_count = 0;
+                        return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+                        for (size_t ri = 0; ri < ret_child->list.count; ri++)
+                        {
+                            odin_grammar_node_t * type_node = ret_child->list.children[ri];
+                            if (type_node == NULL)
+                                continue;
+                            TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+                            type_node->resolved_type = (TypeDescriptor *)td;
+                            if (td)
+                                return_types[return_count++] = td;
+                        }
                     }
-                    if (type_node == NULL)
-                        continue;
-                    TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
-                    type_node->resolved_type = (TypeDescriptor *)td;
-                    if (td)
-                        return_types[return_count++] = td;
+                    else if (ret_child->type == AST_NODE_RETURN_LIST)
+                    {
+                        return_count = 0;
+                        return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+                        // Allocate array to hold named return names (must survive until get_or_create_proc_type)
+                        char const * * nrn_array = calloc(ret_child->list.count, sizeof(char const *));
+                        for (size_t ri = 0; ri < ret_child->list.count; ri++)
+                        {
+                            odin_grammar_node_t * named = ret_child->list.children[ri];
+                            if (named == NULL || named->type != AST_NODE_NAMED_RETURN)
+                                continue;
+
+                            // Extract name (first Identifier child)
+                            odin_grammar_node_t * name_node = NULL;
+                            odin_grammar_node_t * type_node = NULL;
+                            for (size_t ci = 0; ci < named->list.count; ci++)
+                            {
+                                odin_grammar_node_t * ch = named->list.children[ci];
+                                if (ch == NULL)
+                                    continue;
+                                if (ch->type == AST_NODE_IDENTIFIER && name_node == NULL)
+                                    name_node = ch;
+                                else if (ch->type != AST_NODE_DIRECTIVE && ch->type != AST_NODE_DIRECTIVE_WITH_ARGS)
+                                    type_node = ch;
+                            }
+                            if (type_node == NULL)
+                                continue;
+                            TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+                            type_node->resolved_type = (TypeDescriptor *)td;
+                            if (td)
+                            {
+                                return_types[return_count] = td;
+                                nrn_array[return_count] = name_node ? name_node->text : NULL;
+                                return_count++;
+                            }
+                        }
+                        // Take ownership of the array (will be freed after get_or_create_proc_type copies pointers)
+                        named_return_names = nrn_array;
+                    }
+                    else
+                    {
+                        return_type = sem_resolve_type_expr(ctx, ret_child);
+                        if (return_type)
+                        {
+                            return_types = malloc(sizeof(TypeDescriptor const *));
+                            return_types[0] = return_type;
+                            return_count = 1;
+                        }
+                    }
                 }
-            }
-            else
-            {
-                return_type = sem_resolve_type_expr(ctx, ret_child);
-                if (return_type)
-                {
-                    return_types = malloc(sizeof(TypeDescriptor const *));
-                    return_types[0] = return_type;
-                    return_count = 1;
-                }
-            }
-        }
         else if (child->type == AST_NODE_PARAMETER_LIST)
         {
             // ParameterList = LParen Parameters? RParen
@@ -259,10 +276,14 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
     }
     TypeDescriptor const * proc_type = get_or_create_proc_type(
         ctx->type_registry, return_type, params, param_count, return_types, return_count, is_variadic, cc,
-        false
+        named_return_names, false
     );
     free((void *)params);
     free((void *)return_types);
+    if (named_return_names != NULL && return_count > 0)
+    {
+        free((void *)named_return_names);
+    }
     if (proc_type)
         node->resolved_type = (TypeDescriptor *)proc_type;
     return proc_type;
