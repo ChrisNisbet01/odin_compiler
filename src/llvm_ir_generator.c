@@ -1191,6 +1191,25 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
             ctx->bounds_checking_enabled = saved_bounds_checking;
         }
 
+        // Phase 3: Collect @(init) and @(fini) procedures
+        if (attrs && (attrs->is_init || attrs->is_fini))
+        {
+            if (attrs->is_init)
+            {
+                if (ctx->init_proc_count < 128)
+                {
+                    ctx->init_procs[ctx->init_proc_count++] = func;
+                }
+            }
+            if (attrs->is_fini)
+            {
+                if (ctx->fini_proc_count < 128)
+                {
+                    ctx->fini_procs[ctx->fini_proc_count++] = func;
+                }
+            }
+        }
+
         return func;
     }
 
@@ -3881,7 +3900,30 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
 
         LLVMTypeRef odin_main_func_type = LLVMGlobalGetValueType(odin_main);
         LLVMValueRef odin_main_args[] = {context_ptr};
+
+        // Phase 3: Call all @(init) procedures before main
+        for (int init_i = 0; init_i < ctx->init_proc_count; init_i++)
+        {
+            LLVMValueRef init_fn = ctx->init_procs[init_i];
+            LLVMTypeRef init_fn_type = LLVMGlobalGetValueType(init_fn);
+            LLVMValueRef init_args[] = {context_ptr};
+            LLVMBuildCall2(ctx->builder, init_fn_type, init_fn, init_args, 1, "");
+        }
+
         LLVMBuildCall2(ctx->builder, odin_main_func_type, odin_main, odin_main_args, 1, "");
+
+        // Phase 3: Register @(fini) procedures with atexit
+        // These will be called when os.exit() is invoked or process exits normally
+        LLVMTypeRef void_fn_type = LLVMFunctionType(LLVMVoidTypeInContext(ctx->context), NULL, 0, false);
+        LLVMValueRef atexit_fn = LLVMGetNamedFunction(ctx->module, "atexit");
+        if (atexit_fn == NULL)
+            atexit_fn = LLVMAddFunction(ctx->module, "atexit", void_fn_type);
+
+        for (int fini_i = 0; fini_i < ctx->fini_proc_count; fini_i++)
+        {
+            LLVMValueRef fini_fn = ctx->fini_procs[fini_i];
+            LLVMBuildCall2(ctx->builder, void_fn_type, atexit_fn, &fini_fn, 1, "");
+        }
 
         // Odin main is always void; exit code is set via os.exit()
         LLVMBuildRet(ctx->builder, LLVMConstInt(i32t, 0, false));

@@ -90,6 +90,12 @@ typedef struct
     // Pending polymorphic specializations (from semantic analyser)
     PolySpecialization ** pending_specializations;
     int pending_spec_count;
+
+    // Phase 3: @(init)/@(fini) procedure collection
+    LLVMValueRef init_procs[128];
+    int init_proc_count;
+    LLVMValueRef fini_procs[128];
+    int fini_proc_count;
 } IrGenContext;
 
 IrGenContext *

@@ -46,9 +46,23 @@ This is a conservative approach - a proper implementation would track actual dep
 
 - In `ir_generate()`, skip `ir_gen_process_ast(pkg->ast)` when `!pkg->is_used`
 - Skip `import_using_copy_symbol` for unused packages
-- Essential packages are always processed (see Phase 1 heuristic)
+- Foreign libraries from skipped imports are not emitted (they're only added during codegen)
+- Essential packages (`os`, `io`, `runtime`, `mem`) are always processed
 
-## Phase 3: Collect and Call @(init)/@(fini) (~200 lines)
+## Phase 3: Collect and Call @(init)/@(fini) ✅ DONE
+
+### Data structures added to `IrGenContext`
+- `LLVMValueRef init_procs[128]; int init_proc_count;`
+- `LLVMValueRef fini_procs[128]; int fini_proc_count;`
+
+### Collection during codegen
+- In `ir_gen_top_level_decl`, after emitting a procedure body, check `attrs->is_init`/`attrs->is_fini`
+- If set, append the function value to the appropriate array
+
+### Entry point integration
+- Call all `init_procs[]` before `__odin_main` (pass context pointer as argument)
+- Register all `fini_procs[]` with `atexit()` so they run when `os.exit()` is called or process exits normally
+- Init/fini signature is `proc()` (void args, void return)
 
 ### Data structures
 - Add `LLVMValueRef init_procs[MAX_INIT_FINI]; int init_proc_count;` (and fini variants) to `IrGenContext`

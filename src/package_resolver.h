@@ -48,6 +48,11 @@ typedef struct
     bool is_runtime;           // true for auto-imported core:runtime prelude
     bool is_used;              // set to false for unused direct imports (Phase 1 DCE)
     bool is_direct_import;     // true if declared directly in the importing file (not transitive)
+    
+    // Foreign library tracking (Phase 2)
+    char ** foreign_libraries; // array of library paths this package imports
+    int foreign_lib_count;
+    int foreign_lib_capacity;
 } ImportedPackage;
 
 // Resolve an import path to a file or directory path.
