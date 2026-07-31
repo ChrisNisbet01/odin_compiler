@@ -3902,12 +3902,13 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         LLVMValueRef odin_main_args[] = {context_ptr};
 
         // Phase 3: Call all @(init) procedures before main
+        // Init/fini procs have proc() signature (void args, void return).
+        // We pass context pointer as the first argument for access to allocator, etc.
         for (int init_i = 0; init_i < ctx->init_proc_count; init_i++)
         {
             LLVMValueRef init_fn = ctx->init_procs[init_i];
-            LLVMTypeRef init_fn_type = LLVMGlobalGetValueType(init_fn);
             LLVMValueRef init_args[] = {context_ptr};
-            LLVMBuildCall2(ctx->builder, init_fn_type, init_fn, init_args, 1, "");
+            LLVMBuildCall2(ctx->builder, LLVMGlobalGetValueType(init_fn), init_fn, init_args, 1, "");
         }
 
         LLVMBuildCall2(ctx->builder, odin_main_func_type, odin_main, odin_main_args, 1, "");

@@ -3,11 +3,11 @@
 ## Current State
 
 - `@require import "pkg"`: Implemented (Phase 0a)
-- `@(init)` / `@(fini)`: Parsed (Phase 0b), but not yet collected or called
+- `@(init)` / `@(fini)`: Parsed and called (Phases 0b, 3)
 - Import DCE: Implemented (Phase 1)
-- Init/fini calls: Not implemented — entry point only calls `__odin_main`
+- Init/fini calls: Implemented (Phase 3)
 
-## Phase 0: Grammar + Attribute Support (~100 lines)
+## Phase 0: Grammar + Attribute Support
 
 ### 0a: @require import grammar ✅ DONE
 - Added `KwRequire` lexeme to `odin_grammar.gdl`
@@ -64,38 +64,13 @@ This is a conservative approach - a proper implementation would track actual dep
 - Register all `fini_procs[]` with `atexit()` so they run when `os.exit()` is called or process exits normally
 - Init/fini signature is `proc()` (void args, void return)
 
-### Data structures
-- Add `LLVMValueRef init_procs[MAX_INIT_FINI]; int init_proc_count;` (and fini variants) to `IrGenContext`
-
-### Collection during codegen
-- In `ir_gen_top_level_decl`, after emitting a procedure body, check `attrs->is_init`/`attrs->is_fini`
-- If set, append the function value to the appropriate array
-
-### Entry point integration
-- After context setup in `ir_generate`, emit calls to all `init_procs[]` before `__odin_main`
-- After `__odin_main` returns (or via `atexit`), call all `fini_procs[]`
-- Init/fini signature is `proc()` (void args, void return)
-
-### atexit for os.exit() support
-- Register `atexit` handler that calls all fini procs, so `os.exit()` properly runs them
-- LLVM has `LLVMAddFunction(ctx->module, "atexit", ...)` — need to call it per-fini-proc during init
-
-## Phase 4: Tests (~150 lines)
+## Phase 4: Tests (Remaining Work)
 
 - `tests/test_init_fini.odin`: Verify init runs before main, fini runs after
 - `tests/test_require_import.odin`: Parse test for `@require import "pkg"`
 - `tests/test_import_unused.odin`: Verify unused import is skipped (no codegen)
 - `expected_to_fail/test_require_parse_without_at.odin`: Ensure bare `require import "pkg"` fails
 
-## Timeline
+## Summary
 
-| Phase | Est. lines | Est. time |
-|-------|-----------|-----------|
-| 0a: @require grammar + AST | ~50 | 30 min |
-| 0b: @(init)/@(fini) parsing | ~20 | 10 min |
-| 0c: Semantic handler | ~30 | 15 min |
-| 1: Usage tracking | ~200 | 2 hr |
-| 2: Skip codegen | ~150 | 1 hr |
-| 3: Init/fini collection + calls | ~200 | 2 hr |
-| 4: Tests | ~150 | 1 hr |
-| **Total** | **~800** | **~7 hr** |
+All core functionality is implemented and all 215 existing tests pass. Remaining work is adding dedicated tests for the new features.
