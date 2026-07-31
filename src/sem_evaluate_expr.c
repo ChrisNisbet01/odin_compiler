@@ -1799,6 +1799,12 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (inner->type == AST_NODE_IDENTIFIER)
         {
             access_pkg = find_imported_package_by_name(ctx, inner->text);
+            // Phase 1 import-usage tracking: package-qualified reference marks
+            // the import as used. This is called during pass 2 for any
+            // expression like `pkg.symbol`. Using imports are tracked
+            // separately by `sem_track_using_import_usage` (post-pass).
+            if (access_pkg != NULL)
+                access_pkg->is_used = true;
         }
     }
 

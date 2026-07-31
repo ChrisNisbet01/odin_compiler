@@ -570,6 +570,10 @@ parse_imported_file(char const * file_path, epc_parser_t * parser, epc_ast_hook_
     pkg->source_dir = source_dir;
     pkg->source_text = pf->source_text;     pf->source_text = NULL;
     pkg->ast = pf->ast;                     pf->ast = NULL;
+    // is_used defaults to false (calloc). Phase 1 sets it true when:
+    // - non-using import: package-qualified reference detected (sem_evaluate_expr)
+    // - using import: any identifier resolves to its symbol (sem_track_using_import_usage)
+    // - transitive import: always set to true after main file tracking
     pkg->package_name = pf->package_name;   pf->package_name = NULL;
     pkg->analysed = false;
 
@@ -679,6 +683,7 @@ parse_imported_directory(char const * dir_path, epc_parser_t * parser, epc_ast_h
     pkg->ast = merged_ast;
     pkg->package_name = package_name;
     pkg->analysed = false;
+    // is_used defaults to false (calloc). See parse_imported_file for Phase 1 logic.
 
     // Clean up
     for (int i = 0; i < file_count; i++)

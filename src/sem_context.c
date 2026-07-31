@@ -108,6 +108,7 @@ sem_context_init(
     ctx->pending_specializations = NULL;
     ctx->pending_spec_count = 0;
     ctx->pending_spec_capacity = 0;
+    ctx->import_reg_depth = 0;
     register_builtin_context_types(type_registry);
 }
 

@@ -66,6 +66,11 @@ typedef struct SemContext
     PolySpecialization ** pending_specializations;
     int pending_spec_count;
     int pending_spec_capacity;
+
+    // Phase 1 import-usage tracking: recursion depth when registering imports
+    // in `ctx->imports[]`. 0 = main file's direct imports; >0 = transitive.
+    // Used to set ImportedPackage::is_direct_import during registration.
+    int import_reg_depth;
 } SemContext;
 
 #include "sem_context.h"

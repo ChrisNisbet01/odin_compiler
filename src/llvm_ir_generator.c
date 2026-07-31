@@ -3655,6 +3655,27 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         if (pkg == NULL || pkg->ast == NULL || pkg->codegen_done)
             continue;
 
+        // Phase 1 import-usage tracking: skip unused direct imports.
+        // Transitive imports (is_direct_import=false) default is_used=true
+        // and are always processed (their parent package may need them).
+        if (!pkg->is_used)
+        {
+            // Essential packages must always be processed even if unused,
+            // as they provide runtime support that other code depends on.
+            // This is a conservative approach - a proper dependency analysis
+            // would determine which packages are truly essential.
+            if (pkg->package_name && (
+                    strcmp(pkg->package_name, "os") == 0 ||
+                    strcmp(pkg->package_name, "io") == 0 ||
+                    strcmp(pkg->package_name, "runtime") == 0 ||
+                    strcmp(pkg->package_name, "mem") == 0))
+            {
+                // Keep essential packages
+            }
+            else
+                continue;
+        }
+
         int saved_count = ctx->gen_ctx->count;
         if (pkg->package_scope)
             ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg->package_scope;
@@ -3672,6 +3693,9 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         ImportedPackage * pkg = ctx->imports[i];
         if (pkg == NULL || !pkg->is_using || pkg->package_scope == NULL)
             continue;
+        // TEMPORARY: Disabled to isolate issue
+        // if (!pkg->is_used)
+        //     continue;
         generic_hash_table_iterate(pkg->package_scope->symbols.by_name, import_using_copy_symbol, current);
     }
 

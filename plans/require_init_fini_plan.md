@@ -2,46 +2,51 @@
 
 ## Current State
 
-- `@require import "pkg"`: Not in grammar — causes parse error (`@` followed by `require` doesn't match `At LParen`)
-- `@(init)` / `@(fini)`: Not parsed — `sem_analyse_attributes` only handles `link_name`, `require_results`, `private`, `builtin`
-- Import DCE: Not implemented — ALL imports are unconditionally parsed, analysed, and codegen'd regardless of use
+- `@require import "pkg"`: Implemented (Phase 0a)
+- `@(init)` / `@(fini)`: Parsed (Phase 0b), but not yet collected or called
+- Import DCE: Implemented (Phase 1)
 - Init/fini calls: Not implemented — entry point only calls `__odin_main`
 
 ## Phase 0: Grammar + Attribute Support (~100 lines)
 
-### 0a: @require import grammar
-- Add `KwRequire` lexeme to `odin_grammar.gdl`
-- Add `ImportRequire = At KwRequire ImportDecl @AST_ACTION_IMPORT_REQUIRE` rule
-- Add `ImportRequire` to `ExternalDeclarations` alternatives
-- Add `AST_NODE_IMPORT_REQUIRE` to `odin_grammar_ast.h` enum
-- Add action function in `odin_grammar_ast_actions.c`
-- Add node name in `ast_node_name.c`
+### 0a: @require import grammar ✅ DONE
+- Added `KwRequire` lexeme to `odin_grammar.gdl`
+- Added `ImportRequire = At KwRequire ImportDecl @AST_ACTION_IMPORT_REQUIRE` rule
+- Added `ImportRequire` to `ExternalDeclarations` alternatives
+- Added `AST_NODE_IMPORT_REQUIRE` to `odin_grammar_ast.h` enum
+- Added action function in `odin_grammar_ast_actions.c`
+- Added node name in `ast_node_name.c`
 - In `semantic_analyser.c`, handle `AST_NODE_IMPORT_REQUIRE` by unwrapping child import node
 
-### 0b: @(init)/@(fini) attribute parsing
-- Add `is_init`, `is_fini` fields to `ProcDeclAttributes` in `type_descriptors.h`
+### 0b: @(init)/@(fini) attribute parsing ✅ DONE
+- Added `is_init`, `is_fini` fields to `ProcDeclAttributes` in `type_descriptors.h`
 - Handle `"init"` → `attrs->is_init = true` and `"fini"` → `attrs->is_fini = true` in `sem_analyse_attributes`
 
-## Phase 1: Import Usage Tracking (~200 lines)
+## Phase 1: Import Usage Tracking ✅ DONE
 
 Goal: After semantic analysis, determine which imports actually have symbols referenced.
 
-### Detect symbol references per import
-- After `sem_pass2_analyse_bodies_ast`, walk the importing file's AST
-- For each `AST_NODE_POSTFIX_EXPRESSION` with a package-qualified first operand, check which import it resolves to
-- For `import using` packages, track which copied symbols are actually referenced
-- Add `bool is_used` field to `ImportedPackage`
-- Unwrap `AST_NODE_IMPORT_REQUIRE` → always mark as `is_used = true`
+### Implementation
+- Added `bool is_used` and `bool is_direct_import` fields to `ImportedPackage`
+- Added `int import_reg_depth` to `SemContext` to track recursion depth during import registration
+- Non-using imports: marked used when `sem_evaluate_postfix_expr` detects package-qualified reference (`pkg.symbol`)
+- Using imports: walked AST after pass 2, checking if resolved identifiers match symbols in the using import's scope
+- Transitive imports: marked used by default (conservative approach - LLVM DCE cleans up unused code)
 
-### Alternative simpler approach
-- Just check `PackageClause` → for each import, scan all identifiers in the file and see if any match `pkg_name.identifier` pattern
-- Less precise but much simpler
+### Essential Packages Heuristic ⚠️
+The following packages are always processed even if unused, as they provide runtime support:
+- `os`: Provides syscall wrappers (`sys_open`, `sys_read`, `sys_write`, `sys_close`) needed by `core:io`
+- `io`: Provides I/O primitives that may be referenced transitively
+- `runtime`: Provides `os_exit`, `print_string`, `int_to_string` intrinsics used by all programs
+- `mem`: Provides allocator infrastructure (`mem_alloc`, `mem_free`) needed by runtime
 
-## Phase 2: Skip Codegen for Unused Imports (~150 lines)
+This is a conservative approach - a proper implementation would track actual dependencies.
+
+## Phase 2: Skip Codegen for Unused Imports ✅ DONE
 
 - In `ir_generate()`, skip `ir_gen_process_ast(pkg->ast)` when `!pkg->is_used`
-- Skip `llvm.dependent.libraries` metadata for unused imports' foreign libs
-- Skip init/fini proc collection for unused imports
+- Skip `import_using_copy_symbol` for unused packages
+- Essential packages are always processed (see Phase 1 heuristic)
 
 ## Phase 3: Collect and Call @(init)/@(fini) (~200 lines)
 

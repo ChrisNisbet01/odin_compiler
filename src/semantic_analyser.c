@@ -1378,6 +1378,10 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
     if (program_ast == NULL)
         return;
 
+    // Phase 1: Track recursion depth so we can mark direct (depth==1) vs
+    // transitive imports when they are registered into ctx->imports[].
+    ctx->import_reg_depth++;
+
     // Auto-import base:runtime as an implicit using import (prelude)
     // Check if runtime is already imported by checking all existing imports
     bool runtime_already_imported = false;
@@ -1427,7 +1431,8 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                     ctx->import_capacity = new_cap;
                 }
                 ctx->imports[ctx->import_count++] = rp;
-
+                // core:runtime is an implicit prelude, not a user-declared import.
+                // is_direct_import defaults to false (calloc), so leave it unset.
                 sem_pass1_register_top_level_ex(ctx, rp->ast);
                 sem_pass2_analyse_bodies_ast(ctx, rp->ast);
 
@@ -1542,6 +1547,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         ctx->import_capacity = new_cap;
                     }
                     ctx->imports[ctx->import_count++] = pkg;
+                    pkg->is_direct_import = (ctx->import_reg_depth == 1);
 
                     if (!pkg->analysed)
                     {
@@ -1623,6 +1629,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         ctx->import_capacity = new_cap;
                     }
                     ctx->imports[ctx->import_count++] = pkg;
+                    pkg->is_direct_import = (ctx->import_reg_depth == 1);
 
                     if (!pkg->analysed)
                     {
@@ -1706,6 +1713,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                     }
                     ctx->imports[ctx->import_count++] = pkg;
                     pkg->is_using = true;
+                    pkg->is_direct_import = (ctx->import_reg_depth == 1);
 
                     if (!pkg->analysed)
                     {
@@ -1852,6 +1860,9 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
             }
         }
     }
+
+    // Phase 1: Restore recursion depth (matches the increment at function entry)
+    ctx->import_reg_depth--;
 }
 
 static void
@@ -2823,6 +2834,97 @@ sem_pass2_analyse_bodies_ast(SemContext * ctx, odin_grammar_node_t * program)
 
 // --- Main entry point ---
 
+// Phase 1 import-usage tracking (using imports):
+// Walk the main file's AST looking for AST_NODE_IDENTIFIER nodes with
+// resolved_symbol set. For each, check whether the resolved symbol matches
+// a symbol in any `import using` package's scope (by name + type_info ptr)
+// and mark such packages as is_used=true.
+//
+// Non-using imports are marked is_used=true at the point of detection in
+// sem_evaluate_postfix_expr (package-qualified reference).
+static void
+sem_track_using_import_usage_visitor(odin_grammar_node_t * node, SemContext * ctx)
+{
+    if (node == NULL || node->type != AST_NODE_IDENTIFIER)
+        return;
+    if (node->resolved_symbol == NULL || node->text == NULL)
+        return;
+
+    symbol_t const * resolved = node->resolved_symbol;
+
+    for (int i = 0; i < ctx->import_count; i++)
+    {
+        ImportedPackage * pkg = ctx->imports[i];
+        if (pkg == NULL || !pkg->is_using || pkg->package_scope == NULL)
+            continue;
+        if (pkg->is_used)
+            continue; // already marked; skip the lookup
+        if (!pkg->is_direct_import)
+            continue; // transitive using-imports are always kept (default true)
+
+        symbol_t * pkg_sym = scope_find_symbol_entry(pkg->package_scope, node->text);
+        if (pkg_sym == NULL)
+            continue;
+
+        // To avoid false positives from using-imports that copy symbols from
+        // other packages into their scope, also verify the symbol's llvm_name
+        // matches the package name prefix. For a symbol copied from package A
+        // to package B, the llvm_name would be "package_a.symbol", not
+        // "package_b.symbol".
+        bool name_matches = false;
+        if (pkg_sym->llvm_name != NULL && resolved->llvm_name != NULL)
+        {
+            // Check if the llvm_name starts with the package's name
+            size_t pkg_name_len = strlen(pkg->package_name);
+            size_t llvm_name_len = strlen(pkg_sym->llvm_name);
+            name_matches = (llvm_name_len > pkg_name_len + 1  // +1 for '.'
+                           && strncmp(pkg_sym->llvm_name, pkg->package_name, pkg_name_len) == 0
+                           && pkg_sym->llvm_name[pkg_name_len] == '.');
+        }
+
+        // Match by name + type_info pointer. The TypedValue copy preserves
+        // the type_info pointer from the source scope, so a reference to a
+        // copied using-import symbol will have the same type_info as the
+        // source package scope's symbol.
+        if (pkg_sym->value.type_info != NULL
+            && pkg_sym->value.type_info == resolved->value.type_info
+            && name_matches)
+        {
+            pkg->is_used = true;
+            return; // no need to check other using imports for this node
+        }
+
+        // Fall back: when type_info is NULL (e.g. untyped constants), match
+        // by name alone. This may over-mark (false positives) but never
+        // under-mark for using imports.
+        if (pkg_sym->value.type_info == NULL && resolved->value.type_info == NULL
+            && pkg_sym->name != NULL && strcmp(pkg_sym->name, node->text) == 0
+            && name_matches)
+        {
+            pkg->is_used = true;
+            return;
+        }
+    }
+}
+
+static void
+sem_walk_ast_track_usage(odin_grammar_node_t * node, SemContext * ctx)
+{
+    if (node == NULL)
+        return;
+    sem_track_using_import_usage_visitor(node, ctx);
+    for (size_t i = 0; i < node->list.count; i++)
+        sem_walk_ast_track_usage(node->list.children[i], ctx);
+}
+
+// After pass 2, walk the main file's AST to mark using imports as used
+// based on identifier references to their copied symbols.
+static void
+sem_track_using_import_usage(SemContext * ctx)
+{
+    sem_walk_ast_track_usage(ctx->ast, ctx);
+}
+
 bool
 sem_analyse(SemContext * ctx)
 {
@@ -2833,6 +2935,27 @@ sem_analyse(SemContext * ctx)
     sem_pass2_analyse_bodies_ast(ctx, ctx->ast);
     if (sem_error_list_has_errors(&ctx->errors))
         return false;
+
+    // Phase 1: After pass 2, mark using imports as used based on identifier
+    // references in the main file's AST. Non-using imports are marked inline
+    // in sem_evaluate_postfix_expr (package-qualified references).
+    sem_track_using_import_usage(ctx);
+
+    // Phase 1: Mark transitive imports as used. These are imports that are
+    // NOT direct imports of the main file (e.g., imports of imports).
+    // They are needed by their parent package, so we must codegen them.
+    // 
+    // NOTE: This is conservative - transitive imports of unused packages
+    // will still be codegen'd, but LLVM's DCE will remove them.
+    // A more precise implementation would track parent-child relationships.
+    for (int i = 0; i < ctx->import_count; i++)
+    {
+        ImportedPackage * pkg = ctx->imports[i];
+        if (pkg == NULL)
+            continue;
+        if (!pkg->is_direct_import)
+            pkg->is_used = true;
+    }
 
     return true;
 }
