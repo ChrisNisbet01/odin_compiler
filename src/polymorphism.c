@@ -18,16 +18,67 @@
 // Stage 9: where-clause evaluation
 // =========================================================================
 
-// Resolve a type expression in the where-clause context.
-// Checks poly env first (for poly idents like $T / T), then falls back
-// to the normal type resolution path (for concrete types like int).
+// Walk down through single-child expression wrapper nodes until reaching the
+// underlying expression/type node. Handles the PEG chainl1 wrapper hierarchy
+// (Expression -> AssignExpression -> ... -> PostfixExpression) and the
+// PostfixExpression-with-empty-ops case (just a bare PrimaryExpression).
+static odin_grammar_node_t *
+poly_unwrap_expr_chain(odin_grammar_node_t * node)
+{
+    while (node != NULL)
+    {
+        switch (node->type)
+        {
+        case AST_NODE_EXPRESSION:
+        case AST_NODE_ASSIGN_EXPRESSION:
+        case AST_NODE_TERNARY_EXPRESSION:
+        case AST_NODE_OR_ELSE:
+        case AST_NODE_OR_RETURN:
+        case AST_NODE_RANGE_EXPRESSION:
+        case AST_NODE_LOG_OR_EXPRESSION:
+        case AST_NODE_LOG_AND_EXPRESSION:
+        case AST_NODE_BIT_OR_EXPRESSION:
+        case AST_NODE_BIT_XOR_EXPRESSION:
+        case AST_NODE_BIT_AND_EXPRESSION:
+        case AST_NODE_SHIFT_EXPRESSION:
+        case AST_NODE_ADD_EXPRESSION:
+        case AST_NODE_MUL_EXPRESSION:
+        case AST_NODE_COMP_EXPRESSION:
+        case AST_NODE_PRIMARY_EXPRESSION:
+        case AST_NODE_UNARY_EXPRESSION:
+        case AST_NODE_AUTO_CAST_EXPR:
+            if (node->list.count >= 1)
+                node = node->list.children[0];
+            else
+                return NULL;
+            break;
+        case AST_NODE_POSTFIX_EXPRESSION:
+            // Bare value (no postfix ops): descend into the primary expression.
+            if (node->list.count >= 2
+                && node->list.children[1] != NULL
+                && node->list.children[1]->type == AST_NODE_POSTFIX_OPS
+                && node->list.children[1]->list.count == 0)
+            {
+                node = node->list.children[0];
+                break;
+            }
+            return node;
+        default:
+            return node;
+        }
+    }
+    return node;
+}
+
 static TypeDescriptor const *
 poly_resolve_type_for_where(SemContext * ctx, odin_grammar_node_t * node)
 {
     if (node == NULL)
         return NULL;
 
-    // Unwrap AST_NODE_TYPE_NAME to get to the underlying type node.
+    // Unwrap single-child expression wrappers (chainl1 hierarchy) and
+    // AST_NODE_TYPE_NAME to get to the underlying type node.
+    node = poly_unwrap_expr_chain(node);
     while (node != NULL && node->type == AST_NODE_TYPE_NAME && node->list.count >= 1)
         node = node->list.children[0];
 
@@ -93,17 +144,365 @@ poly_eval_size_of(SemContext * ctx, odin_grammar_node_t * node)
     return (long long)LLVMABISizeOfType(dl, td->llvm_type);
 }
 
+// =========================================================================
+// Compile-time intrinsics in where clauses (base:intrinsics predicates)
+// =========================================================================
+
+static TypeDescriptor const *
+poly_unwrap_distinct(TypeDescriptor const * td)
+{
+    while (td != NULL && td->kind == TD_KIND_DISTINCT && td->distinct_base_type != NULL)
+        td = td->distinct_base_type;
+    return td;
+}
+
+static bool
+poly_basic_type_is(TypeDescriptor const * td, char const * name)
+{
+    td = poly_unwrap_distinct(td);
+    return td != NULL && td->kind == TD_KIND_BASIC && td->as.basic.name != NULL
+        && strcmp(td->as.basic.name, name) == 0;
+}
+
+static bool
+poly_td_is_bool(TypeDescriptor const * td)
+{
+    return poly_basic_type_is(td, "bool");
+}
+
+static bool
+poly_td_is_rune(TypeDescriptor const * td)
+{
+    return poly_basic_type_is(td, "rune");
+}
+
+static bool
+poly_td_is_integer(TypeDescriptor const * td)
+{
+    td = poly_unwrap_distinct(td);
+    if (td == NULL || td->kind != TD_KIND_BASIC || td->as.basic.is_float || td->as.basic.width <= 1)
+        return false;
+    if (td->as.basic.name == NULL)
+        return false;
+    // Exclude non-integer special basic types that share the integer layout.
+    if (strcmp(td->as.basic.name, "typeid") == 0
+        || strcmp(td->as.basic.name, "string") == 0
+        || strcmp(td->as.basic.name, "cstring") == 0
+        || strcmp(td->as.basic.name, "any") == 0)
+        return false;
+    return true;
+}
+
+static bool
+poly_td_is_float(TypeDescriptor const * td)
+{
+    return is_floating_kind(td);
+}
+
+static bool
+poly_td_is_complex(TypeDescriptor const * td)
+{
+    td = poly_unwrap_distinct(td);
+    if (td == NULL || td->kind != TD_KIND_BASIC || td->as.basic.name == NULL)
+        return false;
+    return strncmp(td->as.basic.name, "complex", 7) == 0;
+}
+
+static bool
+poly_td_is_quaternion(TypeDescriptor const * td)
+{
+    td = poly_unwrap_distinct(td);
+    if (td == NULL || td->kind != TD_KIND_BASIC || td->as.basic.name == NULL)
+        return false;
+    return strncmp(td->as.basic.name, "quaternion", 10) == 0;
+}
+
+static bool
+poly_td_is_numeric(TypeDescriptor const * td)
+{
+    return poly_td_is_integer(td) || poly_td_is_float(td);
+}
+
+static bool
+poly_td_is_unsigned(TypeDescriptor const * td)
+{
+    td = poly_unwrap_distinct(td);
+    if (td == NULL || td->kind != TD_KIND_BASIC || td->as.basic.is_float)
+        return false;
+    return td->as.basic.is_unsigned && td->as.basic.width > 0;
+}
+
+static bool
+poly_td_is_ordered(TypeDescriptor const * td)
+{
+    td = poly_unwrap_distinct(td);
+    if (td == NULL)
+        return false;
+    if (poly_td_is_numeric(td) || poly_td_is_bool(td))
+        return true;
+    if (poly_basic_type_is(td, "string"))
+        return true;
+    return td->kind == TD_KIND_ENUM
+        || td->kind == TD_KIND_POINTER
+        || td->kind == TD_KIND_MULTI_POINTER;
+}
+
+static bool
+poly_td_is_indexable(TypeDescriptor const * td)
+{
+    td = poly_unwrap_distinct(td);
+    if (td == NULL)
+        return false;
+    if (poly_basic_type_is(td, "string"))
+        return true;
+    switch (td->kind)
+    {
+    case TD_KIND_ARRAY:
+    case TD_KIND_SLICE:
+    case TD_KIND_DYNAMIC_ARRAY:
+    case TD_KIND_MAP:
+    case TD_KIND_VECTOR:
+    case TD_KIND_MATRIX:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+poly_td_is_sliceable(TypeDescriptor const * td)
+{
+    td = poly_unwrap_distinct(td);
+    if (td == NULL)
+        return false;
+    switch (td->kind)
+    {
+    case TD_KIND_ARRAY:
+    case TD_KIND_SLICE:
+    case TD_KIND_DYNAMIC_ARRAY:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+poly_td_is_comparable(TypeDescriptor const * td)
+{
+    td = poly_unwrap_distinct(td);
+    if (td == NULL)
+        return false;
+    switch (td->kind)
+    {
+    case TD_KIND_BASIC:
+        return td->as.basic.name != NULL && strcmp(td->as.basic.name, "void") != 0;
+    case TD_KIND_POINTER:
+    case TD_KIND_MULTI_POINTER:
+    case TD_KIND_ENUM:
+        return true;
+    case TD_KIND_ARRAY:
+        return poly_td_is_comparable(td->element_type);
+    case TD_KIND_DISTINCT:
+        return poly_td_is_comparable(td->distinct_base_type);
+    default:
+        return false;
+    }
+}
+
+static bool
+poly_td_is_has_nil(TypeDescriptor const * td)
+{
+    td = poly_unwrap_distinct(td);
+    if (td == NULL)
+        return false;
+    switch (td->kind)
+    {
+    case TD_KIND_POINTER:
+    case TD_KIND_MULTI_POINTER:
+    case TD_KIND_PROC:
+    case TD_KIND_SLICE:
+    case TD_KIND_DYNAMIC_ARRAY:
+    case TD_KIND_MAYBE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Evaluate an `intrinsics.<name>(<type>)` predicate against a resolved type.
+// Returns 1 (true), 0 (false), or -1 if the intrinsic is not a recognized
+// boolean predicate or the argument could not be resolved.
+static long long
+poly_eval_intrinsic(char const * name, TypeDescriptor const * arg_type)
+{
+    if (name == NULL || arg_type == NULL)
+        return -1;
+
+    if (strcmp(name, "type_is_boolean") == 0)          return poly_td_is_bool(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_integer") == 0)          return poly_td_is_integer(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_rune") == 0)             return poly_td_is_rune(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_float") == 0)            return poly_td_is_float(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_complex") == 0)          return poly_td_is_complex(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_quaternion") == 0)       return poly_td_is_quaternion(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_typeid") == 0)           return poly_basic_type_is(arg_type, "typeid") ? 1 : 0;
+    if (strcmp(name, "type_is_any") == 0)              return poly_basic_type_is(arg_type, "any") ? 1 : 0;
+    if (strcmp(name, "type_is_string") == 0)           return poly_basic_type_is(arg_type, "string") ? 1 : 0;
+    if (strcmp(name, "type_is_unsigned") == 0)         return poly_td_is_unsigned(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_numeric") == 0)          return poly_td_is_numeric(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_ordered") == 0)          return poly_td_is_ordered(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_ordered_numeric") == 0)  return poly_td_is_numeric(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_indexable") == 0)        return poly_td_is_indexable(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_sliceable") == 0)        return poly_td_is_sliceable(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_comparable") == 0)       return poly_td_is_comparable(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_pointer") == 0)          return (arg_type->kind == TD_KIND_POINTER) ? 1 : 0;
+    if (strcmp(name, "type_is_multi_pointer") == 0)    return (arg_type->kind == TD_KIND_MULTI_POINTER) ? 1 : 0;
+    if (strcmp(name, "type_is_array") == 0)            return (arg_type->kind == TD_KIND_ARRAY) ? 1 : 0;
+    if (strcmp(name, "type_is_slice") == 0)            return (arg_type->kind == TD_KIND_SLICE) ? 1 : 0;
+    if (strcmp(name, "type_is_dynamic_array") == 0)    return (arg_type->kind == TD_KIND_DYNAMIC_ARRAY) ? 1 : 0;
+    if (strcmp(name, "type_is_map") == 0)              return (arg_type->kind == TD_KIND_MAP) ? 1 : 0;
+    if (strcmp(name, "type_is_struct") == 0)           return (arg_type->kind == TD_KIND_STRUCT || arg_type->kind == TD_KIND_SOA) ? 1 : 0;
+    if (strcmp(name, "type_is_union") == 0)            return (arg_type->kind == TD_KIND_UNION) ? 1 : 0;
+    if (strcmp(name, "type_is_enum") == 0)             return (arg_type->kind == TD_KIND_ENUM) ? 1 : 0;
+    if (strcmp(name, "type_is_proc") == 0)             return (arg_type->kind == TD_KIND_PROC) ? 1 : 0;
+    if (strcmp(name, "type_is_bit_set") == 0)          return (arg_type->kind == TD_KIND_BIT_SET) ? 1 : 0;
+    if (strcmp(name, "type_is_bit_field") == 0)        return (arg_type->kind == TD_KIND_BIT_FIELD) ? 1 : 0;
+    if (strcmp(name, "type_is_simd_vector") == 0)      return (arg_type->kind == TD_KIND_VECTOR) ? 1 : 0;
+    if (strcmp(name, "type_is_matrix") == 0)           return (arg_type->kind == TD_KIND_MATRIX) ? 1 : 0;
+    if (strcmp(name, "type_is_has_nil") == 0)          return poly_td_is_has_nil(arg_type) ? 1 : 0;
+
+    // Type-returning intrinsics: return the resulting descriptor's type_id so
+    // they compose with `typeid_of(...) == typeid_of(...)` in where clauses.
+    if (strcmp(name, "type_base_type") == 0 || strcmp(name, "type_core_type") == 0)
+    {
+        TypeDescriptor const * base = poly_unwrap_distinct(arg_type);
+        return base ? base->type_id : -1;
+    }
+    if (strcmp(name, "type_elem_type") == 0)
+    {
+        TypeDescriptor const * elem = NULL;
+        switch (arg_type->kind)
+        {
+        case TD_KIND_ARRAY:
+        case TD_KIND_SLICE:
+        case TD_KIND_DYNAMIC_ARRAY:
+        case TD_KIND_VECTOR:
+        case TD_KIND_MATRIX:
+            elem = arg_type->element_type;
+            break;
+        case TD_KIND_POINTER:
+        case TD_KIND_MULTI_POINTER:
+            elem = arg_type->pointee;
+            break;
+        case TD_KIND_MAYBE:
+            elem = arg_type->element_type;
+            break;
+        case TD_KIND_MAP:
+            elem = arg_type->as.map.value_type;
+            break;
+        default:
+            break;
+        }
+        return elem ? elem->type_id : -1;
+    }
+
+    return -1;
+}
+
+// Evaluate `intrinsics.<name>(<type>)` or `<alias>(<type>)` inside a where
+// clause. The node is a POSTFIX_EXPRESSION: [base, PostfixOps[member?, call]].
+// Handles both the package-qualified form (`intrinsics.type_is_float($T)`) and
+// the constant-alias form (`IS_FLOAT($T)`), following chained aliases.
+static long long
+poly_eval_where_call(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node == NULL || node->type != AST_NODE_POSTFIX_EXPRESSION || node->list.count < 2)
+        return -1;
+
+    odin_grammar_node_t * ops = node->list.children[1];
+    if (ops == NULL || ops->type != AST_NODE_POSTFIX_OPS || ops->list.count == 0)
+        return -1;
+
+    char const * member_name = NULL;
+    odin_grammar_node_t * call_op = NULL;
+    for (size_t i = 0; i < ops->list.count; i++)
+    {
+        odin_grammar_node_t * op = ops->list.children[i];
+        if (op == NULL)
+            continue;
+        if (op->type == AST_NODE_POSTFIX_MEMBER && op->list.count >= 1 && op->list.children[0] != NULL)
+            member_name = op->list.children[0]->text;
+        else if (op->type == AST_NODE_POSTFIX_CALL)
+            call_op = op;
+    }
+    if (call_op == NULL)
+        return -1;
+
+    // Resolve the base identifier.
+    odin_grammar_node_t * base = node->list.children[0];
+    odin_grammar_node_t * inner = base;
+    while (inner != NULL && inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
+        inner = inner->list.children[0];
+
+    char const * intrinsic_name = NULL;
+
+    if (inner != NULL && inner->type == AST_NODE_IDENTIFIER && member_name != NULL)
+    {
+        // Package-qualified form: intrinsics.type_is_float
+        ImportedPackage * pkg = find_imported_package_by_name(ctx, inner->text);
+        if (pkg != NULL
+            && strcmp(pkg->package_name ? pkg->package_name : "", "intrinsics") == 0
+            && scope_find_symbol_entry(pkg->package_scope, member_name) != NULL)
+        {
+            intrinsic_name = member_name;
+        }
+    }
+
+    if (intrinsic_name == NULL && inner != NULL && inner->type == AST_NODE_IDENTIFIER)
+    {
+        // Bare identifier: a constant alias like IS_FLOAT. Follow the alias
+        // chain to the underlying intrinsic proc symbol.
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), inner->text);
+        if (sym != NULL)
+        {
+            symbol_t * intrinsic = poly_get_intrinsic_alias(sym);
+            while (intrinsic != NULL && poly_get_intrinsic_alias(intrinsic) != NULL)
+                intrinsic = poly_get_intrinsic_alias(intrinsic);
+            if (intrinsic != NULL && intrinsic->name != NULL)
+                intrinsic_name = intrinsic->name;
+        }
+    }
+
+    if (intrinsic_name == NULL)
+        return -1;
+
+    // Extract the single type argument.
+    if (call_op->list.count < 1 || call_op->list.children[0] == NULL)
+        return -1;
+    odin_grammar_node_t * arg_list = call_op->list.children[0];
+    odin_grammar_node_t * arg = NULL;
+    if (arg_list->type == AST_NODE_ARGUMENT_LIST && arg_list->list.count >= 1)
+        arg = arg_list->list.children[0];
+    if (arg == NULL)
+        return -1;
+
+    TypeDescriptor const * arg_type = poly_resolve_type_for_where(ctx, arg);
+    if (arg_type == NULL)
+        return -1;
+
+    return poly_eval_intrinsic(intrinsic_name, arg_type);
+}
+
 // Evaluate a where-clause sub-expression, returning a concrete value.
 // Returns -1 if the expression cannot be evaluated at compile time.
-static long long
+// Exposed via polymorphism.h for compile-time `when` condition reuse.
+long long
 poly_eval_where_expr(SemContext * ctx, odin_grammar_node_t * node)
 {
     if (node == NULL)
         return -1;
 
     // Unwrap single-child expression wrappers
-    while (node != NULL && node->list.count == 1
-           && node->list.children[0] != NULL
+    while (node != NULL && node->list.children[0] != NULL
            && node->type != AST_NODE_TYPEID_OF_EXPR
            && node->type != AST_NODE_SIZE_OF_EXPR
            && node->type != AST_NODE_INTEGER_VALUE
@@ -111,7 +510,22 @@ poly_eval_where_expr(SemContext * ctx, odin_grammar_node_t * node)
            && node->type != AST_NODE_BOOL_FALSE
            && node->type != AST_NODE_IDENTIFIER)
     {
-        node = node->list.children[0];
+        if (node->list.count == 1)
+        {
+            node = node->list.children[0];
+        }
+        else if (node->type == AST_NODE_POSTFIX_EXPRESSION && node->list.count >= 2
+                 && node->list.children[1] != NULL
+                 && node->list.children[1]->type == AST_NODE_POSTFIX_OPS
+                 && node->list.children[1]->list.count == 0)
+        {
+            // Bare primary expression with no postfix ops: descend into base
+            node = node->list.children[0];
+        }
+        else
+        {
+            break;
+        }
     }
 
     switch (node->type)
@@ -134,6 +548,9 @@ poly_eval_where_expr(SemContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_SIZE_OF_EXPR:
         return poly_eval_size_of(ctx, node);
 
+    case AST_NODE_POSTFIX_EXPRESSION:
+        return poly_eval_where_call(ctx, node);
+
     case AST_NODE_IDENTIFIER:
     {
         // Check poly int env (for $N params)
@@ -142,6 +559,11 @@ poly_eval_where_expr(SemContext * ctx, odin_grammar_node_t * node)
             long long val = 0;
             if (poly_env_lookup_int(ctx, node->text, &val))
                 return val;
+            // Fall back to poly type env: a bare type name resolves to its
+            // type_id so `type_elem_type(T) == E` style constraints work.
+            TypeDescriptor const * td = poly_env_lookup_type(ctx, node->text);
+            if (td != NULL)
+                return td->type_id;
         }
         return -1;
     }
@@ -285,10 +707,23 @@ poly_evaluate_where_clause(SemContext * ctx, odin_grammar_node_t * proc_def_node
     if (expr == NULL)
         return true;
 
-    long long result = poly_eval_where_expr(ctx, expr);
-    if (result == -1)
-        return false; // couldn't evaluate → constraint not met
-    return result != 0;
+    // The where expression is a comma-separated chain of constraints
+    // (Expression = chainl1(AssignExpression, Comma)); each must hold.
+    odin_grammar_node_t * constraints[128];
+    int constraint_count = 0;
+    sem_collect_comma_chain_args(expr, constraints, 128, &constraint_count);
+    if (constraint_count == 0)
+        return true;
+
+    for (int ci = 0; ci < constraint_count; ci++)
+    {
+        long long result = poly_eval_where_expr(ctx, constraints[ci]);
+        if (result == -1)
+            return false; // couldn't evaluate → constraint not met
+        if (result == 0)
+            return false; // violated
+    }
+    return true;
 }
 
 // =========================================================================
@@ -418,6 +853,160 @@ poly_get_origin(symbol_t * sym)
             return poly_origins[i].const_decl;
     }
     return NULL;
+}
+
+// =========================================================================
+// Intrinsic-alias side table (symbol_t* alias -> symbol_t* intrinsic proc)
+// Mirrors the poly_origin side table pattern. Aliases are constants like
+// `@private IS_FLOAT :: intrinsics.type_is_float`.
+// =========================================================================
+
+typedef struct
+{
+    symbol_t * alias_sym;
+    symbol_t * intrinsic_sym;
+} PolyIntrinsicAliasEntry;
+
+static PolyIntrinsicAliasEntry * poly_intrinsic_aliases = NULL;
+static int poly_intrinsic_alias_count = 0;
+static int poly_intrinsic_alias_capacity = 0;
+
+void
+poly_register_intrinsic_alias(symbol_t * alias_sym, symbol_t * intrinsic_sym)
+{
+    if (alias_sym == NULL || intrinsic_sym == NULL)
+        return;
+    for (int i = 0; i < poly_intrinsic_alias_count; i++)
+    {
+        if (poly_intrinsic_aliases[i].alias_sym == alias_sym)
+        {
+            poly_intrinsic_aliases[i].intrinsic_sym = intrinsic_sym;
+            return;
+        }
+    }
+    if (poly_intrinsic_alias_count >= poly_intrinsic_alias_capacity)
+    {
+        int new_cap = poly_intrinsic_alias_capacity == 0 ? 8 : poly_intrinsic_alias_capacity * 2;
+        PolyIntrinsicAliasEntry * tmp = realloc(
+            poly_intrinsic_aliases, (size_t)new_cap * sizeof(PolyIntrinsicAliasEntry));
+        if (tmp == NULL)
+            return;
+        poly_intrinsic_aliases = tmp;
+        poly_intrinsic_alias_capacity = new_cap;
+    }
+    poly_intrinsic_aliases[poly_intrinsic_alias_count].alias_sym = alias_sym;
+    poly_intrinsic_aliases[poly_intrinsic_alias_count].intrinsic_sym = intrinsic_sym;
+    poly_intrinsic_alias_count++;
+}
+
+symbol_t *
+poly_get_intrinsic_alias(symbol_t * alias_sym)
+{
+    if (alias_sym == NULL)
+        return NULL;
+    for (int i = 0; i < poly_intrinsic_alias_count; i++)
+    {
+        if (poly_intrinsic_aliases[i].alias_sym == alias_sym)
+            return poly_intrinsic_aliases[i].intrinsic_sym;
+    }
+    return NULL;
+}
+
+// Side table mapping a WHEN_STATEMENT AST node to the body the semantic
+// analyser selected at compile time. Stored out-of-band (NOT in node->metadata,
+// which the AST teardown free()s) so the IR generator can reuse the selection.
+typedef struct
+{
+    odin_grammar_node_t * when_node;
+    odin_grammar_node_t * selected_body;
+} PolyWhenSelectionEntry;
+
+static PolyWhenSelectionEntry * poly_when_selections = NULL;
+static int poly_when_selection_count = 0;
+static int poly_when_selection_capacity = 0;
+
+void
+poly_register_when_selection(odin_grammar_node_t * when_node, odin_grammar_node_t * body)
+{
+    if (when_node == NULL)
+        return;
+    for (int i = 0; i < poly_when_selection_count; i++)
+    {
+        if (poly_when_selections[i].when_node == when_node)
+        {
+            poly_when_selections[i].selected_body = body;
+            return;
+        }
+    }
+    if (poly_when_selection_count >= poly_when_selection_capacity)
+    {
+        int new_cap = poly_when_selection_capacity == 0 ? 8 : poly_when_selection_capacity * 2;
+        PolyWhenSelectionEntry * tmp = realloc(
+            poly_when_selections, (size_t)new_cap * sizeof(PolyWhenSelectionEntry));
+        if (tmp == NULL)
+            return;
+        poly_when_selections = tmp;
+        poly_when_selection_capacity = new_cap;
+    }
+    poly_when_selections[poly_when_selection_count].when_node = when_node;
+    poly_when_selections[poly_when_selection_count].selected_body = body;
+    poly_when_selection_count++;
+}
+
+odin_grammar_node_t *
+poly_get_when_selection(odin_grammar_node_t * when_node)
+{
+    if (when_node == NULL)
+        return NULL;
+    for (int i = 0; i < poly_when_selection_count; i++)
+    {
+        if (poly_when_selections[i].when_node == when_node)
+            return poly_when_selections[i].selected_body;
+    }
+    return NULL;
+}
+
+// True if `name` is one of the compile-time type-query intrinsics supported by
+// the where-clause evaluator (matches stubs/base/intrinsics/intrinsics.odin).
+bool
+poly_is_known_intrinsic_name(char const * name)
+{
+    if (name == NULL)
+        return false;
+    return strcmp(name, "type_base_type") == 0
+        || strcmp(name, "type_core_type") == 0
+        || strcmp(name, "type_elem_type") == 0
+        || strcmp(name, "type_is_boolean") == 0
+        || strcmp(name, "type_is_integer") == 0
+        || strcmp(name, "type_is_rune") == 0
+        || strcmp(name, "type_is_float") == 0
+        || strcmp(name, "type_is_complex") == 0
+        || strcmp(name, "type_is_quaternion") == 0
+        || strcmp(name, "type_is_typeid") == 0
+        || strcmp(name, "type_is_any") == 0
+        || strcmp(name, "type_is_string") == 0
+        || strcmp(name, "type_is_unsigned") == 0
+        || strcmp(name, "type_is_numeric") == 0
+        || strcmp(name, "type_is_ordered") == 0
+        || strcmp(name, "type_is_ordered_numeric") == 0
+        || strcmp(name, "type_is_indexable") == 0
+        || strcmp(name, "type_is_sliceable") == 0
+        || strcmp(name, "type_is_comparable") == 0
+        || strcmp(name, "type_is_pointer") == 0
+        || strcmp(name, "type_is_multi_pointer") == 0
+        || strcmp(name, "type_is_array") == 0
+        || strcmp(name, "type_is_slice") == 0
+        || strcmp(name, "type_is_dynamic_array") == 0
+        || strcmp(name, "type_is_map") == 0
+        || strcmp(name, "type_is_struct") == 0
+        || strcmp(name, "type_is_union") == 0
+        || strcmp(name, "type_is_enum") == 0
+        || strcmp(name, "type_is_proc") == 0
+        || strcmp(name, "type_is_bit_set") == 0
+        || strcmp(name, "type_is_bit_field") == 0
+        || strcmp(name, "type_is_simd_vector") == 0
+        || strcmp(name, "type_is_matrix") == 0
+        || strcmp(name, "type_is_has_nil") == 0;
 }
 
 // =========================================================================
@@ -904,11 +1493,26 @@ poly_unify_poly_idents_in_type(
     if (param_ast == NULL || arg_td == NULL)
         return false;
 
-    if (param_ast->type == AST_NODE_ARRAY_TYPE && arg_td->kind == TD_KIND_ARRAY)
+    if (param_ast->type == AST_NODE_ARRAY_TYPE
+        && (arg_td->kind == TD_KIND_ARRAY || arg_td->kind == TD_KIND_VECTOR))
     {
         // Walk children: find POLY_IDENTs and recurse into type nodes.
         // For [$N]$T: first POLY_IDENT is size (bind int), remaining
-        // type subtree contains the element type.
+        // type subtree contains the element type. Accepts both array and
+        // #simd vector args (binds $N = lane_count, $E = element type).
+        long long count;
+        TypeDescriptor const * elem_td;
+        if (arg_td->kind == TD_KIND_ARRAY)
+        {
+            count = (long long)arg_td->as.array.count;
+            elem_td = arg_td->element_type;
+        }
+        else
+        {
+            count = (long long)arg_td->as.vector.lane_count;
+            elem_td = arg_td->as.vector.element_type;
+        }
+
         bool any = false;
         for (size_t i = 0; i < param_ast->list.count; i++)
         {
@@ -929,9 +1533,8 @@ poly_unify_poly_idents_in_type(
                         already_bound = true;
                         if (env->entries[ei].kind == POLY_SLOT_INT
                             && env->entries[ei].bound_int_value == 0
-                            && arg_td->as.array.count > 0)
-                            env->entries[ei].bound_int_value =
-                                (long long)arg_td->as.array.count;
+                            && count > 0)
+                            env->entries[ei].bound_int_value = count;
                         break;
                     }
                 }
@@ -943,13 +1546,12 @@ poly_unify_poly_idents_in_type(
                     // Otherwise, it's the element type (bind type).
                     if (i == 0 && param_ast->list.count > 1)
                     {
-                        poly_env_bind_int(env, name,
-                                          (long long)arg_td->as.array.count);
+                        poly_env_bind_int(env, name, count);
                         any = true;
                     }
-                    else if (arg_td->element_type != NULL)
+                    else if (elem_td != NULL)
                     {
-                        poly_env_bind_type(env, name, arg_td->element_type);
+                        poly_env_bind_type(env, name, elem_td);
                         any = true;
                     }
                 }
@@ -957,7 +1559,7 @@ poly_unify_poly_idents_in_type(
             else if (is_type_node(child) || child->type == AST_NODE_IDENTIFIER)
             {
                 if (poly_unify_poly_idents_in_type(
-                        ctx, child, arg_td->element_type, env))
+                        ctx, child, elem_td, env))
                     any = true;
             }
         }

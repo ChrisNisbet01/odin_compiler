@@ -20,6 +20,45 @@ static void sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_
 static void sem_pass2_analyse_bodies_ast(SemContext * ctx, odin_grammar_node_t * program);
 static void sem_analyse_attributes(odin_grammar_node_t * decl_node);
 
+// Detect whether a constant-decl value expression is an intrinsic reference
+// (`intrinsics.type_is_float`, possibly wrapped in expression chain nodes).
+// Returns the intrinsic proc symbol (from the auto-imported base:intrinsics
+// package scope) or NULL if the value is not an intrinsic reference.
+static symbol_t *
+sem_find_intrinsic_from_value(odin_grammar_node_t * value_node)
+{
+    if (value_node == NULL)
+        return NULL;
+
+    // Unwrap single-child expression wrappers (ExpressionOrStructLit/Expression)
+    while (value_node->list.count == 1 && value_node->list.children[0] != NULL)
+        value_node = value_node->list.children[0];
+
+    if (value_node->type != AST_NODE_POSTFIX_EXPRESSION)
+        return NULL;
+
+    for (size_t i = 0; i < value_node->list.count; i++)
+    {
+        odin_grammar_node_t * child = value_node->list.children[i];
+        if (child != NULL && child->type == AST_NODE_POSTFIX_OPS && child->list.count > 0)
+        {
+            for (size_t j = child->list.count; j > 0; j--)
+            {
+                odin_grammar_node_t * op = child->list.children[j - 1];
+                if (op == NULL)
+                    continue;
+                if (op->type != AST_NODE_POSTFIX_MEMBER)
+                    break; // the trailing op is a call/etc — not a bare intrinsic ref
+                if (op->resolved_symbol != NULL
+                    && poly_is_known_intrinsic_name(op->resolved_symbol->name))
+                    return op->resolved_symbol;
+                return NULL;
+            }
+        }
+    }
+    return NULL;
+}
+
 // --- Compile-time constant integer evaluation ---
 // Evaluates a constant expression to an integer at compile time.
 // Returns the value and sets *ok = 1 on success, or sets *ok = 0 on failure.
@@ -1444,6 +1483,71 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
         }
     }
 
+    // Auto-import base:intrinsics as a named (non-using) import (prelude)
+    // so `intrinsics.type_is_float` etc. resolve without an explicit import.
+    bool intrinsics_already_imported = false;
+    for (int ii = 0; ii < ctx->import_count; ii++)
+    {
+        if (ctx->imports[ii] && ctx->imports[ii]->is_intrinsics)
+        {
+            intrinsics_already_imported = true;
+            break;
+        }
+    }
+    if (!intrinsics_already_imported)
+    {
+        char * intrinsics_path = resolve_import_path("base:intrinsics", ctx->source_dir, ctx->odin_root);
+        if (intrinsics_path)
+        {
+            ImportedPackage * ip = parse_imported_path(intrinsics_path, ctx->parser, ctx->hook_registry);
+            if (ip)
+            {
+                ip->is_intrinsics = true; // mark so we don't re-import
+                ip->is_using = false;     // intrinsics is referenced qualified (intrinsics.x)
+                ip->package_name = strdup("intrinsics");
+                ip->analysed = true;
+
+                scope_t * ip_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
+                ip->package_scope = ip_scope;
+
+                int saved_count = ctx->gen_ctx->count;
+                ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = ip_scope;
+
+                char * saved_pkg_name = ctx->package_name;
+                ctx->package_name = NULL;
+                char const * saved_file_path = ctx->source_file_path;
+                ctx->source_file_path = ip->source_path;
+
+                if (ctx->import_count >= ctx->import_capacity)
+                {
+                    int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
+                    ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
+                    if (new_arr == NULL)
+                    {
+                        perror("realloc");
+                        exit(1);
+                    }
+                    ctx->imports = new_arr;
+                    ctx->import_capacity = new_cap;
+                }
+                ctx->imports[ctx->import_count++] = ip;
+                sem_pass1_register_top_level_ex(ctx, ip->ast);
+                sem_pass2_analyse_bodies_ast(ctx, ip->ast);
+
+                if (ip->package_name == NULL && ctx->package_name != NULL)
+                {
+                    free(ip->package_name);
+                    ip->package_name = strdup(ctx->package_name);
+                }
+
+                ctx->package_name = saved_pkg_name;
+                ctx->source_file_path = saved_file_path;
+                ctx->gen_ctx->count = saved_count;
+            }
+            free(intrinsics_path);
+        }
+    }
+
     // Copy runtime symbols into the current scope (skip if we are core:runtime itself)
     for (int ri = 0; ri < ctx->import_count; ri++)
     {
@@ -2352,6 +2456,15 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         TypedValue tv = create_typed_value(NULL, val_type, false);
         scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
 
+        // Intrinsic-alias detection: `@private IS_FLOAT :: intrinsics.type_is_float`
+        // registers IS_FLOAT -> type_is_float so where clauses can use IS_FLOAT(T).
+        {
+            symbol_t * alias_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+            symbol_t * intrinsic_sym = sem_find_intrinsic_from_value(value_node);
+            if (alias_sym != NULL && intrinsic_sym != NULL)
+                poly_register_intrinsic_alias(alias_sym, intrinsic_sym);
+        }
+
         // Error: main proc must not have a return type; use os.exit() to set exit codes
         if (value_node->type == AST_NODE_PROCEDURE_DEFINITION && strcmp(name_node->text, "main") == 0)
         {
@@ -2372,24 +2485,57 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
 
     case AST_NODE_WHEN_STATEMENT:
     {
-        // Same structure as IF_STATEMENT: children[0] = condition, children[1] = then-body,
-        // subsequent children = else-when/else clauses
-        for (size_t i = 0; i < node->list.count; i++)
+        // Flat structure: [cond1, body1, cond2, body2, ..., elseBody?]
+        // Conditions are evaluated at compile time via the poly evaluator
+        // (handles $N poly ints, $T poly types, intrinsics predicates, etc.).
+        // Only the first matching branch is analysed; the selection is stored
+        // in node->metadata for the IR generator.
+        odin_grammar_node_t * selected = NULL;
+        size_t n = node->list.count;
+        size_t i = 0;
+        while (i + 1 < n)
         {
-            odin_grammar_node_t * child = node->list.children[i];
-            if (child == NULL)
-                continue;
-            if (child->type == AST_NODE_COMPOUND_STATEMENT)
+            odin_grammar_node_t * cond = node->list.children[i];
+            odin_grammar_node_t * body = node->list.children[i + 1];
+            if (cond == NULL || body == NULL || body->type != AST_NODE_COMPOUND_STATEMENT)
+                break;
+            long long val = poly_eval_where_expr(ctx, cond);
+            if (val == -1)
             {
-                generator_push_scope(ctx->gen_ctx);
-                sem_analyse_compound_statement(ctx, child, expected_return_type);
-                generator_pop_scope(ctx->gen_ctx);
+                sem_error_list_add(
+                    &ctx->errors,
+                    ctx->source_file_path,
+                    cond,
+                    "when condition must evaluate to a compile-time constant"
+                );
+                break;
             }
-            else
+            if (val != 0)
             {
-                sem_evaluate_expr(ctx, child);
+                selected = body;
+                break;
             }
+            i += 2;
         }
+
+        // Trailing `else` body (odd remaining child)
+        if (selected == NULL && i + 1 == n && node->list.children[i] != NULL
+            && node->list.children[i]->type == AST_NODE_COMPOUND_STATEMENT)
+        {
+            selected = node->list.children[i];
+        }
+
+        // No matching branch and no else: the statement generates nothing.
+        if (selected == NULL)
+        {
+            poly_register_when_selection(node, NULL);
+            break;
+        }
+
+        poly_register_when_selection(node, selected);
+        generator_push_scope(ctx->gen_ctx);
+        sem_analyse_compound_statement(ctx, selected, expected_return_type);
+        generator_pop_scope(ctx->gen_ctx);
         break;
     }
 
@@ -2435,12 +2581,20 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
     {
         odin_grammar_node_t * body = node_find_child(node, AST_NODE_COMPOUND_STATEMENT);
 
+        // Skip a leading `#unroll` directive child (Directive? in ForStatement)
+        size_t start_idx = 0;
+        if (node->list.count > 0 && node->list.children[0] != NULL
+            && node->list.children[0]->type == AST_NODE_DIRECTIVE)
+        {
+            start_idx = 1;
+        }
+
         // Detect for-range: first child is a raw Identifier
         bool is_for_range = false;
-        if (node->list.count >= 2 && node->list.children[0] != NULL
-            && node->list.children[0]->type == AST_NODE_IDENTIFIER)
+        if (node->list.count >= 2 && node->list.children[start_idx] != NULL
+            && node->list.children[start_idx]->type == AST_NODE_IDENTIFIER)
         {
-            for (size_t i = 1; i < node->list.count; i++)
+            for (size_t i = start_idx + 1; i < node->list.count; i++)
             {
                 odin_grammar_node_t * child = node->list.children[i];
                 if (child == NULL)
@@ -2450,7 +2604,10 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                 if (child->type == AST_NODE_IDENTIFIER)
                     continue;
                 sem_evaluate_expr(ctx, child);
-                if (child->resolved_type && child->resolved_type->kind == TD_KIND_RANGE)
+                if (child->resolved_type
+                    && (child->resolved_type->kind == TD_KIND_RANGE
+                        || child->resolved_type->kind == TD_KIND_VECTOR
+                        || child->resolved_type->kind == TD_KIND_ARRAY))
                 {
                     is_for_range = true;
                 }
@@ -2459,10 +2616,10 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         }
 
         // For non-range for loops, evaluate condition expressions before pushing scope
-        if (!is_for_range && node->list.count >= 1 && node->list.children[0] != NULL
-            && node->list.children[0]->type != AST_NODE_COMPOUND_STATEMENT)
+        if (!is_for_range && node->list.count >= 1 && node->list.children[start_idx] != NULL
+            && node->list.children[start_idx]->type != AST_NODE_COMPOUND_STATEMENT)
         {
-            sem_evaluate_expr(ctx, node->list.children[0]);
+            sem_evaluate_expr(ctx, node->list.children[start_idx]);
         }
 
         generator_push_scope(ctx->gen_ctx);

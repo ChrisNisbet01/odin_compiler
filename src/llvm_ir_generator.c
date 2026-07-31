@@ -27,6 +27,7 @@ LLVMValueRef ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node);
 LLVMValueRef ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node);
 static LLVMValueRef ir_gen_nested_procedure_decl(IrGenContext * ctx, odin_grammar_node_t * node);
 bool ir_gen_node_contains_auto_cast(odin_grammar_node_t * node);
+LLVMValueRef ir_gen_when_statement(IrGenContext * ctx, odin_grammar_node_t * node);
 LLVMValueRef
 ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef index_val, LLVMValueRef len_val, odin_grammar_node_t * node);
 LLVMValueRef ir_gen_map_subscript(
@@ -2939,8 +2940,10 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return ir_gen_variable_decl(ctx, node);
 
     case AST_NODE_IF_STATEMENT:
-    case AST_NODE_WHEN_STATEMENT:
         return ir_gen_if_statement(ctx, node);
+
+    case AST_NODE_WHEN_STATEMENT:
+        return ir_gen_when_statement(ctx, node);
 
     case AST_NODE_FOR_STATEMENT:
         return ir_gen_for_statement(ctx, node);
@@ -3044,7 +3047,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
 static int ir_gen_evaluate_constant_bool(IrGenContext * ctx, odin_grammar_node_t * node);
 
-static long long
+long long
 ir_gen_evaluate_constant_int(IrGenContext * ctx, odin_grammar_node_t * node, int * ok)
 {
     if (node == NULL)
@@ -3405,6 +3408,57 @@ ir_gen_when_body(IrGenContext * ctx, odin_grammar_node_t * body)
         else if (inner->type == AST_NODE_VARIABLE_DECL)
             ir_gen_top_level_variable(ctx, inner);
     }
+}
+
+// --- When statement codegen ---
+
+LLVMValueRef
+ir_gen_when_statement(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    // Flat structure: [cond1, body1, cond2, body2, ..., elseBody?]
+    // Re-evaluate each condition at compile time ($N poly ints are registered
+    // in the specialization's scope). Fall back to the semantic analyser's
+    // selection (node->metadata) when a condition is not re-evaluable.
+    size_t n = node->list.count;
+    size_t i = 0;
+    bool indeterminate = false;
+    while (i + 1 < n)
+    {
+        odin_grammar_node_t * cond = node->list.children[i];
+        odin_grammar_node_t * body = node->list.children[i + 1];
+        if (cond == NULL || body == NULL || body->type != AST_NODE_COMPOUND_STATEMENT)
+            break;
+        int val = ir_gen_evaluate_constant_bool(ctx, cond);
+        if (val == -1)
+        {
+            indeterminate = true;
+        }
+        else if (val != 0)
+        {
+            ir_gen_node(ctx, body);
+            return NULL;
+        }
+        i += 2;
+    }
+
+    if (indeterminate)
+    {
+        // Condition not re-evaluable at IR time: use semantic selection
+        odin_grammar_node_t * sel = poly_get_when_selection(node);
+        if (sel != NULL)
+        {
+            ir_gen_node(ctx, sel);
+        }
+        return NULL;
+    }
+
+    // No branch matched: trailing else body?
+    if (i + 1 == n && node->list.children[i] != NULL
+        && node->list.children[i]->type == AST_NODE_COMPOUND_STATEMENT)
+    {
+        ir_gen_node(ctx, node->list.children[i]);
+    }
+    return NULL;
 }
 
 // --- Main entry point ---

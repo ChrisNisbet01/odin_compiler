@@ -1,5 +1,7 @@
 #include "ir_gen_statement.h"
 
+#include <string.h>
+
 // --- Defer helper functions ---
 
 void
@@ -245,6 +247,283 @@ ir_gen_if_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     return NULL;
 }
 
+// Emit the runtime loop for a for-range statement (`for i in expr { body }`).
+// This is the non-unrolled path, shared between regular for-range and the
+// fallback when a `#unroll` iteration count is not a compile-time constant.
+static LLVMValueRef
+ir_gen_for_range_runtime(
+    IrGenContext * ctx,
+    odin_grammar_node_t * node,
+    odin_grammar_node_t ** loop_var_nodes,
+    int loop_var_count,
+    odin_grammar_node_t * range_expr_node
+)
+{
+    odin_grammar_node_t * body_node = NULL;
+
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx->context);
+    LLVMValueRef zero_i32 = LLVMConstInt(i32, 0, false);
+    LLVMValueRef one_i32 = LLVMConstInt(i32, 1, false);
+
+    // 1. Evaluate range expression → produces {i64, i64} struct value
+    LLVMValueRef range_val = ir_gen_node(ctx, range_expr_node);
+    if (!range_val)
+    {
+        LLVMBuildUnreachable(ctx->builder);
+        return NULL;
+    }
+
+    // 2. Extract low (idx 0) and high (idx 1) from the struct
+    LLVMTypeRef range_struct = LLVMTypeOf(range_val);
+    LLVMValueRef range_alloca = LLVMBuildAlloca(ctx->builder, range_struct, "for.range");
+    LLVMBuildStore(ctx->builder, range_val, range_alloca);
+
+    LLVMValueRef low_gep_i[2] = {zero_i32, zero_i32};
+    LLVMValueRef low_gep
+        = LLVMBuildInBoundsGEP2(ctx->builder, range_struct, range_alloca, low_gep_i, 2, "for.range.low.gep");
+    LLVMValueRef low_val = LLVMBuildLoad2(ctx->builder, i64, low_gep, "for.low");
+
+    LLVMValueRef high_gep_i[2] = {zero_i32, one_i32};
+    LLVMValueRef high_gep
+        = LLVMBuildInBoundsGEP2(ctx->builder, range_struct, range_alloca, high_gep_i, 2, "for.range.high.gep");
+    LLVMValueRef high_val = LLVMBuildLoad2(ctx->builder, i64, high_gep, "for.high");
+
+    // 3. Find body node (CompoundStatement or do-form statement)
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child == NULL)
+            continue;
+        if (child->type == AST_NODE_COMPOUND_STATEMENT)
+        {
+            body_node = child;
+            break;
+        }
+        // For do-form: body is the last child that is not an identifier, range, or compound
+        if (child->type != AST_NODE_IDENTIFIER
+            && !(child->resolved_type
+                 && (child->resolved_type->kind == TD_KIND_RANGE
+                     || child->resolved_type->kind == TD_KIND_VECTOR
+                     || child->resolved_type->kind == TD_KIND_ARRAY)))
+        {
+            body_node = child;
+        }
+    }
+
+    // 4. Build loop blocks
+    LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forcond");
+    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forbody");
+    LLVMBasicBlockRef inc_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forinc");
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forend");
+
+    // Push loop context (continue goes to inc block)
+    if (ctx->loop_depth < MAX_LOOP_DEPTH)
+    {
+        ctx->loop_stack[ctx->loop_depth].continue_bb = inc_bb;
+        ctx->loop_stack[ctx->loop_depth].break_bb = end_bb;
+        ctx->loop_stack[ctx->loop_depth].scope_depth = ctx->current_scope_depth;
+        ctx->loop_depth++;
+    }
+
+    // Allocate loop variables, initialize to low, register in scope
+    LLVMValueRef loop_allocas[MAX_LOOP_DEPTH];
+    TypeDescriptor const * i64_td = type_descriptor_get_int64_type(ctx->type_registry);
+    for (int vi = 0; vi < loop_var_count; vi++)
+    {
+        char const * name = loop_var_nodes[vi] ? loop_var_nodes[vi]->text : "for.var";
+        loop_allocas[vi] = LLVMBuildAlloca(ctx->builder, i64, name);
+        LLVMSetAlignment(loop_allocas[vi], LLVMABIAlignmentOfType(ctx->data_layout, i64));
+        LLVMBuildStore(ctx->builder, low_val, loop_allocas[vi]);
+        TypedValue tv = create_typed_value(loop_allocas[vi], i64_td, true);
+        generator_add_symbol(ctx->gen_ctx, name, tv);
+    }
+
+    LLVMBuildBr(ctx->builder, cond_bb);
+
+    // Condition block: loop_var < high
+    LLVMPositionBuilderAtEnd(ctx->builder, cond_bb);
+    LLVMValueRef loop_val = LLVMBuildLoad2(ctx->builder, i64, loop_allocas[0], "for.i.val");
+    LLVMValueRef cmp = LLVMBuildICmp(ctx->builder, LLVMIntSLT, loop_val, high_val, "for.cmp");
+    LLVMBuildCondBr(ctx->builder, cmp, body_bb, end_bb);
+
+    // Body block
+    LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
+    if (body_node)
+    {
+        ir_gen_node(ctx, body_node);
+    }
+    LLVMBasicBlockRef body_end_bb = LLVMGetInsertBlock(ctx->builder);
+    LLVMValueRef body_term = LLVMGetLastInstruction(body_end_bb);
+    if (body_term == NULL || !LLVMIsATerminatorInst(body_term))
+    {
+        LLVMBuildBr(ctx->builder, inc_bb);
+    }
+
+    // Increment block: load first var, increment, store to all vars
+    LLVMPositionBuilderAtEnd(ctx->builder, inc_bb);
+    LLVMValueRef old_val = LLVMBuildLoad2(ctx->builder, i64, loop_allocas[0], "for.i.old");
+    LLVMValueRef inc = LLVMBuildAdd(ctx->builder, old_val, LLVMConstInt(i64, 1, false), "for.i.inc");
+    for (int vi = 0; vi < loop_var_count; vi++)
+    {
+        LLVMBuildStore(ctx->builder, inc, loop_allocas[vi]);
+    }
+    LLVMBuildBr(ctx->builder, cond_bb);
+
+    // Pop loop context
+    if (ctx->loop_depth > 0)
+        ctx->loop_depth--;
+
+    LLVMPositionBuilderAtEnd(ctx->builder, end_bb);
+    return NULL;
+}
+
+// Evaluate a range-bound expression to a compile-time integer.
+// Uses ir_gen_evaluate_constant_int so poly `$N` identifiers resolve via the
+// const-int symbol table. Returns -1 if not a compile-time constant.
+static long long
+ir_gen_unroll_parse_literal(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    int ok = 0;
+    long long val = ir_gen_evaluate_constant_int(ctx, node, &ok);
+    return ok ? val : -1;
+}
+
+// Determine the compile-time iteration range for a for-range source.
+// Supports vectors (lane_count), arrays (count) and literal-bounded ranges.
+static bool
+ir_gen_unroll_range_info(
+    IrGenContext * ctx,
+    odin_grammar_node_t * range_expr_node,
+    long long * out_low,
+    long long * out_count
+)
+{
+    TypeDescriptor const * td = range_expr_node ? range_expr_node->resolved_type : NULL;
+    if (td == NULL)
+        return false;
+    if (td->kind == TD_KIND_VECTOR)
+    {
+        *out_low = 0;
+        *out_count = (long long)td->as.vector.lane_count;
+        return true;
+    }
+    if (td->kind == TD_KIND_ARRAY)
+    {
+        *out_low = 0;
+        *out_count = (long long)td->as.array.count;
+        return true;
+    }
+    if (td->kind == TD_KIND_RANGE)
+    {
+        // RANGE_EXPRESSION children: [low, range_op, high]
+        if (range_expr_node->list.count >= 3)
+        {
+            long long low = ir_gen_unroll_parse_literal(ctx, range_expr_node->list.children[0]);
+            long long high = ir_gen_unroll_parse_literal(ctx, range_expr_node->list.children[2]);
+            if (low >= 0 && high >= low)
+            {
+                *out_low = low;
+                *out_count = high - low;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Emit a `#unroll for` body `count` times with the loop variable bound to a
+// compile-time constant index. Falls back to a runtime loop if the iteration
+// count is not a compile-time constant.
+LLVMValueRef
+ir_gen_unrolled_for_range(
+    IrGenContext * ctx,
+    odin_grammar_node_t * node,
+    odin_grammar_node_t ** loop_var_nodes,
+    int loop_var_count,
+    odin_grammar_node_t * range_expr_node
+)
+{
+    long long low = 0, count = -1;
+    if (!ir_gen_unroll_range_info(ctx, range_expr_node, &low, &count) || count <= 0)
+    {
+        // Not a constant iteration count — fall back to the runtime loop.
+        // Re-dispatch by clearing the unroll flag is complex; instead emit the
+        // runtime range loop via the normal path (is_for_range stays true).
+        return ir_gen_for_range_runtime(
+            ctx, node, loop_var_nodes, loop_var_count, range_expr_node);
+    }
+
+    // Find the body node (CompoundStatement or do-form statement)
+    odin_grammar_node_t * body_node = NULL;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child == NULL)
+            continue;
+        if (child->type == AST_NODE_COMPOUND_STATEMENT)
+        {
+            body_node = child;
+            break;
+        }
+        if (child->type != AST_NODE_IDENTIFIER
+            && !(child->resolved_type
+                 && (child->resolved_type->kind == TD_KIND_RANGE
+                     || child->resolved_type->kind == TD_KIND_VECTOR
+                     || child->resolved_type->kind == TD_KIND_ARRAY)))
+        {
+            body_node = child;
+        }
+    }
+
+    // Dummy end block so break/continue inside an unrolled body don't crash
+    LLVMBasicBlockRef unroll_end
+        = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forunroll.end");
+    if (ctx->loop_depth < MAX_LOOP_DEPTH)
+    {
+        ctx->loop_stack[ctx->loop_depth].continue_bb = unroll_end;
+        ctx->loop_stack[ctx->loop_depth].break_bb = unroll_end;
+        ctx->loop_stack[ctx->loop_depth].scope_depth = ctx->current_scope_depth;
+        ctx->loop_depth++;
+    }
+
+    // Register loop variables as compile-time integer symbols
+    TypeDescriptor const * i64_td = type_descriptor_get_int64_type(ctx->type_registry);
+    symbol_t * var_syms[MAX_LOOP_DEPTH];
+    for (int vi = 0; vi < loop_var_count; vi++)
+    {
+        char const * name = loop_var_nodes[vi] ? loop_var_nodes[vi]->text : "for.var";
+        var_syms[vi] = NULL;
+        TypedValue tv = create_typed_value(NULL, i64_td, true);
+        generator_add_symbol(ctx->gen_ctx, name, tv);
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name);
+        if (sym != NULL)
+        {
+            sym->has_const_int_val = true;
+            var_syms[vi] = sym;
+        }
+    }
+
+    // Emit the body once per iteration with the constant index bound
+    for (long long k = 0; k < count; k++)
+    {
+        long long idx = low + k;
+        for (int vi = 0; vi < loop_var_count; vi++)
+        {
+            if (var_syms[vi] != NULL)
+                var_syms[vi]->const_int_val = idx;
+        }
+        if (body_node != NULL)
+            ir_gen_node(ctx, body_node);
+    }
+
+    if (ctx->loop_depth > 0)
+        ctx->loop_depth--;
+
+    LLVMPositionBuilderAtEnd(ctx->builder, unroll_end);
+    return NULL;
+}
+
 LLVMValueRef
 ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -254,15 +533,28 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
     odin_grammar_node_t * cond_node = NULL;
     odin_grammar_node_t * body_node = NULL;
 
+    // Skip a leading `#unroll` directive child (Directive? in ForStatement)
+    bool is_unrolled = false;
+    size_t start_idx = 0;
+    if (node->list.count > 0 && node->list.children[0] != NULL
+        && node->list.children[0]->type == AST_NODE_DIRECTIVE)
+    {
+        start_idx = 1;
+        if (node->list.children[0]->text != NULL
+            && strstr(node->list.children[0]->text, "#unroll") != NULL)
+            is_unrolled = true;
+    }
+
     // Detect for-range: first child is a raw Identifier
     bool is_for_range = false;
     odin_grammar_node_t * loop_var_nodes[MAX_LOOP_DEPTH];
     int loop_var_count = 0;
     odin_grammar_node_t * range_expr_node = NULL;
 
-    if (node->list.count >= 2 && node->list.children[0] != NULL && node->list.children[0]->type == AST_NODE_IDENTIFIER)
+    if (node->list.count >= 2 && node->list.children[start_idx] != NULL
+        && node->list.children[start_idx]->type == AST_NODE_IDENTIFIER)
     {
-        for (size_t i = 0; i < node->list.count && loop_var_count < MAX_LOOP_DEPTH; i++)
+        for (size_t i = start_idx; i < node->list.count && loop_var_count < MAX_LOOP_DEPTH; i++)
         {
             odin_grammar_node_t * child = node->list.children[i];
             if (child == NULL)
@@ -274,7 +566,10 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
                 loop_var_nodes[loop_var_count++] = child;
                 continue;
             }
-            if (child->resolved_type && child->resolved_type->kind == TD_KIND_RANGE)
+            if (child->resolved_type
+                && (child->resolved_type->kind == TD_KIND_RANGE
+                    || child->resolved_type->kind == TD_KIND_VECTOR
+                    || child->resolved_type->kind == TD_KIND_ARRAY))
             {
                 is_for_range = true;
                 range_expr_node = child;
@@ -285,119 +580,16 @@ ir_gen_for_statement(IrGenContext * ctx, odin_grammar_node_t * node)
         }
     }
 
+    if (is_for_range && is_unrolled)
+    {
+        return ir_gen_unrolled_for_range(
+            ctx, node, loop_var_nodes, loop_var_count, range_expr_node);
+    }
+
     if (is_for_range)
     {
-        LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->context);
-        LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx->context);
-        LLVMValueRef zero_i32 = LLVMConstInt(i32, 0, false);
-        LLVMValueRef one_i32 = LLVMConstInt(i32, 1, false);
-
-        // 1. Evaluate range expression → produces {i64, i64} struct value
-        LLVMValueRef range_val = ir_gen_node(ctx, range_expr_node);
-        if (!range_val)
-        {
-            LLVMBuildUnreachable(ctx->builder);
-            return NULL;
-        }
-
-        // 2. Extract low (idx 0) and high (idx 1) from the struct
-        LLVMTypeRef range_struct = LLVMTypeOf(range_val);
-        LLVMValueRef range_alloca = LLVMBuildAlloca(ctx->builder, range_struct, "for.range");
-        LLVMBuildStore(ctx->builder, range_val, range_alloca);
-
-        LLVMValueRef low_gep_i[2] = {zero_i32, zero_i32};
-        LLVMValueRef low_gep
-            = LLVMBuildInBoundsGEP2(ctx->builder, range_struct, range_alloca, low_gep_i, 2, "for.range.low.gep");
-        LLVMValueRef low_val = LLVMBuildLoad2(ctx->builder, i64, low_gep, "for.low");
-
-        LLVMValueRef high_gep_i[2] = {zero_i32, one_i32};
-        LLVMValueRef high_gep
-            = LLVMBuildInBoundsGEP2(ctx->builder, range_struct, range_alloca, high_gep_i, 2, "for.range.high.gep");
-        LLVMValueRef high_val = LLVMBuildLoad2(ctx->builder, i64, high_gep, "for.high");
-
-        // 3. Find body node (CompoundStatement or do-form statement)
-        for (size_t i = 0; i < node->list.count; i++)
-        {
-            odin_grammar_node_t * child = node->list.children[i];
-            if (child == NULL)
-                continue;
-            if (child->type == AST_NODE_COMPOUND_STATEMENT)
-            {
-                body_node = child;
-                break;
-            }
-            // For do-form: body is the last child that is not an identifier, range, or compound
-            if (child->type != AST_NODE_IDENTIFIER && !(child->resolved_type && child->resolved_type->kind == TD_KIND_RANGE))
-            {
-                body_node = child;
-            }
-        }
-
-        // 4. Build loop blocks
-        LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forcond");
-        LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forbody");
-        LLVMBasicBlockRef inc_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forinc");
-        LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "forend");
-
-        // Push loop context (continue goes to inc block)
-        if (ctx->loop_depth < MAX_LOOP_DEPTH)
-        {
-            ctx->loop_stack[ctx->loop_depth].continue_bb = inc_bb;
-            ctx->loop_stack[ctx->loop_depth].break_bb = end_bb;
-            ctx->loop_stack[ctx->loop_depth].scope_depth = ctx->current_scope_depth;
-            ctx->loop_depth++;
-        }
-
-        // Allocate loop variables, initialize to low, register in scope
-        LLVMValueRef loop_allocas[MAX_LOOP_DEPTH];
-        TypeDescriptor const * i64_td = type_descriptor_get_int64_type(ctx->type_registry);
-        for (int vi = 0; vi < loop_var_count; vi++)
-        {
-            char const * name = loop_var_nodes[vi] ? loop_var_nodes[vi]->text : "for.var";
-            loop_allocas[vi] = LLVMBuildAlloca(ctx->builder, i64, name);
-            LLVMSetAlignment(loop_allocas[vi], LLVMABIAlignmentOfType(ctx->data_layout, i64));
-            LLVMBuildStore(ctx->builder, low_val, loop_allocas[vi]);
-            TypedValue tv = create_typed_value(loop_allocas[vi], i64_td, true);
-            generator_add_symbol(ctx->gen_ctx, name, tv);
-        }
-
-        LLVMBuildBr(ctx->builder, cond_bb);
-
-        // Condition block: loop_var < high
-        LLVMPositionBuilderAtEnd(ctx->builder, cond_bb);
-        LLVMValueRef loop_val = LLVMBuildLoad2(ctx->builder, i64, loop_allocas[0], "for.i.val");
-        LLVMValueRef cmp = LLVMBuildICmp(ctx->builder, LLVMIntSLT, loop_val, high_val, "for.cmp");
-        LLVMBuildCondBr(ctx->builder, cmp, body_bb, end_bb);
-
-        // Body block
-        LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
-        if (body_node)
-        {
-            ir_gen_node(ctx, body_node);
-        }
-        LLVMBasicBlockRef body_end_bb = LLVMGetInsertBlock(ctx->builder);
-        LLVMValueRef body_term = LLVMGetLastInstruction(body_end_bb);
-        if (body_term == NULL || !LLVMIsATerminatorInst(body_term))
-        {
-            LLVMBuildBr(ctx->builder, inc_bb);
-        }
-
-        // Increment block: load first var, increment, store to all vars
-        LLVMPositionBuilderAtEnd(ctx->builder, inc_bb);
-        LLVMValueRef old_val = LLVMBuildLoad2(ctx->builder, i64, loop_allocas[0], "for.i.old");
-        LLVMValueRef inc = LLVMBuildAdd(ctx->builder, old_val, LLVMConstInt(i64, 1, false), "for.i.inc");
-        for (int vi = 0; vi < loop_var_count; vi++)
-        {
-            LLVMBuildStore(ctx->builder, inc, loop_allocas[vi]);
-        }
-        LLVMBuildBr(ctx->builder, cond_bb);
-
-        // Pop loop context
-        if (ctx->loop_depth > 0)
-            ctx->loop_depth--;
-
-        LLVMPositionBuilderAtEnd(ctx->builder, end_bb);
-        return NULL;
+        return ir_gen_for_range_runtime(
+            ctx, node, loop_var_nodes, loop_var_count, range_expr_node);
     }
 
     // Original for-loop logic

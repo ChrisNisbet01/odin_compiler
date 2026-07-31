@@ -67,6 +67,19 @@ bool poly_env_lookup_int(struct SemContext * ctx, char const * name, long long *
 void poly_register_origin(symbol_t * sym, odin_grammar_node_t * const_decl);
 odin_grammar_node_t * poly_get_origin(symbol_t * sym);
 
+// --- Intrinsic-alias side table (symbol_t* alias -> symbol_t* intrinsic proc) ---
+
+void poly_register_intrinsic_alias(symbol_t * alias_sym, symbol_t * intrinsic_sym);
+symbol_t * poly_get_intrinsic_alias(symbol_t * alias_sym);
+
+// Record / retrieve the body a `when` statement's compile-time selection chose.
+void poly_register_when_selection(odin_grammar_node_t * when_node, odin_grammar_node_t * body);
+odin_grammar_node_t * poly_get_when_selection(odin_grammar_node_t * when_node);
+
+// True if `name` is one of the compile-time type-query intrinsics supported by
+// the where-clause evaluator (matches stubs/base/intrinsics/intrinsics.odin).
+bool poly_is_known_intrinsic_name(char const * name);
+
 // --- Instantiation result ---
 
 typedef struct PolySpecialization
@@ -121,3 +134,8 @@ bool poly_struct_has_type_params(odin_grammar_node_t const * struct_node);
 // True if the given enum/union type node has poly parameters in its ParameterList.
 // Used to detect polymorphic enum/union declarations like enum($T: typeid) { ... }
 bool poly_type_has_type_params(odin_grammar_node_t const * type_node);
+
+// Evaluate a compile-time where/when condition expression (typeid_of, size_of,
+// intrinsics predicates, poly int/type env lookups, boolean/arith ops).
+// Returns -1 if it cannot be evaluated at compile time.
+long long poly_eval_where_expr(struct SemContext * ctx, odin_grammar_node_t * node);

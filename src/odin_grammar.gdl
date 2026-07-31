@@ -132,6 +132,7 @@ KwExcl = lexeme("excl" IdBoundary);
 KwMaybe = lexeme("Maybe" IdBoundary);
 KwHashType = lexeme("#type" IdBoundary);
 KwSimd = lexeme("#simd" IdBoundary);
+KwUnroll = lexeme("#unroll" IdBoundary);
 KwMatrix = lexeme("matrix" IdBoundary);
 KwExpandValues = lexeme("expand_values" IdBoundary);
 KwCompressValues = lexeme("compress_values" IdBoundary);
@@ -186,7 +187,7 @@ KwNoBoundsCheck = lexeme("no_bounds_check" IdBoundary);
 KwCallerLocation = lexeme("caller_location" IdBoundary);
 KwAlign = lexeme("align" IdBoundary);
 
-DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert | KwNoBoundsCheck | KwCallerLocation | KwAlign;
+DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert | KwNoBoundsCheck | KwCallerLocation | KwAlign | KwUnroll;
 Directive = lexeme("#" DirectiveName) @AST_ACTION_DIRECTIVE;
 DirectiveWithArgs = (lexeme("#" DirectiveName) LBracket Expression RBracket) @AST_ACTION_DIRECTIVE_WITH_ARGS;
 
@@ -528,7 +529,7 @@ IfStatement = KwIf (Expression | (Identifier ColonAssign Expression Semicolon Ex
 
 ForInitStmt = Identifier ColonAssign Expression | Expression;
 ForRangeClause = Identifier (Comma Identifier)? KwIn Expression;
-ForStatement = KwFor
+ForStatement = Directive? KwFor
                ((ForInitStmt Semicolon Expression? Semicolon Expression?)
                | ForRangeClause
                | Expression?)
