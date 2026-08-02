@@ -1670,16 +1670,18 @@ ir_gen_cast_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         else
             return LLVMBuildIntCast2(ctx->builder, src_val, dest_llvm_type, false, "trunc");
     }
-    else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
-             && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
+    else if ((src_kind == LLVMHalfTypeKind || src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
+             && (dest_kind == LLVMHalfTypeKind || dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
     {
         return LLVMBuildFPCast(ctx->builder, src_val, dest_llvm_type, "fpcast");
     }
-    else if ((src_kind == LLVMIntegerTypeKind) && (dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
+    else if ((src_kind == LLVMIntegerTypeKind)
+             && (dest_kind == LLVMHalfTypeKind || dest_kind == LLVMFloatTypeKind || dest_kind == LLVMDoubleTypeKind))
     {
         return LLVMBuildSIToFP(ctx->builder, src_val, dest_llvm_type, "sitofp");
     }
-    else if ((src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind) && dest_kind == LLVMIntegerTypeKind)
+    else if ((src_kind == LLVMHalfTypeKind || src_kind == LLVMFloatTypeKind || src_kind == LLVMDoubleTypeKind)
+             && dest_kind == LLVMIntegerTypeKind)
     {
         return LLVMBuildFPToSI(ctx->builder, src_val, dest_llvm_type, "fptosi");
     }
@@ -2534,6 +2536,92 @@ ir_gen_array_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     return result;
 }
 
+// --- ComplexExpr / QuaternionExpr: complex(1.0, 2.0) or quaternion(w = 1, x = 0, ...) ---
+// Supports both positional components (children are expressions, index = position)
+// and named fields (children[0] is a QuaternionFields node). Each component value is
+// coerced to the struct's element type before insertion.
+static LLVMValueRef
+ir_gen_complex_quaternion_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->resolved_type == NULL)
+        return NULL;
+    LLVMTypeRef struct_type = node->resolved_type->llvm_type;
+    if (struct_type == NULL || LLVMGetTypeKind(struct_type) != LLVMStructTypeKind)
+        return NULL;
+    LLVMTypeRef elem_llvm_type = LLVMStructGetTypeAtIndex(struct_type, 0);
+
+    LLVMValueRef result = LLVMGetUndef(struct_type);
+
+    // Named form: children[0] is a QuaternionFields node wrapping QuaternionField
+    // nodes ([Identifier "w/x/y/z", AssignExpression]).
+    odin_grammar_node_t * fields_node = NULL;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        if (node->list.children[i] != NULL
+            && node->list.children[i]->type == AST_NODE_QUATERNION_FIELDS)
+        {
+            fields_node = node->list.children[i];
+            break;
+        }
+    }
+
+    if (fields_node != NULL)
+    {
+        for (size_t i = 0; i < fields_node->list.count; i++)
+        {
+            odin_grammar_node_t * field = fields_node->list.children[i];
+            if (field == NULL || field->type != AST_NODE_QUATERNION_FIELD)
+                continue;
+            odin_grammar_node_t * name_node = NULL;
+            odin_grammar_node_t * value_expr = NULL;
+            for (size_t ci = 0; ci < field->list.count; ci++)
+            {
+                odin_grammar_node_t * child = field->list.children[ci];
+                if (child == NULL)
+                    continue;
+                if (child->type == AST_NODE_IDENTIFIER && name_node == NULL)
+                    name_node = child;
+                else
+                    value_expr = child;
+            }
+            if (name_node == NULL || name_node->text == NULL || value_expr == NULL)
+                continue;
+            unsigned field_index = 0;
+            if (strcmp(name_node->text, "x") == 0) field_index = 1;
+            else if (strcmp(name_node->text, "y") == 0) field_index = 2;
+            else if (strcmp(name_node->text, "z") == 0) field_index = 3;
+            else field_index = 0; // "w"
+
+            LLVMValueRef val = ir_gen_node(ctx, value_expr);
+            if (val == NULL)
+                return NULL;
+            if (elem_llvm_type != NULL && LLVMTypeOf(val) != elem_llvm_type)
+            {
+                val = coerce_value_to_type(ctx, val, elem_llvm_type, false, "quat.field");
+            }
+            result = LLVMBuildInsertValue(ctx->builder, result, val, field_index, "quat.field");
+        }
+        return result;
+    }
+
+    // Positional form: children are the component expressions in order.
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child == NULL)
+            continue;
+        LLVMValueRef val = ir_gen_node(ctx, child);
+        if (val == NULL)
+            return NULL;
+        if (elem_llvm_type != NULL && LLVMTypeOf(val) != elem_llvm_type)
+        {
+            val = coerce_value_to_type(ctx, val, elem_llvm_type, false, "complex.field");
+        }
+        result = LLVMBuildInsertValue(ctx->builder, result, val, (unsigned)i, "complex.field");
+    }
+    return result;
+}
+
 static LLVMValueRef
 ir_gen_soa_zip_expr(IrGenContext * ctx, odin_grammar_node_t * node)
 {
@@ -2909,20 +2997,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_COMPLEX_EXPR:
     case AST_NODE_QUATERNION_EXPR:
-    {
-        if (node->resolved_type == NULL || node->list.count < 2)
-            return NULL;
-        LLVMTypeRef struct_type = node->resolved_type->llvm_type;
-        LLVMValueRef result = LLVMGetUndef(struct_type);
-        for (size_t i = 0; i < node->list.count; i++)
-        {
-            LLVMValueRef val = ir_gen_node(ctx, node->list.children[i]);
-            if (val == NULL)
-                return NULL;
-            result = LLVMBuildInsertValue(ctx->builder, result, val, (unsigned)i, "complex.field");
-        }
-        return result;
-    }
+        return ir_gen_complex_quaternion_expr(ctx, node);
 
     case AST_NODE_EXPAND_VALUES_EXPR:
     {

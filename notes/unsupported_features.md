@@ -62,7 +62,7 @@ The following features were previously listed as unsupported but are now impleme
 - Stable hash-based type IDs (SipHash-2-4)
 - `f16` / `cstring` / `uintptr`
 - Endian-specific types (`i16le`, `i32be`, `f64le`, etc.)
-- `complex32/64/128`, `quaternion64/128/256`, complex/quaternion constructors
+- `complex32/64/128`, `quaternion64/128/256`, complex/quaternion constructors (positional + named `quaternion(w=1, x=0, y=0, z=0)`; all-int literal components default to f32 → `quaternion128`; component access/swizzles not yet implemented)
 - `TypeName(expr)` auto-cast-by-juxtaposition
 - `Maybe(T)` with `none` / `or_else` / `.value`
 - Tagged `union` with `.variant` syntax and type assertions

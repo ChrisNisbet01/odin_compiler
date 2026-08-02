@@ -455,7 +455,13 @@ AppendExpr = KwAppend LParen AssignExpression (Comma AssignExpression)+ RParen @
 InclExpr = KwIncl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_INCL_EXPR;
 ExclExpr = KwExcl LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_EXCL_EXPR;
 ComplexExpr = KwComplex LParen SuffixExpression Comma SuffixExpression RParen @AST_ACTION_COMPLEX_EXPR;
-QuaternionExpr = KwQuaternion LParen SuffixExpression Comma SuffixExpression Comma SuffixExpression Comma SuffixExpression RParen @AST_ACTION_QUATERNION_EXPR;
+// quaternion(...) accepts both named fields (quaternion(w = 1, x = 0, y = 0, z = 0))
+// and positional components (quaternion(1.0, 2.0, 3.0, 4.0)).
+QuaternionNamedArg = Identifier Assign AssignExpression @AST_ACTION_QUATERNION_NAMED_ARG;
+QuaternionNamedArgs = delimited_flex(QuaternionNamedArg, Comma) Comma? @AST_ACTION_QUATERNION_NAMED_ARGS;
+QuaternionExpr = (KwQuaternion LParen QuaternionNamedArgs RParen)
+               | (KwQuaternion LParen SuffixExpression Comma SuffixExpression Comma SuffixExpression Comma SuffixExpression RParen)
+               @AST_ACTION_QUATERNION_EXPR;
 ExpandValuesExpr = KwExpandValues LParen Expression RParen @AST_ACTION_EXPAND_VALUES_EXPR;
 CompressValuesExpr = KwCompressValues LParen TypePrefix (Comma AssignExpression)+ RParen @AST_ACTION_COMPRESS_VALUES_EXPR;
 SoaZipExpr = KwSoaZip LParen ArgumentList RParen @AST_ACTION_SOA_ZIP_EXPR;

@@ -1045,38 +1045,149 @@ sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * nod
 
     bool is_complex = (node->type == AST_NODE_COMPLEX_EXPR);
     int min_args = is_complex ? 2 : 4;
-    if (node->list.count < min_args)
+    LLVMContextRef llvm_ctx = ctx->gen_ctx->context;
+
+    // Collect the component value expressions and their field indices.
+    // Positional form children are expressions directly (index = position).
+    // Named form wraps the fields in a QuaternionFields node.
+    odin_grammar_node_t * value_exprs[4];
+    odin_grammar_node_t * fields_node = NULL;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        if (node->list.children[i] != NULL
+            && node->list.children[i]->type == AST_NODE_QUATERNION_FIELDS)
+        {
+            fields_node = node->list.children[i];
+            break;
+        }
+    }
+
+    int arg_count = 0;
+    if (fields_node != NULL)
+    {
+        // Named form: quaternion(w = 1, x = 0, y = 0, z = 0)
+        for (size_t i = 0; i < fields_node->list.count && arg_count < 4; i++)
+        {
+            odin_grammar_node_t * field = fields_node->list.children[i];
+            if (field == NULL || field->type != AST_NODE_QUATERNION_FIELD)
+                continue;
+            odin_grammar_node_t * name_node = NULL;
+            odin_grammar_node_t * value_expr = NULL;
+            for (size_t ci = 0; ci < field->list.count; ci++)
+            {
+                odin_grammar_node_t * child = field->list.children[ci];
+                if (child == NULL)
+                    continue;
+                if (child->type == AST_NODE_IDENTIFIER && name_node == NULL)
+                    name_node = child;
+                else
+                    value_expr = child;
+            }
+            if (name_node == NULL || name_node->text == NULL || value_expr == NULL)
+            {
+                sem_error_list_add(&ctx->errors, NULL, field,
+                    "complex/quaternion: named argument is missing a name or value");
+                node->resolved_type = NULL;
+                return NULL;
+            }
+            int field_index = -1;
+            if (strcmp(name_node->text, "w") == 0) field_index = 0;
+            else if (strcmp(name_node->text, "x") == 0) field_index = 1;
+            else if (strcmp(name_node->text, "y") == 0) field_index = 2;
+            else if (strcmp(name_node->text, "z") == 0) field_index = 3;
+            if (field_index < 0)
+            {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "complex/quaternion: invalid component name '%s' (expected w, x, y, or z)",
+                    name_node->text);
+                sem_error_list_add(&ctx->errors, NULL, name_node, buf);
+                node->resolved_type = NULL;
+                return NULL;
+            }
+            value_exprs[field_index] = value_expr;
+            arg_count++;
+        }
+    }
+    else
+    {
+        // Positional form: quaternion(1.0, 2.0, 3.0, 4.0) / complex(a, b)
+        for (size_t i = 0; i < node->list.count && arg_count < 4; i++)
+        {
+            if (node->list.children[i] == NULL)
+                continue;
+            value_exprs[arg_count] = node->list.children[i];
+            arg_count++;
+        }
+    }
+
+    if (arg_count < min_args)
     {
         sem_error_list_add(&ctx->errors, NULL, node, "complex/quaternion: insufficient arguments");
         node->resolved_type = NULL;
         return NULL;
     }
-    TypeDescriptor const * arg0 = sem_evaluate_expr(ctx, node->list.children[0]);
-    for (size_t i = 1; i < node->list.count; i++)
+
+    // Determine the component float type. Any f16/f32/f64 arg sets the type
+    // (all float args must agree); integer-typed args are coerced to it. If
+    // every arg is integer-typed, default to f32 (quaternion128 / complex64).
+    TypeDescriptor const * component_type = NULL;
+    bool saw_integer = false;
+    for (int i = 0; i < arg_count; i++)
     {
-        TypeDescriptor const * arg = sem_evaluate_expr(ctx, node->list.children[i]);
-        if (arg == NULL || arg0 == NULL)
-            continue;
-        if (arg->llvm_type != arg0->llvm_type)
+        TypeDescriptor const * arg = sem_evaluate_expr(ctx, value_exprs[i]);
+        if (arg == NULL || arg->llvm_type == NULL)
         {
-            sem_error_list_add(&ctx->errors, NULL, node,
-                "complex/quaternion: all arguments must have the same type");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        if (arg->llvm_type == LLVMHalfTypeInContext(llvm_ctx)
+            || arg->llvm_type == LLVMFloatTypeInContext(llvm_ctx)
+            || arg->llvm_type == LLVMDoubleTypeInContext(llvm_ctx))
+        {
+            if (component_type == NULL)
+            {
+                component_type = arg;
+            }
+            else if (component_type->llvm_type != arg->llvm_type)
+            {
+                sem_error_list_add(&ctx->errors, NULL, value_exprs[i],
+                    "complex/quaternion: all float arguments must have the same type");
+                node->resolved_type = NULL;
+                return NULL;
+            }
+        }
+        else if (LLVMGetTypeKind(arg->llvm_type) == LLVMIntegerTypeKind)
+        {
+            saw_integer = true;
+        }
+        else
+        {
+            sem_error_list_add(&ctx->errors, NULL, value_exprs[i],
+                "complex/quaternion: arguments must be f16, f32, f64, or integer types");
             node->resolved_type = NULL;
             return NULL;
         }
     }
-    if (arg0 == NULL)
+
+    if (component_type == NULL)
     {
-        node->resolved_type = NULL;
-        return NULL;
+        if (!saw_integer)
+        {
+            sem_error_list_add(&ctx->errors, NULL, node,
+                "complex/quaternion: arguments must be f16, f32, f64, or integer types");
+            node->resolved_type = NULL;
+            return NULL;
+        }
+        component_type = get_basic_type_by_name(ctx->type_registry, "f32");
     }
+
     char const * target_name = NULL;
-    LLVMContextRef llvm_ctx = ctx->gen_ctx->context;
-    if (arg0->llvm_type == LLVMHalfTypeInContext(llvm_ctx))
+    if (component_type->llvm_type == LLVMHalfTypeInContext(llvm_ctx))
         target_name = is_complex ? "complex32" : "quaternion64";
-    else if (arg0->llvm_type == LLVMFloatTypeInContext(llvm_ctx))
+    else if (component_type->llvm_type == LLVMFloatTypeInContext(llvm_ctx))
         target_name = is_complex ? "complex64" : "quaternion128";
-    else if (arg0->llvm_type == LLVMDoubleTypeInContext(llvm_ctx))
+    else if (component_type->llvm_type == LLVMDoubleTypeInContext(llvm_ctx))
         target_name = is_complex ? "complex128" : "quaternion256";
     else
     {
