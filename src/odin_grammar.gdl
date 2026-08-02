@@ -185,6 +185,7 @@ KwRequire = lexeme("require" IdBoundary);
 KwNoBoundsCheck = lexeme("no_bounds_check" IdBoundary);
 KwCallerLocation = lexeme("caller_location" IdBoundary);
 KwAlign = lexeme("align" IdBoundary);
+KwAnyInt = lexeme("any_int" IdBoundary);
 
 DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert | KwNoBoundsCheck | KwCallerLocation | KwAlign | KwUnroll;
 Directive = lexeme("#" DirectiveName) @AST_ACTION_DIRECTIVE;
@@ -337,7 +338,10 @@ StructRawBody = LBrace StructFieldList RBrace;
 StructType = KwStruct (SoaType | (ParameterList? (Directive IntegerLiteral?)? StructRawBody)) @AST_ACTION_STRUCT_TYPE;
 StructTypeRef = KwStruct Identifier @AST_ACTION_STRUCT_TYPE_REF;
 
-Parameter = KwUsing? ((PolyIdent Colon TypePrefix) | (Identifier (Comma Identifier)* Colon VariadicMarker? TypePrefix)) (ColonAssign AssignExpression)? @AST_ACTION_PARAMETER;
+// #any_int may prefix a parameter name list (e.g. "#any_int row, column: int").
+// The directive lexeme produces no AST node, so the Parameter structure is unchanged;
+// it is parsed but not honoured (params remain ordinary typed params).
+Parameter = KwUsing? (lexeme("#" KwAnyInt))? ((PolyIdent Colon TypePrefix) | (Identifier (Comma Identifier)* Colon VariadicMarker? TypePrefix)) (ColonAssign AssignExpression)? @AST_ACTION_PARAMETER;
 Parameters = Ellipsis | (Parameter (Comma Parameter)* (Comma Ellipsis)?) @AST_ACTION_PARAMETERS;
 ParameterList = LParen Parameters? RParen @AST_ACTION_PARAMETER_LIST;
 NamedReturn = Identifier Colon TypePrefix @AST_ACTION_NAMED_RETURN;
