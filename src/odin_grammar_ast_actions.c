@@ -359,6 +359,26 @@ DEFINE_ACTION(ast_action_log_or_expression_action, AST_NODE_LOG_OR_EXPRESSION, f
 DEFINE_OP_ACTION(ast_action_range_op_action, AST_NODE_RANGE_OP)
 DEFINE_ACTION(ast_action_range_expression_action, AST_NODE_RANGE_EXPRESSION, false)
 DEFINE_ACTION(ast_action_ternary_expression_action, AST_NODE_TERNARY_EXPRESSION, false)
+
+// InlineIfExpression = RangeExpression KwIf TernaryExpression KwElse TernaryExpression
+// Parse-order children are [then, cond, else]; reorder to the TERNARY_EXPRESSION
+// convention [cond, then, else] so the semantic/IR handlers work unchanged.
+static void
+ast_action_inline_if_expression_action(
+    epc_ast_builder_ctx_t * ctx, epc_cpt_node_t * node, void ** children, int count, void * user_data
+)
+{
+    (void)user_data;
+    void * reordered[3] = {NULL, NULL, NULL};
+    if (count >= 1)
+        reordered[1] = children[0];
+    if (count >= 2)
+        reordered[0] = children[1];
+    if (count >= 3)
+        reordered[2] = children[2];
+    make_node(ctx, node, reordered, count, AST_NODE_TERNARY_EXPRESSION, false);
+}
+
 DEFINE_ACTION(ast_action_or_else_action, AST_NODE_OR_ELSE, false)
 DEFINE_ACTION(ast_action_or_return_action, AST_NODE_OR_RETURN, false)
 DEFINE_OP_ACTION(ast_action_assign_op_action, AST_NODE_ASSIGN_OP)
@@ -542,6 +562,7 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_RANGE_OP, ast_action_range_op_action);
     REGISTER(AST_ACTION_RANGE_EXPRESSION, ast_action_range_expression_action);
     REGISTER(AST_ACTION_TERNARY_EXPRESSION, ast_action_ternary_expression_action);
+    REGISTER(AST_ACTION_INLINE_IF_EXPRESSION, ast_action_inline_if_expression_action);
     REGISTER(AST_ACTION_OR_ELSE, ast_action_or_else_action);
     REGISTER(AST_ACTION_OR_RETURN, ast_action_or_return_action);
     REGISTER(AST_ACTION_ASSIGN_OP, ast_action_assign_op_action);

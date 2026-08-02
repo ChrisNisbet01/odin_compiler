@@ -503,7 +503,11 @@ LogOrExpression = chainl1(LogAndExpression, LogOrOp) @AST_ACTION_LOG_OR_EXPRESSI
 RangeOp = DotDotLt | DotDot @AST_ACTION_RANGE_OP;
 RangeExpression = chainl1(LogOrExpression, RangeOp) @AST_ACTION_RANGE_EXPRESSION;
 
-TernaryExpression = RangeExpression (Question Expression Colon Expression)? @AST_ACTION_TERNARY_EXPRESSION;
+// Odin supports both the C-style ternary (cond ? a : b) and the inline
+// if-expression (a if cond else b). The inline form is right-associative:
+// "a if b else c if d else e" parses as "a if b else (c if d else e)".
+InlineIfExpression = RangeExpression KwIf TernaryExpression KwElse TernaryExpression @AST_ACTION_INLINE_IF_EXPRESSION;
+TernaryExpression = InlineIfExpression | RangeExpression (Question Expression Colon Expression)? @AST_ACTION_TERNARY_EXPRESSION;
 
 OrElseExpr = TernaryExpression (KwOrElse TernaryExpression)? @AST_ACTION_OR_ELSE;
 OrReturnExpr = OrElseExpr KwOrReturn @AST_ACTION_OR_RETURN;
