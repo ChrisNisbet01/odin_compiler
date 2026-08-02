@@ -130,15 +130,14 @@ KwBitSet = lexeme("bit_set" IdBoundary);
 KwIncl = lexeme("incl" IdBoundary);
 KwExcl = lexeme("excl" IdBoundary);
 KwMaybe = lexeme("Maybe" IdBoundary);
-KwHashType = lexeme("#type" IdBoundary);
-KwSimd = lexeme("#simd" IdBoundary);
-KwUnroll = lexeme("#unroll" IdBoundary);
+KwHashType = lexeme("#" "type" IdBoundary);
+KwSimd = lexeme("#" "simd" IdBoundary);
+KwUnroll = lexeme("#" "unroll" IdBoundary);
 KwMatrix = lexeme("matrix" IdBoundary);
 KwExpandValues = lexeme("expand_values" IdBoundary);
 KwCompressValues = lexeme("compress_values" IdBoundary);
 KwSoaZip = lexeme("soa_zip" IdBoundary);
 KwSoaUnzip = lexeme("soa_unzip" IdBoundary);
-KwProcLiteral = KwProc;
 
 // Reserved words set (for identifier boundary checking)
 AllReservedWords = KwPackage | KwImport | KwForeign
@@ -551,7 +550,7 @@ AssignStatement = SuffixExpression (Comma SuffixExpression)* (AssignOp | ColonAs
 ExpressionStatement = Expression @AST_ACTION_EXPRESSION_STATEMENT;
 
 ProcBody = CompoundStatement | TripleDash;
-ProcOverloadBundle = KwProc LBrace Identifier (Comma Identifier)* RBrace @AST_ACTION_PROC_OVERLOAD_BUNDLE;
+ProcOverloadBundle = KwProc LBrace Identifier (Comma Identifier)* Comma? RBrace @AST_ACTION_PROC_OVERLOAD_BUNDLE;
 ProcedureDefinition = ProcedureSignature ProcBody @AST_ACTION_PROCEDURE_DEFINITION;
 ProcedureLiteral = ProcOverloadBundle | ProcedureDefinition;
 
