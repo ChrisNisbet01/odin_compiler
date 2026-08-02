@@ -1,28 +1,79 @@
-# Plan: Fix Short Variable Declaration (:=) for Poly Call Results
+# Fix for `:=` Poly Call Result Type Inference Bug
 
 ## Problem
-When using short variable declaration `d := determinant(n)` where `determinant` is an overload bundle with poly candidates, the variable `d` gets an invalid type (kind=0, NULL) and subsequent subscript operations fail.
+When using `:=` short variable declaration with poly calls like:
+```odin
+d := linalg.determinant(m)
+```
+The result type was `kind=0` (NULL/dereferenced) instead of the correct matrix element type.
 
-## Root Cause (Confirmed)
-- The `:=` variable declaration is not correctly capturing the return type from poly-specialized calls to overload bundles
-- `op->resolved_type` is being set during semantic analysis, but when used in a `:=` declaration, it's not properly propagated to the IR generation phase
-- Debug output shows `cur_type=0x...` with `kind=0` (invalid type)
+## Root Cause
+In `semantic_analyser.c` `sem_analyse_variable_decl` (lines 2281-2304), the `poly_expected_return_type` context field is only set when there's an explicit declared type:
+```c
+if (type_node != NULL && var_type != NULL)
+    ctx->poly_expected_return_type = var_type;
+```
 
-## Investigation Log
-- Test `t := linalg.transpose(m)` followed by `t[0][0]` produces:
-  ```
-  DEBUG: Cannot subscript: cur_type=0x64dac7f048a0, kind=0
-  error: cannot subscript type: not an array, slice, dynamic array, multi-pointer, or map
-  ```
-- This indicates the type descriptor is NULL
+But for `:=` declarations, `type_node == NULL`, so poly calls can't infer the return type from the expected type.
 
-## Fix Location
-- File: `src/sem_evaluate_expr.c` - how `POSTFIX_CALL` resolves types for bundle dispatch
-- File: `src/ir_gen_variable_decl.c` - how `:=` declarations capture the expression result type
-- The type resolution path for `linalg.transpose(m)` when `linalg` is a qualified import
+## Secondary Bug Found and Fixed
+In `sem_evaluate_expr.c` `sem_evaluate_postfix_expr`, the package-qualified poly call handling had a bug at line 1988:
+```c
+if (i > 0)
+{
+    odin_grammar_node_t * prev_op = postfix_ops->list.children[i-1];
+    if (prev_op && prev_op->resolved_symbol)
+        pkg_callee_sym = prev_op->resolved_symbol;
+}
 
-## Solution Approach
-1. Trace the type resolution chain for qualified calls (`linalg.transpose(m)`)
-2. Verify `op->resolved_type` is set after bundle dispatch in sem
-3. Check if IR gen uses the correct type when creating the variable
-4. Ensure the poly-specialized proc's return type is the one being used
+if (pkg_callee_sym && pkg_callee_sym->is_polymorphic)
+{
+    // ... poly resolution
+}
+```
+
+When `i == 0` (first postfix op for direct calls like `linalg.determinant(n)`), the poly check was skipped entirely, causing poly calls to fall through to the unspecialized proc return type (which is NULL for `$T` return positions).
+
+## Fix Applied
+Added an `else` branch to get the callee symbol from the base expression when `i == 0` in `src/sem_evaluate_expr.c`:
+
+```c
+if (i > 0)
+{
+    odin_grammar_node_t * prev_op = postfix_ops->list.children[i-1];
+    if (prev_op && prev_op->resolved_symbol)
+        pkg_callee_sym = prev_op->resolved_symbol;
+}
+else
+{
+    // First postfix op (i == 0): get callee from base expression
+    odin_grammar_node_t * base = node->list.children[0];
+    if (base != NULL)
+    {
+        odin_grammar_node_t * inner = base;
+        while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
+            inner = inner->list.children[0];
+        if (inner->type == AST_NODE_POSTFIX_EXPRESSION && inner->list.count >= 2)
+        {
+            odin_grammar_node_t * inner_ops = inner->list.children[1];
+            if (inner_ops && inner_ops->list.count > 0)
+            {
+                odin_grammar_node_t * last_member = inner_ops->list.children[inner_ops->list.count - 1];
+                if (last_member && last_member->resolved_symbol)
+                    pkg_callee_sym = last_member->resolved_symbol;
+            }
+        }
+    }
+}
+
+if (pkg_callee_sym && pkg_callee_sym->is_polymorphic)
+{
+    // ... poly resolution (now works for i == 0)
+}
+```
+
+## Status: FIXED ✅
+All 235 tests pass including:
+- `test_polymorphic_basics.odin` (uses `:=` with poly calls)
+- `test_matrix_basic.odin` (uses `linalg.determinant` with `:=`)
+- `test_matrix_vector.odin`

@@ -1991,6 +1991,27 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             if (prev_op && prev_op->resolved_symbol)
                                 pkg_callee_sym = prev_op->resolved_symbol;
                         }
+                        else
+                        {
+                            // First postfix op (i == 0): get callee from base expression
+                            odin_grammar_node_t * base = node->list.children[0];
+                            if (base != NULL)
+                            {
+                                odin_grammar_node_t * inner = base;
+                                while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
+                                    inner = inner->list.children[0];
+                                if (inner->type == AST_NODE_POSTFIX_EXPRESSION && inner->list.count >= 2)
+                                {
+                                    odin_grammar_node_t * inner_ops = inner->list.children[1];
+                                    if (inner_ops && inner_ops->list.count > 0)
+                                    {
+                                        odin_grammar_node_t * last_member = inner_ops->list.children[inner_ops->list.count - 1];
+                                        if (last_member && last_member->resolved_symbol)
+                                            pkg_callee_sym = last_member->resolved_symbol;
+                                    }
+                                }
+                            }
+                        }
 
                         if (pkg_callee_sym && pkg_callee_sym->is_polymorphic)
                         {
