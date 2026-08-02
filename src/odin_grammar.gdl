@@ -469,7 +469,12 @@ ExpandValuesExpr = KwExpandValues LParen Expression RParen @AST_ACTION_EXPAND_VA
 CompressValuesExpr = KwCompressValues LParen TypePrefix (Comma AssignExpression)+ RParen @AST_ACTION_COMPRESS_VALUES_EXPR;
 SoaZipExpr = KwSoaZip LParen ArgumentList RParen @AST_ACTION_SOA_ZIP_EXPR;
 SoaUnzipExpr = KwSoaUnzip LParen Expression RParen @AST_ACTION_SOA_UNZIP_EXPR;
-TypeCastByJuxtaposition = TypeName LParen Expression RParen @AST_ACTION_CAST_EXPR;
+// Cast by juxtaposition: T(x) or (T)(x). The parenthesized form is needed for
+// types whose leading token isn't a valid expression start (e.g. ([N]Elem_Type)(v)).
+// A plain (expr)(x) still parses as a call because PostfixExpression is tried first
+// in UnaryExpression; the wrapping parens are dropped by the AST builder, so the
+// action sees [TypeName, Expression] exactly like the unparenthesized form.
+TypeCastByJuxtaposition = ((LParen TypeName RParen) | TypeName) LParen Expression RParen @AST_ACTION_CAST_EXPR;
 // A bare directive prefixing an expression, e.g. #force_inline f(x). Only the
 // inlining directives make sense in expression position; a generic
 // Directive UnaryExpression would glue standalone directives like
