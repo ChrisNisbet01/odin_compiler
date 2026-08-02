@@ -41,6 +41,7 @@ LLVMValueRef ir_gen_map_subscript(
 );
 
 static LLVMValueRef ir_gen_directive(IrGenContext * ctx, odin_grammar_node_t * node);
+static LLVMValueRef ir_gen_directive_expr(IrGenContext * ctx, odin_grammar_node_t * node);
 
 bool ir_gen_resolve_aggregate_field(
     IrGenContext * ctx,
@@ -2775,6 +2776,16 @@ ir_gen_directive(IrGenContext * ctx, odin_grammar_node_t * node)
     return NULL;
 }
 
+static LLVMValueRef
+ir_gen_directive_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    // DirectiveExpr = Directive UnaryExpression. The directive is not honoured;
+    // codegen simply evaluates the operand.
+    if (node == NULL || node->list.count < 2)
+        return NULL;
+    return ir_gen_node(ctx, node->list.children[1]);
+}
+
 // --- Main node dispatcher ---
 
 LLVMValueRef
@@ -3183,6 +3194,9 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
     case AST_NODE_DIRECTIVE_WITH_ARGS:
     case AST_NODE_DIRECTIVE:
         return ir_gen_directive(ctx, node);
+
+    case AST_NODE_DIRECTIVE_EXPR:
+        return ir_gen_directive_expr(ctx, node);
 
     case AST_NODE_WHERE_CLAUSE:
         return NULL;

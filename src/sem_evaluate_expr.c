@@ -70,6 +70,7 @@ static TypeDescriptor const * sem_evaluate_expression_wrapper(SemContext * ctx, 
 static TypeDescriptor const * sem_evaluate_assign_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_directive_with_args(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_evaluate_directive_expr(SemContext * ctx, odin_grammar_node_t * node);
 
 // --- Dispatch table ---
 
@@ -112,6 +113,7 @@ static TypeDescriptor const * (* const sem_evaluate_dispatch[])(SemContext *, od
     [AST_NODE_DISTINCT_TYPE] = sem_evaluate_distinct_type,
     [AST_NODE_NIL] = sem_evaluate_nil,
     [AST_NODE_DIRECTIVE] = sem_evaluate_directive,
+    [AST_NODE_DIRECTIVE_EXPR] = sem_evaluate_directive_expr,
     [AST_NODE_CONTEXT_EXPR] = sem_evaluate_context_expr,
     [AST_NODE_IDENTIFIER] = sem_evaluate_identifier,
     [AST_NODE_UNARY_EXPRESSION] = sem_evaluate_unary_expr,
@@ -1435,6 +1437,19 @@ sem_evaluate_directive(SemContext * ctx, odin_grammar_node_t * node)
     }
     return NULL;
     
+}
+
+static TypeDescriptor const *
+sem_evaluate_directive_expr(SemContext * ctx, odin_grammar_node_t * node)
+{
+    // DirectiveExpr = Directive UnaryExpression. The directive itself is not
+    // honoured; the operand is evaluated as normal and its type is propagated.
+    if (node->list.count < 2)
+        return NULL;
+    odin_grammar_node_t * operand = node->list.children[1];
+    TypeDescriptor const * t = sem_evaluate_expr(ctx, operand);
+    node->resolved_type = (TypeDescriptor *)t;
+    return t;
 }
 
 static TypeDescriptor const *

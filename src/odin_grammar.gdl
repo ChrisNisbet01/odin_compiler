@@ -467,11 +467,19 @@ CompressValuesExpr = KwCompressValues LParen TypePrefix (Comma AssignExpression)
 SoaZipExpr = KwSoaZip LParen ArgumentList RParen @AST_ACTION_SOA_ZIP_EXPR;
 SoaUnzipExpr = KwSoaUnzip LParen Expression RParen @AST_ACTION_SOA_UNZIP_EXPR;
 TypeCastByJuxtaposition = TypeName LParen Expression RParen @AST_ACTION_CAST_EXPR;
+// A bare directive prefixing an expression, e.g. #force_inline f(x). Only the
+// inlining directives make sense in expression position; a generic
+// Directive UnaryExpression would glue standalone directives like
+// #no_bounds_check to the next line's expression (newlines are whitespace).
+// The directive is parsed but not honoured; the operand is evaluated as normal.
+ForceInlineDirective = lexeme("#" KwForceInline) @AST_ACTION_DIRECTIVE;
+NoInlineDirective = lexeme("#" KwNoInline) @AST_ACTION_DIRECTIVE;
+DirectiveExpr = (ForceInlineDirective | NoInlineDirective) UnaryExpression @AST_ACTION_DIRECTIVE_EXPR;
 UnaryExpression = MakeExpr | NewExpr | DeleteExpr | AppendExpr | LenExpr | CapExpr | SizeOfExpr | AlignOfExpr 
                 | OffsetOfExpr | RawDataExpr | MinExpr | MaxExpr | TypeOfExpr | TypeidOfExpr | TypeInfoOfExpr 
                 | AutoCastExpr | CastExpr | TransmuteExpr | InclExpr | ExclExpr | ComplexExpr | QuaternionExpr 
-                | ExpandValuesExpr | CompressValuesExpr | SoaZipExpr | SoaUnzipExpr | UnaryPrefix | PostfixExpression 
-                | TypeCastByJuxtaposition;
+                | ExpandValuesExpr | CompressValuesExpr | SoaZipExpr | SoaUnzipExpr | UnaryPrefix | DirectiveExpr
+                | PostfixExpression | TypeCastByJuxtaposition;
 
 MulOp = Star | Slash | Percent | Mod @AST_ACTION_MUL_OP;
 MulExpression = chainl1(UnaryExpression, MulOp) @AST_ACTION_MUL_EXPRESSION;
