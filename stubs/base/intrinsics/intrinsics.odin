@@ -8,26 +8,26 @@ package intrinsics
 // This is a subset of Odin's base/intrinsics/intrinsics.odin — only the
 // "constant type tests" that carry no `where` clause on their own declaration.
 
-type_base_type :: proc($T: typeid) -> type ---
-type_core_type :: proc($T: typeid) -> type ---
-type_elem_type :: proc($T: typeid) -> type ---
+type_base_type          :: proc($T: typeid) -> type ---
+type_core_type          :: proc($T: typeid) -> type ---
+type_elem_type          :: proc($T: typeid) -> type ---
 
-type_is_boolean    :: proc($T: typeid) -> bool ---
-type_is_integer    :: proc($T: typeid) -> bool ---
-type_is_rune       :: proc($T: typeid) -> bool ---
-type_is_float      :: proc($T: typeid) -> bool ---
-type_is_complex    :: proc($T: typeid) -> bool ---
-type_is_quaternion :: proc($T: typeid) -> bool ---
-type_is_typeid     :: proc($T: typeid) -> bool ---
-type_is_any        :: proc($T: typeid) -> bool ---
-type_is_string     :: proc($T: typeid) -> bool ---
-type_is_unsigned   :: proc($T: typeid) -> bool ---
-type_is_numeric    :: proc($T: typeid) -> bool ---
-type_is_ordered    :: proc($T: typeid) -> bool ---
+type_is_boolean         :: proc($T: typeid) -> bool ---
+type_is_integer         :: proc($T: typeid) -> bool ---
+type_is_rune            :: proc($T: typeid) -> bool ---
+type_is_float           :: proc($T: typeid) -> bool ---
+type_is_complex         :: proc($T: typeid) -> bool ---
+type_is_quaternion      :: proc($T: typeid) -> bool ---
+type_is_typeid          :: proc($T: typeid) -> bool ---
+type_is_any             :: proc($T: typeid) -> bool ---
+type_is_string          :: proc($T: typeid) -> bool ---
+type_is_unsigned        :: proc($T: typeid) -> bool ---
+type_is_numeric         :: proc($T: typeid) -> bool ---
+type_is_ordered         :: proc($T: typeid) -> bool ---
 type_is_ordered_numeric :: proc($T: typeid) -> bool ---
-type_is_indexable  :: proc($T: typeid) -> bool ---
-type_is_sliceable  :: proc($T: typeid) -> bool ---
-type_is_comparable :: proc($T: typeid) -> bool ---
+type_is_indexable       :: proc($T: typeid) -> bool ---
+type_is_sliceable       :: proc($T: typeid) -> bool ---
+type_is_comparable      :: proc($T: typeid) -> bool ---
 type_is_pointer         :: proc($T: typeid) -> bool ---
 type_is_multi_pointer   :: proc($T: typeid) -> bool ---
 type_is_array           :: proc($T: typeid) -> bool ---
@@ -43,6 +43,18 @@ type_is_bit_field       :: proc($T: typeid) -> bool ---
 type_is_simd_vector     :: proc($T: typeid) -> bool ---
 type_is_matrix          :: proc($T: typeid) -> bool ---
 type_has_nil            :: proc($T: typeid) -> bool ---
+type_is_string16        :: proc($T: typeid) -> bool ---
+type_is_cstring         :: proc($T: typeid) -> bool ---
+type_is_cstring16       :: proc($T: typeid) -> bool ---
+type_is_endian_platform :: proc($T: typeid) -> bool ---
+type_is_endian_little   :: proc($T: typeid) -> bool ---
+type_is_endian_big      :: proc($T: typeid) -> bool ---
+type_is_valid_map_key   :: proc($T: typeid) -> bool ---
+type_is_valid_matrix_elements :: proc($T: typeid) -> bool ---
+type_is_named           :: proc($T: typeid) -> bool ---
+
+type_is_matrix_row_major    :: proc($T: typeid) -> bool where type_is_matrix(T) ---
+type_is_matrix_column_major :: proc($T: typeid) -> bool where type_is_matrix(T) ---
 
 // Matrix intrinsics — declared with `---` bodies. They are never codegen'd
 // directly: callers either specialise a polymorphic procedure that uses them

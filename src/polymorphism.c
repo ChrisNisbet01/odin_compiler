@@ -369,6 +369,15 @@ poly_eval_intrinsic(char const * name, TypeDescriptor const * arg_type)
     if (strcmp(name, "type_is_simd_vector") == 0)      return (arg_type->kind == TD_KIND_VECTOR) ? 1 : 0;
     if (strcmp(name, "type_is_matrix") == 0)           return (arg_type->kind == TD_KIND_MATRIX) ? 1 : 0;
     if (strcmp(name, "type_is_has_nil") == 0)          return poly_td_is_has_nil(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_string16") == 0)         return poly_basic_type_is(arg_type, "string16") ? 1 : 0;
+    if (strcmp(name, "type_is_cstring") == 0)          return poly_basic_type_is(arg_type, "cstring") ? 1 : 0;
+    if (strcmp(name, "type_is_cstring16") == 0)       return poly_basic_type_is(arg_type, "cstring16") ? 1 : 0;
+    if (strcmp(name, "type_is_endian_platform") == 0)  return 1;  // We're always on the platform's native endian
+    if (strcmp(name, "type_is_endian_little") == 0)    return 1;  // x86_64 is little-endian
+    if (strcmp(name, "type_is_endian_big") == 0)       return 0;  // x86_64 is little-endian
+    if (strcmp(name, "type_is_valid_map_key") == 0)    return poly_td_is_comparable(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_valid_matrix_elements") == 0) return poly_td_is_numeric(arg_type) ? 1 : 0;
+    if (strcmp(name, "type_is_named") == 0)            return (arg_type->kind == TD_KIND_BASIC && arg_type->as.basic.name != NULL) ? 1 : 0;
 
     // Type-returning intrinsics: return the resulting descriptor's type_id so
     // they compose with `typeid_of(...) == typeid_of(...)` in where clauses.
