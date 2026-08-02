@@ -2846,22 +2846,20 @@ sem_resolve_overload_bundle_call(
     TypeDescriptor const ** candidate_types = bundle_type->as.overload_bundle.candidate_types;
     symbol_t ** candidate_symbols = bundle_type->as.overload_bundle.candidate_symbols;
 
-    // Evaluate argument expressions and collect their types
+    // Evaluate argument expressions and collect their types. The argument list
+    // wraps a single comma-chained Expression tree, so decompose it (the direct
+    // children loop would count a multi-arg call as a single argument).
     int arg_count = 0;
-    TypeDescriptor const * arg_types[64];
-    if (arg_list_node != NULL && arg_list_node->type == AST_NODE_ARGUMENT_LIST)
+    TypeDescriptor const * arg_types[128];
+    if (arg_list_node != NULL && arg_list_node->type == AST_NODE_ARGUMENT_LIST && arg_list_node->list.count >= 1)
     {
-        for (size_t ai = 0; ai < arg_list_node->list.count; ai++)
+        odin_grammar_node_t * arg_expr = arg_list_node->list.children[0];
+        odin_grammar_node_t * args[128];
+        sem_collect_comma_chain_args(arg_expr, args, 128, &arg_count);
+        for (int ai = 0; ai < arg_count && ai < 128; ai++)
         {
-            odin_grammar_node_t * arg_node = arg_list_node->list.children[ai];
-            if (arg_node == NULL)
-                continue;
-            sem_evaluate_expr(ctx, arg_node);
-            if ((size_t)arg_count < 64)
-            {
-                arg_types[arg_count] = arg_node->resolved_type;
-                arg_count++;
-            }
+            sem_evaluate_expr(ctx, args[ai]);
+            arg_types[ai] = args[ai]->resolved_type;
         }
     }
 
