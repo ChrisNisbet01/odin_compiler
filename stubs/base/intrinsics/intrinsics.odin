@@ -43,3 +43,16 @@ type_is_bit_field       :: proc($T: typeid) -> bool ---
 type_is_simd_vector     :: proc($T: typeid) -> bool ---
 type_is_matrix          :: proc($T: typeid) -> bool ---
 type_has_nil            :: proc($T: typeid) -> bool ---
+
+// Matrix intrinsics — declared with `---` bodies. They are never codegen'd
+// directly: callers either specialise a polymorphic procedure that uses them
+// (resolved through polymorphic specialisation, which emits a real body) or
+// invoke the name-matched intrinsic path in the IR generator (see
+// ir_gen_postfix_transpose). Aliasing them as values in user packages
+// (e.g. `linalg/general.odin`: `transpose :: intrinsics.transpose`) only
+// records the procedure symbol and produces no runtime reference to the
+// body-less declaration, so no link-time undefined symbols result.
+outer_product    :: proc "contextless" ($T: typeid, a: ^T, b: ^T) -> T #no_bounds_check ---
+transpose        :: proc "contextless" ($T: typeid, m: T) -> T #no_bounds_check ---
+hadamard_product :: proc "contextless" ($T: typeid, a: T, b: T) -> T #no_bounds_check ---
+matrix_flatten   :: proc "contextless" ($T: typeid, m: T) -> T #no_bounds_check ---

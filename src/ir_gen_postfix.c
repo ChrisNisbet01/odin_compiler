@@ -13,7 +13,7 @@ ir_gen_postfix_transpose(IrGenContext * ctx, LLVMValueRef m_param,
                            TypeDescriptor const * m_type,
                            TypeDescriptor const * result_type)
 {
-    if (m_type == NULL || m_type->kind != TD_KIND_MATRIX)
+    if (m_param == NULL || m_type == NULL || m_type->kind != TD_KIND_MATRIX)
         return NULL;
     if (result_type == NULL || result_type->kind != TD_KIND_MATRIX)
         return NULL;
@@ -21,8 +21,13 @@ ir_gen_postfix_transpose(IrGenContext * ctx, LLVMValueRef m_param,
     int64_t rows = m_type->as.matrix.rows;
     int64_t cols = m_type->as.matrix.columns;
     TypeDescriptor const * elem_type = m_type->as.matrix.element_type;
+    if (elem_type == NULL)
+        return NULL;
     LLVMTypeRef elem_llvm = elem_type->llvm_type;
     LLVMTypeRef result_llvm = result_type->llvm_type;
+    LLVMTypeRef m_type_llvm = m_type->llvm_type;
+    if (elem_llvm == NULL || result_llvm == NULL || m_type_llvm == NULL)
+        return NULL;
 
     // m_param should be a pointer to the matrix
     // Use it directly with GEP to access elements
@@ -37,7 +42,7 @@ ir_gen_postfix_transpose(IrGenContext * ctx, LLVMValueRef m_param,
                 = {LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)i, false),
                    LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)j, false)};
             LLVMValueRef m_elem_ptr
-                = LLVMBuildInBoundsGEP2(ctx->builder, m_type->llvm_type, m_param, midx, 2, "tr.m.e");
+                = LLVMBuildInBoundsGEP2(ctx->builder, m_type_llvm, m_param, midx, 2, "tr.m.e");
             LLVMValueRef m_elem = LLVMBuildLoad2(ctx->builder, elem_llvm, m_elem_ptr, "tr.m.v");
 
             LLVMValueRef ridx[]
@@ -237,6 +242,18 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
     LLVMValueRef args[128];
     TypeDescriptor const * arg_types[128];
     int arg_count = 0;
+    char const * func_name = NULL;
+
+    if (op->resolved_symbol)
+        func_name = op->resolved_symbol->llvm_name ? op->resolved_symbol->llvm_name : op->resolved_symbol->name;
+    if (func_name == NULL && node->list.count > 0 && node->list.children[0] != NULL)
+    {
+        odin_grammar_node_t * base = node->list.children[0];
+        while (base->type == AST_NODE_PRIMARY_EXPRESSION && base->list.count > 0)
+            base = base->list.children[0];
+        if (base && base->type == AST_NODE_IDENTIFIER && base->text)
+            func_name = base->text;
+    }
 
     if (op->list.count > 0 && op->list.children[0] != NULL)
     {
@@ -248,26 +265,14 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
 
     // Special handling for transpose builtin - must happen before 'any' packing
     {
-        char const * func_name = NULL;
-        
-        if (op->resolved_symbol)
-            func_name = op->resolved_symbol->llvm_name ? op->resolved_symbol->llvm_name : op->resolved_symbol->name;
-        if (func_name == NULL && node->list.count > 0 && node->list.children[0] != NULL)
-        {
-            odin_grammar_node_t * base = node->list.children[0];
-            while (base->type == AST_NODE_PRIMARY_EXPRESSION && base->list.count > 0)
-                base = base->list.children[0];
-            if (base && base->type == AST_NODE_IDENTIFIER && base->text)
-                func_name = base->text;
-        }
-        
-        if (func_name && strcmp(func_name, "transpose") == 0 && arg_count > 0)
+        if (func_name != NULL && strcmp(func_name, "transpose") == 0 && arg_count > 0)
         {
             LLVMValueRef m_param = args[0];
             TypeDescriptor const * m_type = arg_types[0];
             TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
             
-            if (result_type && result_type->kind == TD_KIND_MATRIX)
+            if (m_param != NULL && m_type != NULL && result_type != NULL
+                && m_type->kind == TD_KIND_MATRIX && result_type->kind == TD_KIND_MATRIX)
             {
                 LLVMValueRef transposed = ir_gen_postfix_transpose(ctx, m_param, m_type, result_type);
                 if (transposed != NULL)
