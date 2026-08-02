@@ -1541,13 +1541,23 @@ sem_resolve_matrix_type(SemContext * ctx, odin_grammar_node_t * node)
 static TypeDescriptor const *
 sem_resolve_spec_type(SemContext * ctx, odin_grammar_node_t * node)
 {
-    // SpecType = PolyIdent SpecOperator TypePrefix
-    // At instantiation time, the PolyIdent ($M) is bound in the poly env.
-    // Look it up and return the bound concrete type.
+    // SpecType = (KwTypeId | PolyIdent) SpecOperator TypePrefix
+    //   $T/[$N]$E  -> PolyIdent form: at instantiation time the PolyIdent ($M)
+    //                 is bound in the poly env; look it up.
+    //   typeid/...  -> BasicType form: resolves to the typeid descriptor.
     if (node->list.count < 3)
         return NULL;
     odin_grammar_node_t * poly_ident = node->list.children[0];
-    if (poly_ident == NULL || poly_ident->type != AST_NODE_POLY_IDENT)
+    if (poly_ident == NULL)
+        return NULL;
+    if (poly_ident->type == AST_NODE_BASIC_TYPE)
+    {
+        TypeDescriptor const * td = get_basic_type_by_name(ctx->type_registry, "typeid");
+        if (td)
+            node->resolved_type = (TypeDescriptor *)td;
+        return td;
+    }
+    if (poly_ident->type != AST_NODE_POLY_IDENT)
         return NULL;
     char const * name = poly_ident->text;
     if (name == NULL)

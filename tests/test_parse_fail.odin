@@ -1,16 +1,13 @@
 package main
 
 import "core:os"
-import "base:intrinsics"
 
 @(require_results)
-vector_length_a :: proc "contextless" (v: $T/[$N]$E) -> E where IS_FLOAT(E) {
-	return #force_inline math.sqrt(dot(v, v))
-}
-
-@(require_results)
-vector_length_b :: proc "contextless" (v: $T/[$N]$E) -> E where IS_FLOAT(E) {
-	return #force_inline math.sqrt(#force_inline dot(v, v))
+identity_array_based_matrix :: proc "contextless" ($T: typeid/[$N][N]$E) -> (m: T) #no_bounds_check {
+	for i in 0..<N {
+		m[i][i] = E(1)
+	}
+	return m
 }
 
 main :: proc() {

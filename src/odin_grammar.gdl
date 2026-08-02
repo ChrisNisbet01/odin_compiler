@@ -368,15 +368,18 @@ QualifiedTypeName = Identifier Dot Identifier @AST_ACTION_QUALIFIED_TYPE_NAME;
 
 // Base types for TypeName (no left recursion)
 SpecOperator = lexeme('/' not('=')) @AST_ACTION_SPEC_OPERATOR;
-SpecType = PolyIdent SpecOperator TypePrefix @AST_ACTION_SPEC_TYPE;
+// Type specialization: $T/[pattern] shorthand, or an explicit typeid
+// constrained to a pattern: $T: typeid/[$N][N]$E. Both carry the pattern as
+// children[2]; the leading node is a PolyIdent ($T) or BasicType (typeid).
+SpecType = (KwTypeId | PolyIdent) SpecOperator TypePrefix @AST_ACTION_SPEC_TYPE;
 
 // Base types for TypeName (no left recursion)
 TypePrefix = TupleType | PointerType | DynamicArrayType | SliceType | MultiPointerType | ArrayType
            | MapType | VectorType | MatrixType | ProcedureSignature
            | StructType | UnionType | EnumType | BitFieldType | BitSetType
-           | DistinctType | BasicType | StructTypeRef | EnumTypeRef
+           | SpecType | DistinctType | BasicType | StructTypeRef | EnumTypeRef
            | TypeApplication
-           | QualifiedTypeName | Identifier | SpecType | PolyIdent | MaybeType
+           | QualifiedTypeName | Identifier | PolyIdent | MaybeType
            | SoaType;
 
 // Full type with optional pipe-separated variants
