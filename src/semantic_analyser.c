@@ -1082,6 +1082,127 @@ sem_set_symbol_private(scope_t * scope, char const * name, bool is_private)
         sym->is_private = true;
 }
 
+// Resolve the candidates of an overload bundle (PROC_OVERLOAD_BUNDLE) against
+// the current scope. On success returns the bundle TypeDescriptor and stores it
+// on value_node->resolved_type. When a candidate is not (yet) a registered
+// procedure or polymorphic symbol, *all_ok is set to false and an error is only
+// emitted when emit_errors is true (used for the deferred/resolved path).
+static TypeDescriptor const *
+sem_resolve_overload_bundle(SemContext * ctx, odin_grammar_node_t * value_node, bool emit_errors, bool * all_ok)
+{
+    *all_ok = true;
+    int candidate_count = (int)value_node->list.count;
+    if (candidate_count <= 0)
+        return NULL;
+
+    TypeDescriptor const ** candidate_types
+        = (TypeDescriptor const **)malloc((size_t)candidate_count * sizeof(TypeDescriptor const *));
+    symbol_t ** candidate_symbols = (symbol_t **)malloc((size_t)candidate_count * sizeof(symbol_t *));
+    int valid_count = 0;
+    for (int i = 0; i < candidate_count; i++)
+    {
+        odin_grammar_node_t * id_node = value_node->list.children[i];
+        if (id_node == NULL || id_node->type != AST_NODE_IDENTIFIER || id_node->text == NULL)
+            continue;
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), id_node->text);
+        if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
+        {
+            candidate_types[valid_count] = sym->value.type_info;
+            candidate_symbols[valid_count] = sym;
+            valid_count++;
+        }
+        else if (sym && sym->is_polymorphic)
+        {
+            candidate_types[valid_count] = NULL;
+            candidate_symbols[valid_count] = sym;
+            valid_count++;
+        }
+        else
+        {
+            if (emit_errors)
+            {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text);
+                sem_error_list_add(&ctx->errors, NULL, id_node, buf);
+            }
+            *all_ok = false;
+        }
+    }
+
+    TypeDescriptor const * resolved = NULL;
+    if (valid_count > 0)
+    {
+        resolved = get_or_create_overload_bundle_type(ctx->type_registry, candidate_types, candidate_symbols, valid_count);
+        value_node->resolved_type = (TypeDescriptor *)resolved;
+    }
+    free(candidate_types);
+    free(candidate_symbols);
+    return resolved;
+}
+
+// Record an overload bundle whose candidates could not all be resolved when the
+// bundle declaration was processed (forward reference). The bundle's ConstantDecl
+// is kept until the end of pass 1 and then resolved by sem_resolve_pending_bundles.
+static void
+sem_add_pending_bundle(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (ctx->pending_bundle_count >= ctx->pending_bundle_capacity)
+    {
+        int new_cap = ctx->pending_bundle_capacity == 0 ? 8 : ctx->pending_bundle_capacity * 2;
+        odin_grammar_node_t ** new_arr
+            = realloc(ctx->pending_bundles, (size_t)new_cap * sizeof(odin_grammar_node_t *));
+        if (new_arr == NULL)
+        {
+            perror("realloc");
+            exit(1);
+        }
+        ctx->pending_bundles = new_arr;
+        ctx->pending_bundle_capacity = new_cap;
+    }
+    ctx->pending_bundles[ctx->pending_bundle_count++] = node;
+}
+
+// Resolve overload bundles deferred during pass 1 (entries [start_index, count)).
+// Runs after all top-level declarations of the current file have been registered,
+// so forward references to candidate procs now resolve. Errors for genuinely
+// missing candidates are reported here. Already-resolved entries are discarded.
+static void
+sem_resolve_pending_bundles(SemContext * ctx, int start_index)
+{
+    for (int i = start_index; i < ctx->pending_bundle_count; i++)
+    {
+        odin_grammar_node_t * bundle_decl = ctx->pending_bundles[i];
+        if (bundle_decl == NULL)
+            continue;
+        odin_grammar_node_t * name_node = node_find_child(bundle_decl, AST_NODE_IDENTIFIER);
+        if (name_node == NULL)
+            continue;
+        odin_grammar_node_t * value_node = NULL;
+        for (size_t j = 0; j < bundle_decl->list.count; j++)
+        {
+            odin_grammar_node_t * child = bundle_decl->list.children[j];
+            if (child != NULL && child != name_node && child->type != AST_NODE_ATTRIBUTE)
+            {
+                value_node = child;
+                break;
+            }
+        }
+        if (value_node == NULL || value_node->type != AST_NODE_PROC_OVERLOAD_BUNDLE)
+            continue;
+
+        bool all_ok = true;
+        TypeDescriptor const * resolved = sem_resolve_overload_bundle(ctx, value_node, true, &all_ok);
+        (void)all_ok;
+
+        // Back-fill the bundle symbol's type (registered earlier with NULL).
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
+        if (sym)
+            sym->value.type_info = (TypeDescriptor *)resolved;
+    }
+    // Drop the entries we just resolved; they will not be revisited.
+    ctx->pending_bundle_count = start_index;
+}
+
 static void
 sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
 {
@@ -1120,47 +1241,18 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
     }
     else if (value_node != NULL && value_node->type == AST_NODE_PROC_OVERLOAD_BUNDLE)
     {
-        int candidate_count = (int)value_node->list.count;
-        if (candidate_count > 0)
+        bool all_ok = true;
+        resolved_type = sem_resolve_overload_bundle(ctx, value_node, false, &all_ok);
+        if (!all_ok)
         {
-            TypeDescriptor const ** candidate_types
-                = (TypeDescriptor const **)malloc((size_t)candidate_count * sizeof(TypeDescriptor const *));
-            symbol_t ** candidate_symbols = (symbol_t **)malloc((size_t)candidate_count * sizeof(symbol_t *));
-            int valid_count = 0;
-            for (int i = 0; i < candidate_count; i++)
-            {
-                odin_grammar_node_t * id_node = value_node->list.children[i];
-                if (id_node == NULL || id_node->type != AST_NODE_IDENTIFIER || id_node->text == NULL)
-                    continue;
-                symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), id_node->text);
-                if (sym && sym->value.type_info && sym->value.type_info->kind == TD_KIND_PROC)
-                {
-                    candidate_types[valid_count] = sym->value.type_info;
-                    candidate_symbols[valid_count] = sym;
-                    valid_count++;
-                }
-                else if (sym && sym->is_polymorphic)
-                {
-                    candidate_types[valid_count] = NULL;
-                    candidate_symbols[valid_count] = sym;
-                    valid_count++;
-                }
-                else
-                {
-                    char buf[256];
-                    snprintf(buf, sizeof(buf), "candidate '%s' in overload bundle is not a procedure", id_node->text);
-                    sem_error_list_add(&ctx->errors, NULL, id_node, buf);
-                }
-            }
-            if (valid_count > 0)
-            {
-                resolved_type = get_or_create_overload_bundle_type(
-                    ctx->type_registry, candidate_types, candidate_symbols, valid_count
-                );
-                value_node->resolved_type = (TypeDescriptor *)resolved_type;
-            }
-            free(candidate_types);
-            free(candidate_symbols);
+            // One or more candidates are not registered yet. Odin allows a
+            // proc group to be declared before the procs it contains, so the
+            // resolution is deferred until pass 1 completes (all top-level
+            // declarations registered). The bundle symbol is still registered
+            // below (with a NULL type for now) and its type is filled in by
+            // sem_resolve_pending_bundles.
+            sem_add_pending_bundle(ctx, node);
+            resolved_type = NULL;
         }
     }
     else if (value_node != NULL && is_type_node(value_node))
@@ -1495,6 +1587,11 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
 {
     if (program_ast == NULL)
         return;
+
+    // Snapshot the pending-bundle list so only bundles deferred while processing
+    // THIS file/package are resolved when this call returns (nested import calls
+    // resolve their own bundles, but not bundles deferred by the outer file).
+    int saved_pending_count = ctx->pending_bundle_count;
 
     // Phase 1: Track recursion depth so we can mark direct (depth==1) vs
     // transitive imports when they are registered into ctx->imports[].
@@ -2046,6 +2143,11 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
 
     // Phase 1: Restore recursion depth (matches the increment at function entry)
     ctx->import_reg_depth--;
+
+    // Resolve overload bundles that were deferred while processing this file.
+    // All top-level declarations (including candidates declared after their
+    // bundle) are now registered, so forward references resolve.
+    sem_resolve_pending_bundles(ctx, saved_pending_count);
 }
 
 static void

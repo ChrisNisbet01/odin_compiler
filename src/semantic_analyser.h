@@ -71,6 +71,15 @@ typedef struct SemContext
     // in `ctx->imports[]`. 0 = main file's direct imports; >0 = transitive.
     // Used to set ImportedPackage::is_direct_import during registration.
     int import_reg_depth;
+
+    // Overload bundles deferred during pass 1 because their candidate procs may
+    // be declared later in the same file (Odin allows a proc group to precede
+    // the procs it contains). Each entry is the ConstantDecl whose value is a
+    // PROC_OVERLOAD_BUNDLE. Resolved at the end of the current file's pass 1,
+    // once every top-level declaration has been registered.
+    odin_grammar_node_t ** pending_bundles;
+    int pending_bundle_count;
+    int pending_bundle_capacity;
 } SemContext;
 
 #include "sem_context.h"

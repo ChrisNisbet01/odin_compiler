@@ -108,6 +108,9 @@ sem_context_init(
     ctx->pending_specializations = NULL;
     ctx->pending_spec_count = 0;
     ctx->pending_spec_capacity = 0;
+    ctx->pending_bundles = NULL;
+    ctx->pending_bundle_count = 0;
+    ctx->pending_bundle_capacity = 0;
     ctx->import_reg_depth = 0;
     register_builtin_context_types(type_registry);
 }
@@ -146,6 +149,11 @@ sem_context_destroy(SemContext * ctx)
     ctx->pending_specializations = NULL;
     ctx->pending_spec_count = 0;
     ctx->pending_spec_capacity = 0;
+
+    free(ctx->pending_bundles);
+    ctx->pending_bundles = NULL;
+    ctx->pending_bundle_count = 0;
+    ctx->pending_bundle_capacity = 0;
 }
 
 char *
