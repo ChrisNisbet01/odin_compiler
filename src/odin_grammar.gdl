@@ -618,7 +618,9 @@ ImportDecl = ImportNamed | ImportUsing | ImportSimple;
 ImportRequire = At KwRequire ImportDecl @AST_ACTION_IMPORT_REQUIRE;
 
 IdentifierList = delimited_flex(Identifier, Comma) Comma? @AST_ACTION_IDENTIFIER_LIST;
-VariableDecl = IdentifierList (Colon TypePrefix (Assign ExpressionOrStructLit)? | ColonAssign ExpressionOrStructLit) @AST_ACTION_VARIABLE_DECL;
+// '= ---' is the zero-value initializer (e.g. "pivot: [N]int = ---"). It produces a
+// TRIPLE_DASH child; sem/IR treat it as no explicit init (locals are zero-initialized).
+VariableDecl = IdentifierList (Colon TypePrefix (Assign (ExpressionOrStructLit | TripleDash))? | ColonAssign ExpressionOrStructLit) @AST_ACTION_VARIABLE_DECL;
 
 // A proc literal prefixed by an inlining directive, e.g. X :: #force_inline proc(...) {...}.
 // The directive lexemes produce no AST nodes, so the flattening passes only the
