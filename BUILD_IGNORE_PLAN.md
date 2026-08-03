@@ -2,11 +2,12 @@
 
 ## Status: DONE — all 241 tests pass (236 baseline + 5 new)
 
-Implemented per this plan. The `#+build` prefix uses the proven
-`"#" lexeme("+build", ws)` pattern; `BuildTag`/`BuildDirective` produce
-dedicated AST nodes; `ast_file_has_build_ignore()` is shared by the main-file
-check (guarded by `import_reg_depth == 0`) and package resolution (single-file
-and directory imports); the import-codegen loop skips `pkg->build_ignored`.
+Implemented per this plan. The `#+build` prefix matches the official
+`FileTag = "#+" IDENT` shape (`lexeme("#+") lexeme("build" IdBoundary)`);
+`BuildTag`/`BuildDirective` produce dedicated AST nodes;
+`ast_file_has_build_ignore()` is shared by the main-file check (guarded by
+`import_reg_depth == 0`) and package resolution (single-file and directory
+imports); the import-codegen loop skips `pkg->build_ignored`.
 
 Goal: robust, official `#+build` build-directive support (tags comma-separated,
 `!`/`not` negation accepted), replacing the current proof-of-concept that folds
@@ -24,15 +25,27 @@ Goal: robust, official `#+build` build-directive support (tags comma-separated,
   `EPC_CONSUME_ALL_STYLES`), so plain `lexeme()` *should* no longer eat `#` —
   but we keep the proven pattern anyway; it works and avoids re-litigating.
 
+## RESOLVED (session experiment, 2026-08-04)
+
+The `, ws` flags were NOT actually needed. The old `EPC_CONSUME_ALL` (up to
+commit afa33b6) included `EPC_CONSUME_BASH_COMMENT`, so `lexeme("#+build")`
+ate the whole line as a `#` comment ("Found: +"). Current easy_pc (f480e62)
+removed the bash bit from `EPC_CONSUME_ALL`, so `lexeme("#+build" IdBoundary)`
+parses fine. Verified empirically: with the `ws` flags dropped and the prefix
+as `lexeme("#+") lexeme("build" IdBoundary)`, all 5 build-ignore behaviors and
+the full 241-test suite pass. The final grammar mirrors the official EBNF
+`FileTag = "#+" IDENT` — `#+` is a distinct pair, followed by the `build`
+IDENT (with `IdBoundary` so `#+buildx` is a parse error rather than tag `x`).
+
 ## Grammar (src/odin_grammar.gdl)
 
 Replace the build-directive alternative folded into `DirectiveWithArgs` (line
 192) with dedicated rules:
 
 ```gdl
-BuildTag = lexeme(UnaryOpNot? identifier, ws) @AST_ACTION_BUILD_TAG;
+BuildTag = lexeme(UnaryOpNot? identifier) @AST_ACTION_BUILD_TAG;
 BuildTags = delimited_flex(BuildTag, Comma) Comma?;
-BuildDirective = "#" lexeme("+build", ws) BuildTags @AST_ACTION_BUILD_DIRECTIVE;
+BuildDirective = lexeme("#+") lexeme("build" IdBoundary) BuildTags @AST_ACTION_BUILD_DIRECTIVE;
 ```
 
 - Revert `DirectiveWithArgs` to the bracket-only form:
@@ -42,8 +55,7 @@ BuildDirective = "#" lexeme("+build", ws) BuildTags @AST_ACTION_BUILD_DIRECTIVE;
   `PrimaryExpression` (line 419) where the current change leaked it.
 - `BuildTags` has no action so tag nodes flatten into `BuildDirective`
   (easy_pc AST builder flattens action-less rules).
-- No `IdBoundary` after `+build` (matches the proven working form; the
-  `#+buildx` edge case yields tag `x` — harmless).
+- `IdBoundary` after `build` rejects `#+buildx` at parse time (verified).
 
 ## AST (new nodes)
 

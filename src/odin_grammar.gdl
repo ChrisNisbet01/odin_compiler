@@ -191,9 +191,9 @@ DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForce
 Directive = lexeme("#" DirectiveName) @AST_ACTION_DIRECTIVE;
 DirectiveWithArgs = lexeme("#" DirectiveName) LBracket Expression RBracket @AST_ACTION_DIRECTIVE_WITH_ARGS;
 
-BuildTag = lexeme(UnaryOpNot? identifier, ws) @AST_ACTION_BUILD_TAG;
+BuildTag = lexeme(UnaryOpNot? identifier) @AST_ACTION_BUILD_TAG;
 BuildTags = delimited_flex(BuildTag, Comma) Comma?;
-BuildDirective = "#" lexeme("+build", ws) BuildTags @AST_ACTION_BUILD_DIRECTIVE;
+BuildDirective = lexeme("#+") lexeme("build" IdBoundary) BuildTags @AST_ACTION_BUILD_DIRECTIVE;
 
 // --- Literals ---
 
