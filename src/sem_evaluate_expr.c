@@ -1908,6 +1908,87 @@ sem_evaluate_assign_expr(SemContext * ctx, odin_grammar_node_t * node)
     
 }
 
+// Compute the return type of a matrix intrinsic (transpose, outer_product,
+// hadamard_product, matrix_flatten) from its evaluated argument expressions.
+// These procs are declared with `---` bodies (see stubs/base/runtime/runtime.odin
+// and stubs/base/intrinsics/intrinsics.odin) and are intercepted here (type
+// inference) and in ir_gen_postfix.c (codegen) by name. Returns NULL when the
+// intrinsic/args don't match.
+static TypeDescriptor const *
+sem_matrix_intrinsic_result_type(SemContext * ctx, char const * name,
+                                 odin_grammar_node_t ** args, int nargs)
+{
+    if (name == NULL)
+        return NULL;
+
+    if (strcmp(name, "transpose") == 0 && nargs == 1
+        && args[0] && args[0]->resolved_type)
+    {
+        TypeDescriptor const * arg_type = args[0]->resolved_type;
+        if (arg_type->kind == TD_KIND_MATRIX)
+        {
+            return get_or_create_matrix_type(ctx->type_registry,
+                arg_type->as.matrix.columns, arg_type->as.matrix.rows,
+                arg_type->as.matrix.element_type, true);
+        }
+    }
+    else if (strcmp(name, "outer_product") == 0 && nargs == 2
+             && args[0] && args[0]->resolved_type
+             && args[1] && args[1]->resolved_type)
+    {
+        TypeDescriptor const * a = args[0]->resolved_type;
+        TypeDescriptor const * b = args[1]->resolved_type;
+        if (a->kind == TD_KIND_ARRAY && b->kind == TD_KIND_ARRAY
+            && a->element_type && b->element_type
+            && a->element_type->llvm_type == b->element_type->llvm_type)
+        {
+            return get_or_create_matrix_type(ctx->type_registry,
+                (int64_t)a->as.array.count, (int64_t)b->as.array.count,
+                a->element_type, true);
+        }
+    }
+    else if (strcmp(name, "hadamard_product") == 0 && nargs == 2
+             && args[0] && args[0]->resolved_type
+             && args[1] && args[1]->resolved_type)
+    {
+        TypeDescriptor const * a = args[0]->resolved_type;
+        TypeDescriptor const * b = args[1]->resolved_type;
+        if (a->llvm_type && b->llvm_type && a->llvm_type == b->llvm_type
+            && (a->kind == TD_KIND_MATRIX || a->kind == TD_KIND_ARRAY))
+            return a;
+    }
+    else if (strcmp(name, "matrix_flatten") == 0 && nargs == 1
+             && args[0] && args[0]->resolved_type)
+    {
+        TypeDescriptor const * arg_type = args[0]->resolved_type;
+        if (arg_type->kind == TD_KIND_MATRIX && arg_type->as.matrix.element_type)
+        {
+            int64_t count = arg_type->as.matrix.rows * arg_type->as.matrix.columns;
+            return get_or_create_array_type(ctx->type_registry,
+                arg_type->as.matrix.element_type, (size_t)count);
+        }
+    }
+    return NULL;
+}
+
+// Evaluate a postfix expression's argument list and collect the individual
+// argument nodes (unwrapping the comma chain). Returns the arg count.
+static int
+sem_collect_call_args_nodes(odin_grammar_node_t * op, odin_grammar_node_t ** out, int max)
+{
+    odin_grammar_node_t * arg_expr = NULL;
+    if (op != NULL && op->list.count > 0 && op->list.children[0] != NULL)
+    {
+        arg_expr = op->list.children[0];
+        if (arg_expr->type == AST_NODE_ARGUMENT_LIST && arg_expr->list.count > 0)
+            arg_expr = arg_expr->list.children[0];
+    }
+    int count = 0;
+    if (arg_expr)
+        sem_collect_comma_chain_args(arg_expr, out, max, &count);
+    return count;
+}
+
 static TypeDescriptor const *
 sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
 {
@@ -2010,6 +2091,35 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                             pkg_callee_sym = last_member->resolved_symbol;
                                     }
                                 }
+                            }
+                        }
+
+                        // Matrix intrinsics (transpose, outer_product,
+                        // hadamard_product, matrix_flatten): compute the return
+                        // type from the argument types, mirroring the local path.
+                        // Handles package-qualified calls like `linalg.hadamard_product`.
+                        if (last_member_name
+                            && (strcmp(last_member_name, "transpose") == 0
+                                || strcmp(last_member_name, "outer_product") == 0
+                                || strcmp(last_member_name, "hadamard_product") == 0
+                                || strcmp(last_member_name, "matrix_flatten") == 0))
+                        {
+                            odin_grammar_node_t * mat_args[16];
+                            int mat_arg_count = sem_collect_call_args_nodes(op, mat_args, 16);
+                            for (int ai = 0; ai < mat_arg_count; ai++)
+                            {
+                                if (mat_args[ai])
+                                    sem_evaluate_expr(ctx, mat_args[ai]);
+                            }
+
+                            TypeDescriptor const * result_type
+                                = sem_matrix_intrinsic_result_type(ctx, last_member_name, mat_args, mat_arg_count);
+                            if (result_type)
+                            {
+                                op->resolved_symbol = pkg_callee_sym;
+                                op->resolved_type = (TypeDescriptor *)result_type;
+                                type = result_type;
+                                break;
                             }
                         }
 
@@ -2234,36 +2344,33 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     callee_sym = inner->resolved_symbol;
             }
 
-            // Handle transpose builtin specially - compute return type from argument
-            if (callee_sym && inner && inner->text && strcmp(inner->text, "transpose") == 0)
+            // Handle matrix intrinsics specially (transpose, outer_product,
+            // hadamard_product, matrix_flatten) - compute the return type from
+            // the argument types. These are declared with `---` bodies and are
+            // intercepted here + in ir_gen_postfix_call by name.
+            if (callee_sym && inner && inner->text
+                && (strcmp(inner->text, "transpose") == 0
+                    || strcmp(inner->text, "outer_product") == 0
+                    || strcmp(inner->text, "hadamard_product") == 0
+                    || strcmp(inner->text, "matrix_flatten") == 0))
             {
-                if (op->list.count > 0 && op->list.children[0] != NULL)
+                odin_grammar_node_t * mat_args[16];
+                int mat_arg_count = sem_collect_call_args_nodes(op, mat_args, 16);
+                for (int ai = 0; ai < mat_arg_count; ai++)
                 {
-                    odin_grammar_node_t * arg_list = op->list.children[0];
-                    if (arg_list->type == AST_NODE_ARGUMENT_LIST && arg_list->list.count > 0)
-                    {
-                        odin_grammar_node_t * arg = arg_list->list.children[0];
-                        if (arg)
-                        {
-                            sem_evaluate_expr(ctx, arg);
-                            TypeDescriptor const * arg_type = arg->resolved_type;
-                            if (arg_type && arg_type->kind == TD_KIND_MATRIX)
-                            {
-                                TypeDescriptor const * result_type = get_or_create_matrix_type(
-                                    ctx->type_registry,
-                                    arg_type->as.matrix.columns,
-                                    arg_type->as.matrix.rows,
-                                    arg_type->as.matrix.element_type,
-                                    true
-                                );
-                                op->resolved_symbol = callee_sym;
-                                op->resolved_type = (TypeDescriptor *)result_type;
-                                type = result_type;  // Update type for POSTFIX_EXPRESSION
-                                node->resolved_type = (TypeDescriptor *)type;  // Also set on the node
-                                break;
-                            }
-                        }
-                    }
+                    if (mat_args[ai])
+                        sem_evaluate_expr(ctx, mat_args[ai]);
+                }
+
+                TypeDescriptor const * result_type
+                    = sem_matrix_intrinsic_result_type(ctx, inner->text, mat_args, mat_arg_count);
+                if (result_type)
+                {
+                    op->resolved_symbol = callee_sym;
+                    op->resolved_type = (TypeDescriptor *)result_type;
+                    type = result_type;  // Update type for POSTFIX_EXPRESSION
+                    node->resolved_type = (TypeDescriptor *)type;  // Also set on the node
+                    break;
                 }
             }
 

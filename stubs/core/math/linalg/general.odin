@@ -121,3 +121,12 @@ determinant :: proc{
     matrix7x7_determinant,
     matrix8x8_determinant
 }
+
+// Matrix intrinsics — aliased to the base:intrinsics body-less declarations.
+// The compiler intercepts calls by name in semantic analysis (return-type
+// inference) and IR generation (inline element-wise codegen), so these aliases
+// produce no runtime reference to the body-less intrinsics procedures.
+outer_product    :: intrinsics.outer_product
+hadamard_product :: intrinsics.hadamard_product
+matrix_flatten   :: intrinsics.matrix_flatten
+transpose        :: intrinsics.transpose

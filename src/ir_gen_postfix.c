@@ -56,6 +56,192 @@ ir_gen_postfix_transpose(IrGenContext * ctx, LLVMValueRef m_param,
     return result_ptr;
 }
 
+// True if `full` is `bare` or ends with ".bare" (package-qualified name).
+static bool
+ir_gen_name_matches(char const * full, char const * bare)
+{
+    if (full == NULL || bare == NULL)
+        return false;
+    size_t flen = strlen(full);
+    size_t blen = strlen(bare);
+    if (flen < blen)
+        return false;
+    if (flen == blen)
+        return strcmp(full, bare) == 0;
+    return strcmp(full + (flen - blen), bare) == 0 && full[flen - blen - 1] == '.';
+}
+
+// True if `t` is an LLVM floating-point type.
+static bool
+ir_gen_llvm_is_floating(LLVMTypeRef t)
+{
+    LLVMTypeKind k = LLVMGetTypeKind(t);
+    return k == LLVMHalfTypeKind || k == LLVMFloatTypeKind || k == LLVMDoubleTypeKind;
+}
+
+// outer_product(a: [X]E, b: [Y]E) -> matrix[X, Y]E
+static LLVMValueRef
+ir_gen_postfix_outer_product(IrGenContext * ctx, LLVMValueRef a_val, LLVMValueRef b_val,
+                             TypeDescriptor const * a_type, TypeDescriptor const * b_type,
+                             TypeDescriptor const * result_type)
+{
+    if (a_val == NULL || b_val == NULL || a_type == NULL || a_type->kind != TD_KIND_ARRAY
+        || b_type == NULL || b_type->kind != TD_KIND_ARRAY || result_type == NULL
+        || result_type->kind != TD_KIND_MATRIX)
+        return NULL;
+    TypeDescriptor const * elem = a_type->element_type;
+    LLVMTypeRef elem_llvm = elem ? elem->llvm_type : NULL;
+    LLVMTypeRef result_llvm = result_type->llvm_type;
+    if (elem_llvm == NULL || result_llvm == NULL)
+        return NULL;
+
+    int64_t X = (int64_t)a_type->as.array.count;
+    int64_t Y = (int64_t)b_type->as.array.count;
+
+    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, result_llvm, "outer.res");
+    LLVMBuildStore(ctx->builder, LLVMConstNull(result_llvm), result_ptr);
+
+    // Load array values if they arrive as alloca pointers
+    if (LLVMGetTypeKind(LLVMTypeOf(a_val)) == LLVMPointerTypeKind && a_type->llvm_type != NULL)
+        a_val = LLVMBuildLoad2(ctx->builder, a_type->llvm_type, a_val, "outer.a");
+    if (LLVMGetTypeKind(LLVMTypeOf(b_val)) == LLVMPointerTypeKind && b_type->llvm_type != NULL)
+        b_val = LLVMBuildLoad2(ctx->builder, b_type->llvm_type, b_val, "outer.b");
+
+    for (int64_t i = 0; i < X; i++)
+    {
+        LLVMValueRef a_elem = LLVMBuildExtractValue(ctx->builder, a_val, (unsigned)i, "oa.a");
+        for (int64_t j = 0; j < Y; j++)
+        {
+            LLVMValueRef b_elem = LLVMBuildExtractValue(ctx->builder, b_val, (unsigned)j, "oa.b");
+            LLVMValueRef prod = ir_gen_llvm_is_floating(elem_llvm)
+                ? LLVMBuildFMul(ctx->builder, a_elem, b_elem, "oa.fmul")
+                : LLVMBuildMul(ctx->builder, a_elem, b_elem, "oa.mul");
+            LLVMValueRef idx[2] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)i, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)j, false)
+            };
+            LLVMValueRef slot = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, idx, 2, "oa.s");
+            LLVMBuildStore(ctx->builder, prod, slot);
+        }
+    }
+    return result_ptr;
+}
+
+// hadamard_product(a: T, b: T) -> T  (element-wise multiply; matrix or array)
+static LLVMValueRef
+ir_gen_postfix_hadamard_product(IrGenContext * ctx, LLVMValueRef a_val, LLVMValueRef b_val,
+                                TypeDescriptor const * t, TypeDescriptor const * result_type)
+{
+    if (a_val == NULL || b_val == NULL || t == NULL || result_type == NULL
+        || (t->kind != TD_KIND_MATRIX && t->kind != TD_KIND_ARRAY)
+        || t->llvm_type != result_type->llvm_type)
+        return NULL;
+    TypeDescriptor const * elem = (t->kind == TD_KIND_MATRIX) ? t->as.matrix.element_type : t->element_type;
+    LLVMTypeRef elem_llvm = elem ? elem->llvm_type : NULL;
+    LLVMTypeRef llvm = t->llvm_type;
+    if (elem_llvm == NULL || llvm == NULL)
+        return NULL;
+
+    int64_t rows = 0, cols = 1, count = 0;
+    if (t->kind == TD_KIND_MATRIX)
+    {
+        rows = t->as.matrix.rows;
+        cols = t->as.matrix.columns;
+        count = rows * cols;
+    }
+    else
+    {
+        count = (int64_t)t->as.array.count;
+        rows = count;
+    }
+
+    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, llvm, "had.res");
+    LLVMBuildStore(ctx->builder, LLVMConstNull(llvm), result_ptr);
+
+    // Load values if they arrive as alloca pointers (matrices usually do)
+    if (LLVMGetTypeKind(LLVMTypeOf(a_val)) == LLVMPointerTypeKind)
+        a_val = LLVMBuildLoad2(ctx->builder, llvm, a_val, "had.a");
+    if (LLVMGetTypeKind(LLVMTypeOf(b_val)) == LLVMPointerTypeKind)
+        b_val = LLVMBuildLoad2(ctx->builder, llvm, b_val, "had.b");
+
+    for (int64_t k = 0; k < count; k++)
+    {
+        LLVMValueRef a_elem, b_elem;
+        if (t->kind == TD_KIND_MATRIX)
+        {
+            LLVMValueRef a_row = LLVMBuildExtractValue(ctx->builder, a_val, (unsigned)(k / cols), "ha.ar");
+            LLVMValueRef b_row = LLVMBuildExtractValue(ctx->builder, b_val, (unsigned)(k / cols), "ha.br");
+            a_elem = LLVMBuildExtractValue(ctx->builder, a_row, (unsigned)(k % cols), "ha.a");
+            b_elem = LLVMBuildExtractValue(ctx->builder, b_row, (unsigned)(k % cols), "ha.b");
+        }
+        else
+        {
+            a_elem = LLVMBuildExtractValue(ctx->builder, a_val, (unsigned)k, "ha.a");
+            b_elem = LLVMBuildExtractValue(ctx->builder, b_val, (unsigned)k, "ha.b");
+        }
+        LLVMValueRef prod = ir_gen_llvm_is_floating(elem_llvm)
+            ? LLVMBuildFMul(ctx->builder, a_elem, b_elem, "ha.fmul")
+            : LLVMBuildMul(ctx->builder, a_elem, b_elem, "ha.mul");
+        LLVMValueRef slot;
+        if (t->kind == TD_KIND_MATRIX)
+        {
+            LLVMValueRef idx[2] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)(k / cols), false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)(k % cols), false)
+            };
+            slot = LLVMBuildInBoundsGEP2(ctx->builder, llvm, result_ptr, idx, 2, "ha.s");
+        }
+        else
+        {
+            LLVMValueRef idx[1] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)k, false)
+            };
+            slot = LLVMBuildInBoundsGEP2(ctx->builder, llvm, result_ptr, idx, 1, "ha.s");
+        }
+        LLVMBuildStore(ctx->builder, prod, slot);
+    }
+    return result_ptr;
+}
+
+// matrix_flatten(m: matrix[R, C]E) -> [R*C]E
+static LLVMValueRef
+ir_gen_postfix_matrix_flatten(IrGenContext * ctx, LLVMValueRef m_val,
+                              TypeDescriptor const * m_type, TypeDescriptor const * result_type)
+{
+    if (m_val == NULL || m_type == NULL || m_type->kind != TD_KIND_MATRIX
+        || result_type == NULL || result_type->kind != TD_KIND_ARRAY)
+        return NULL;
+    TypeDescriptor const * elem = m_type->as.matrix.element_type;
+    LLVMTypeRef elem_llvm = elem ? elem->llvm_type : NULL;
+    LLVMTypeRef result_llvm = result_type->llvm_type;
+    if (elem_llvm == NULL || result_llvm == NULL)
+        return NULL;
+
+    int64_t rows = m_type->as.matrix.rows;
+    int64_t cols = m_type->as.matrix.columns;
+
+    LLVMValueRef result_ptr = LLVMBuildAlloca(ctx->builder, result_llvm, "flt.res");
+    LLVMBuildStore(ctx->builder, LLVMConstNull(result_llvm), result_ptr);
+
+    if (LLVMGetTypeKind(LLVMTypeOf(m_val)) == LLVMPointerTypeKind && m_type->llvm_type != NULL)
+        m_val = LLVMBuildLoad2(ctx->builder, m_type->llvm_type, m_val, "flt.m");
+
+    for (int64_t i = 0; i < rows; i++)
+    {
+        for (int64_t j = 0; j < cols; j++)
+        {
+            LLVMValueRef row = LLVMBuildExtractValue(ctx->builder, m_val, (unsigned)i, "flt.r");
+            LLVMValueRef elem_v = LLVMBuildExtractValue(ctx->builder, row, (unsigned)j, "flt.e");
+            LLVMValueRef idx[1] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)(i * cols + j), false)
+            };
+            LLVMValueRef slot = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, idx, 1, "flt.s");
+            LLVMBuildStore(ctx->builder, elem_v, slot);
+        }
+    }
+    return result_ptr;
+}
+
 // --- Postfix expression / call codegen ---
 
 // Evaluate a single argument expression, possibly expanding struct/array fields
@@ -263,21 +449,57 @@ ir_gen_postfix_call(IrGenContext * ctx, odin_grammar_node_t * node, odin_grammar
         arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, arg_types, 128);
     }
 
-    // Special handling for transpose builtin - must happen before 'any' packing
+    // Special handling for matrix intrinsics - must happen before 'any' packing
     {
-        if (func_name != NULL && strcmp(func_name, "transpose") == 0 && arg_count > 0)
+        if (func_name != NULL && arg_count > 0)
         {
-            LLVMValueRef m_param = args[0];
-            TypeDescriptor const * m_type = arg_types[0];
-            TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
-            
-            if (m_param != NULL && m_type != NULL && result_type != NULL
-                && m_type->kind == TD_KIND_MATRIX && result_type->kind == TD_KIND_MATRIX)
+            if (ir_gen_name_matches(func_name, "transpose"))
             {
-                LLVMValueRef transposed = ir_gen_postfix_transpose(ctx, m_param, m_type, result_type);
-                if (transposed != NULL)
+                LLVMValueRef m_param = args[0];
+                TypeDescriptor const * m_type = arg_types[0];
+                TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
+                
+                if (m_param != NULL && m_type != NULL && result_type != NULL
+                    && m_type->kind == TD_KIND_MATRIX && result_type->kind == TD_KIND_MATRIX)
                 {
-                    *val = transposed;
+                    LLVMValueRef transposed = ir_gen_postfix_transpose(ctx, m_param, m_type, result_type);
+                    if (transposed != NULL)
+                    {
+                        *val = transposed;
+                        *cur_type = result_type;
+                        return false;
+                    }
+                }
+            }
+            else if (ir_gen_name_matches(func_name, "outer_product") && arg_count == 2)
+            {
+                TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
+                LLVMValueRef r = ir_gen_postfix_outer_product(ctx, args[0], args[1], arg_types[0], arg_types[1], result_type);
+                if (r != NULL)
+                {
+                    *val = r;
+                    *cur_type = result_type;
+                    return false;
+                }
+            }
+            else if (ir_gen_name_matches(func_name, "hadamard_product") && arg_count == 2)
+            {
+                TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
+                LLVMValueRef r = ir_gen_postfix_hadamard_product(ctx, args[0], args[1], arg_types[0], result_type);
+                if (r != NULL)
+                {
+                    *val = r;
+                    *cur_type = result_type;
+                    return false;
+                }
+            }
+            else if (ir_gen_name_matches(func_name, "matrix_flatten") && arg_count == 1)
+            {
+                TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
+                LLVMValueRef r = ir_gen_postfix_matrix_flatten(ctx, args[0], arg_types[0], result_type);
+                if (r != NULL)
+                {
+                    *val = r;
                     *cur_type = result_type;
                     return false;
                 }
