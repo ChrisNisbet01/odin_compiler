@@ -1,6 +1,6 @@
 package main
 
-#build[ignore]
+#+build ignore
 
 // This entire file should be ignored by the compiler
 

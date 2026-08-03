@@ -3915,7 +3915,7 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
     for (int i = 0; i < ctx->import_count; i++)
     {
         ImportedPackage * pkg = ctx->imports[i];
-        if (pkg == NULL || pkg->ast == NULL || pkg->codegen_done)
+        if (pkg == NULL || pkg->ast == NULL || pkg->codegen_done || pkg->build_ignored)
             continue;
 
         // Phase 1 import-usage tracking: skip unused direct imports.

@@ -482,6 +482,8 @@ DEFINE_TERMINAL_ACTION(ast_action_ellipsis_action, AST_NODE_ELLIPSIS)
 DEFINE_TERMINAL_ACTION(ast_action_triple_dash_action, AST_NODE_TRIPLE_DASH)
 DEFINE_TERMINAL_ACTION(ast_action_directive_action, AST_NODE_DIRECTIVE)
 DEFINE_TERMINAL_ACTION(ast_action_directive_with_args_action, AST_NODE_DIRECTIVE_WITH_ARGS)
+DEFINE_ACTION(ast_action_build_directive_action, AST_NODE_BUILD_DIRECTIVE, true)
+DEFINE_ACTION(ast_action_build_tag_action, AST_NODE_BUILD_TAG, true)
 DEFINE_ACTION(ast_action_directive_expr_action, AST_NODE_DIRECTIVE_EXPR, false)
 DEFINE_TERMINAL_ACTION(ast_action_spec_operator_action, AST_NODE_SPEC_OPERATOR)
 DEFINE_ACTION(ast_action_spec_type_action, AST_NODE_SPEC_TYPE, false)
@@ -606,6 +608,8 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_USING_DECL, ast_action_using_decl_action);
     REGISTER(AST_ACTION_DIRECTIVE, ast_action_directive_action);
     REGISTER(AST_ACTION_DIRECTIVE_WITH_ARGS, ast_action_directive_with_args_action);
+    REGISTER(AST_ACTION_BUILD_DIRECTIVE, ast_action_build_directive_action);
+    REGISTER(AST_ACTION_BUILD_TAG, ast_action_build_tag_action);
     REGISTER(AST_ACTION_DIRECTIVE_EXPR, ast_action_directive_expr_action);
     REGISTER(AST_ACTION_EXPAND_VALUES_EXPR, ast_action_expand_values_expr_action);
     REGISTER(AST_ACTION_COMPRESS_VALUES_EXPR, ast_action_compress_values_expr_action);

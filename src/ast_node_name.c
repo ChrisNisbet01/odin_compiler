@@ -243,6 +243,10 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "Directive";
     case AST_NODE_DIRECTIVE_WITH_ARGS:
         return "DirectiveWithArgs";
+    case AST_NODE_BUILD_DIRECTIVE:
+        return "BuildDirective";
+    case AST_NODE_BUILD_TAG:
+        return "BuildTag";
     case AST_NODE_DIRECTIVE_EXPR:
         return "DirectiveExpr";
     case AST_NODE_INTEGER_BASE:

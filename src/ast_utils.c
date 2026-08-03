@@ -1,5 +1,7 @@
 #include "ast_utils.h"
 
+#include <string.h>
+
 #include "odin_grammar_ast.h"
 
 static bool const is_type_node_table[AST_NODE_COUNT] = {
@@ -91,4 +93,35 @@ node_find_op(odin_grammar_node_t * node)
         }
     }
     return NULL;
+}
+
+bool
+ast_file_has_build_ignore(odin_grammar_node_t * program_ast)
+{
+    if (program_ast == NULL)
+        return false;
+
+    // PROGRAM holds one EXTERNAL_DECLARATIONS child per parsed file
+    // (single files have exactly one).
+    for (size_t i = 0; i < program_ast->list.count; i++)
+    {
+        odin_grammar_node_t * ext = program_ast->list.children[i];
+        if (ext == NULL || ext->type != AST_NODE_EXTERNAL_DECLARATIONS)
+            continue;
+
+        for (size_t j = 0; j < ext->list.count; j++)
+        {
+            odin_grammar_node_t * decl = ext->list.children[j];
+            if (decl == NULL || decl->type != AST_NODE_BUILD_DIRECTIVE)
+                continue;
+            for (size_t k = 0; k < decl->list.count; k++)
+            {
+                odin_grammar_node_t * tag = decl->list.children[k];
+                if (tag != NULL && tag->type == AST_NODE_BUILD_TAG && tag->text != NULL
+                    && strcmp(tag->text, "ignore") == 0)
+                    return true;
+            }
+        }
+    }
+    return false;
 }

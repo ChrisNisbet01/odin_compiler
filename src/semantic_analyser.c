@@ -1,6 +1,7 @@
 #include "semantic_analyser.h"
 
 #include "ast_utils.h"
+#include "odin_grammar_ast.h"
 #include "package_resolver.h"
 #include "polymorphism.h"
 #include "scope.h"
@@ -49,8 +50,7 @@ sem_find_intrinsic_from_value(odin_grammar_node_t * value_node)
                     continue;
                 if (op->type != AST_NODE_POSTFIX_MEMBER)
                     break; // the trailing op is a call/etc — not a bare intrinsic ref
-                if (op->resolved_symbol != NULL
-                    && poly_is_known_intrinsic_name(op->resolved_symbol->name))
+                if (op->resolved_symbol != NULL && poly_is_known_intrinsic_name(op->resolved_symbol->name))
                     return op->resolved_symbol;
                 return NULL;
             }
@@ -679,8 +679,7 @@ sem_resolve_procedure_signature(
                 odin_grammar_node_t * param_names[32];
                 odin_grammar_node_t * param_type_node = NULL;
                 bool is_poly_decl_param = false;
-                int name_count = sem_extract_param_names(
-                    param, param_names, 32, &param_type_node, &is_poly_decl_param);
+                int name_count = sem_extract_param_names(param, param_names, 32, &param_type_node, &is_poly_decl_param);
 
                 // Detect default value: last child that is not a name,
                 // not the type node, and not an ellipsis
@@ -765,7 +764,8 @@ sem_resolve_procedure_signature(
                     if (param_count >= (int)default_val_cap)
                     {
                         size_t new_cap = default_val_cap == 0 ? 4 : default_val_cap * 2;
-                        odin_grammar_node_t ** tmp2 = realloc(default_value_nodes, new_cap * sizeof(odin_grammar_node_t *));
+                        odin_grammar_node_t ** tmp2
+                            = realloc(default_value_nodes, new_cap * sizeof(odin_grammar_node_t *));
                         if (tmp2 == NULL)
                         {
                             free(param_types);
@@ -778,8 +778,7 @@ sem_resolve_procedure_signature(
                         default_value_nodes = tmp2;
                         default_val_cap = new_cap;
                     }
-                    default_value_nodes[param_count]
-                        = (ni == name_count - 1) ? default_value_node : NULL;
+                    default_value_nodes[param_count] = (ni == name_count - 1) ? default_value_node : NULL;
                     param_types[param_count++] = pt;
                 }
             }
@@ -835,7 +834,7 @@ sem_resolve_procedure_signature(
         is_variadic,
         cc,
         named_return_names_array,
-        has_any_defaults || have_named_return_names  // force_unique
+        has_any_defaults || have_named_return_names // force_unique
     );
 
     // Free the named_return_names array if we allocated it
@@ -973,8 +972,8 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                     odin_grammar_node_t * param_names[32];
                     odin_grammar_node_t * param_type_node = NULL;
                     bool is_poly_decl_param = false;
-                    int name_count = sem_extract_param_names(
-                        param, param_names, 32, &param_type_node, &is_poly_decl_param);
+                    int name_count
+                        = sem_extract_param_names(param, param_names, 32, &param_type_node, &is_poly_decl_param);
                     if (name_count == 0 || param_type_node == NULL)
                         continue;
 
@@ -986,8 +985,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
                     {
                         char const * param_name = param_names[ni]->text;
                         // For poly params ($T), register with the base name (strip $)
-                        if (param_names[ni]->type == AST_NODE_POLY_IDENT && param_name != NULL
-                            && param_name[0] == '$')
+                        if (param_names[ni]->type == AST_NODE_POLY_IDENT && param_name != NULL && param_name[0] == '$')
                             param_name = param_name + 1;
 
                         TypedValue tv = create_typed_value(NULL, param_type, true);
@@ -1003,8 +1001,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
     if (node->resolved_type != NULL && node->resolved_type->kind == TD_KIND_PROC)
     {
         TypeDescriptor const * proc_type = node->resolved_type;
-        if (proc_type->proc_metadata.named_return_names != NULL
-            && proc_type->proc_metadata.return_count > 0)
+        if (proc_type->proc_metadata.named_return_names != NULL && proc_type->proc_metadata.return_count > 0)
         {
             for (int ri = 0; ri < proc_type->proc_metadata.return_count; ri++)
             {
@@ -1132,7 +1129,8 @@ sem_resolve_overload_bundle(SemContext * ctx, odin_grammar_node_t * value_node, 
     TypeDescriptor const * resolved = NULL;
     if (valid_count > 0)
     {
-        resolved = get_or_create_overload_bundle_type(ctx->type_registry, candidate_types, candidate_symbols, valid_count);
+        resolved
+            = get_or_create_overload_bundle_type(ctx->type_registry, candidate_types, candidate_symbols, valid_count);
         value_node->resolved_type = (TypeDescriptor *)resolved;
     }
     free(candidate_types);
@@ -1149,8 +1147,7 @@ sem_add_pending_bundle(SemContext * ctx, odin_grammar_node_t * node)
     if (ctx->pending_bundle_count >= ctx->pending_bundle_capacity)
     {
         int new_cap = ctx->pending_bundle_capacity == 0 ? 8 : ctx->pending_bundle_capacity * 2;
-        odin_grammar_node_t ** new_arr
-            = realloc(ctx->pending_bundles, (size_t)new_cap * sizeof(odin_grammar_node_t *));
+        odin_grammar_node_t ** new_arr = realloc(ctx->pending_bundles, (size_t)new_cap * sizeof(odin_grammar_node_t *));
         if (new_arr == NULL)
         {
             perror("realloc");
@@ -1474,8 +1471,7 @@ import_pop_path(SemContext * ctx)
 }
 
 static void
-sem_apply_attr_item(ProcDeclAttributes * attrs, odin_grammar_node_t * name_node,
-                    odin_grammar_node_t * value_node)
+sem_apply_attr_item(ProcDeclAttributes * attrs, odin_grammar_node_t * name_node, odin_grammar_node_t * value_node)
 {
     if (attrs == NULL || name_node == NULL || name_node->text == NULL)
         return;
@@ -1586,28 +1582,20 @@ static void
 sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast)
 {
     if (program_ast == NULL)
-        return;
-
-    // AST structure: PROGRAM -> EXTERNAL_DECLARATIONS -> [PACKAGE_CLAUSE, imports, declarations...]
-    if (program_ast->list.count > 0)
     {
-        odin_grammar_node_t * first_child = program_ast->list.children[0];
-        
-        // first_child should be EXTERNAL_DECLARATIONS
-        if (first_child != NULL && first_child->type == AST_NODE_EXTERNAL_DECLARATIONS && first_child->list.count > 0)
-        {
-            // Check the first few children of EXTERNAL_DECLARATIONS for #build[ignore]
-            for (size_t i = 0; i < first_child->list.count && i < 3; i++)
-            {
-                odin_grammar_node_t * child = first_child->list.children[i];
-                if (child != NULL && child->type == AST_NODE_DIRECTIVE_WITH_ARGS
-                    && child->text != NULL && strcmp(child->text, "#build[ignore]") == 0)
-                {
-                    ctx->build_ignored = true;
-                    return;
-                }
-            }
-        }
+        return;
+    }
+
+    // Only the top-level (main) file may set build_ignored. A build-ignored
+    // *import* must not disable compilation of the main file, and nested
+    // import pass1 calls run with import_reg_depth >= 1.
+    if (ctx->import_reg_depth == 0)
+    {
+        ctx->build_ignored = ast_file_has_build_ignore(program_ast);
+    }
+    if (ctx->build_ignored)
+    {
+        return;
     }
 
     // Snapshot the pending-bundle list so only bundles deferred while processing
@@ -1948,7 +1936,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         ctx->source_file_path = pkg->source_path;
 
                         pkg->analysed = true;
-                        
+
                         // Skip semantic analysis for build-ignored packages
                         if (!pkg->build_ignored)
                         {
@@ -2717,10 +2705,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             if (val == -1)
             {
                 sem_error_list_add(
-                    &ctx->errors,
-                    ctx->source_file_path,
-                    cond,
-                    "when condition must evaluate to a compile-time constant"
+                    &ctx->errors, ctx->source_file_path, cond, "when condition must evaluate to a compile-time constant"
                 );
                 break;
             }
@@ -2819,8 +2804,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                     continue;
                 sem_evaluate_expr(ctx, child);
                 if (child->resolved_type
-                    && (child->resolved_type->kind == TD_KIND_RANGE
-                        || child->resolved_type->kind == TD_KIND_VECTOR
+                    && (child->resolved_type->kind == TD_KIND_RANGE || child->resolved_type->kind == TD_KIND_VECTOR
                         || child->resolved_type->kind == TD_KIND_ARRAY))
                 {
                     is_for_range = true;
@@ -3242,18 +3226,17 @@ sem_track_using_import_usage_visitor(odin_grammar_node_t * node, SemContext * ct
             // Check if the llvm_name starts with the package's name
             size_t pkg_name_len = strlen(pkg->package_name);
             size_t llvm_name_len = strlen(pkg_sym->llvm_name);
-            name_matches = (llvm_name_len > pkg_name_len + 1  // +1 for '.'
-                           && strncmp(pkg_sym->llvm_name, pkg->package_name, pkg_name_len) == 0
-                           && pkg_sym->llvm_name[pkg_name_len] == '.');
+            name_matches
+                = (llvm_name_len > pkg_name_len + 1 // +1 for '.'
+                   && strncmp(pkg_sym->llvm_name, pkg->package_name, pkg_name_len) == 0
+                   && pkg_sym->llvm_name[pkg_name_len] == '.');
         }
 
         // Match by name + type_info pointer. The TypedValue copy preserves
         // the type_info pointer from the source scope, so a reference to a
         // copied using-import symbol will have the same type_info as the
         // source package scope's symbol.
-        if (pkg_sym->value.type_info != NULL
-            && pkg_sym->value.type_info == resolved->value.type_info
-            && name_matches)
+        if (pkg_sym->value.type_info != NULL && pkg_sym->value.type_info == resolved->value.type_info && name_matches)
         {
             pkg->is_used = true;
             return; // no need to check other using imports for this node
@@ -3262,9 +3245,8 @@ sem_track_using_import_usage_visitor(odin_grammar_node_t * node, SemContext * ct
         // Fall back: when type_info is NULL (e.g. untyped constants), match
         // by name alone. This may over-mark (false positives) but never
         // under-mark for using imports.
-        if (pkg_sym->value.type_info == NULL && resolved->value.type_info == NULL
-            && pkg_sym->name != NULL && strcmp(pkg_sym->name, node->text) == 0
-            && name_matches)
+        if (pkg_sym->value.type_info == NULL && resolved->value.type_info == NULL && pkg_sym->name != NULL
+            && strcmp(pkg_sym->name, node->text) == 0 && name_matches)
         {
             pkg->is_used = true;
             return;
@@ -3313,7 +3295,7 @@ sem_analyse(SemContext * ctx)
     // Phase 1: Mark transitive imports as used. These are imports that are
     // NOT direct imports of the main file (e.g., imports of imports).
     // They are needed by their parent package, so we must codegen them.
-    // 
+    //
     // NOTE: This is conservative - transitive imports of unused packages
     // will still be codegen'd, but LLVM's DCE will remove them.
     // A more precise implementation would track parent-child relationships.

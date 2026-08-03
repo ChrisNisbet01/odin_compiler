@@ -1,5 +1,6 @@
 #include "package_resolver.h"
 
+#include "ast_utils.h"
 #include "odin_grammar.h"
 #include "odin_grammar_ast_actions.h"
 #include "scope.h"
@@ -577,28 +578,9 @@ parse_imported_file(char const * file_path, epc_parser_t * parser, epc_ast_hook_
     pkg->package_name = pf->package_name;   pf->package_name = NULL;
     pkg->analysed = false;
 
-    // Check for #build[ignore] directive at start of file
-    // If present, mark package as build-ignored (skip semantic analysis)
-    if (pkg->ast && pkg->ast->list.count > 0)
-    {
-        odin_grammar_node_t * prog = pkg->ast;
-        odin_grammar_node_t * ext_child = prog->list.children[0];
-        
-        if (ext_child && ext_child->type == AST_NODE_EXTERNAL_DECLARATIONS && ext_child->list.count > 0)
-        {
-            // Check first child after package clause
-            for (size_t i = 0; i < ext_child->list.count && i < 3; i++)
-            {
-                odin_grammar_node_t * child = ext_child->list.children[i];
-                if (child && child->type == AST_NODE_DIRECTIVE_WITH_ARGS
-                    && child->text && strcmp(child->text, "#build[ignore]") == 0)
-                {
-                    pkg->build_ignored = true;
-                    break;
-                }
-            }
-        }
-    }
+    // Check for a `#+build ignore` directive at start of file.
+    // If present, mark package as build-ignored (skip semantic analysis).
+    pkg->build_ignored = ast_file_has_build_ignore(pkg->ast);
 
     parsed_file_free(pf);
 
@@ -707,6 +689,9 @@ parse_imported_directory(char const * dir_path, epc_parser_t * parser, epc_ast_h
     pkg->package_name = package_name;
     pkg->analysed = false;
     // is_used defaults to false (calloc). See parse_imported_file for Phase 1 logic.
+
+    // If any file in the directory carries `#+build ignore`, skip the whole package.
+    pkg->build_ignored = ast_file_has_build_ignore(merged_ast);
 
     // Clean up
     for (int i = 0; i < file_count; i++)
