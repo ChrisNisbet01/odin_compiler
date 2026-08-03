@@ -80,6 +80,9 @@ typedef struct SemContext
     odin_grammar_node_t ** pending_bundles;
     int pending_bundle_count;
     int pending_bundle_capacity;
+
+    // Build ignore flag - set to true when #build[ignore] directive is detected
+    bool build_ignored;
 } SemContext;
 
 #include "sem_context.h"

@@ -580,6 +580,7 @@ main(int argc, char * argv[])
         ir_ctx->pending_specializations = sem_ctx.pending_specializations;
         ir_ctx->pending_spec_count = sem_ctx.pending_spec_count;
         ir_ctx->file_path = NULL;
+        ir_ctx->build_ignored = sem_ctx.build_ignored;
 
         bool ir_ok = ir_generate(ir_ctx, ast_root);
 

@@ -1588,6 +1588,28 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
     if (program_ast == NULL)
         return;
 
+    // AST structure: PROGRAM -> EXTERNAL_DECLARATIONS -> [PACKAGE_CLAUSE, imports, declarations...]
+    if (program_ast->list.count > 0)
+    {
+        odin_grammar_node_t * first_child = program_ast->list.children[0];
+        
+        // first_child should be EXTERNAL_DECLARATIONS
+        if (first_child != NULL && first_child->type == AST_NODE_EXTERNAL_DECLARATIONS && first_child->list.count > 0)
+        {
+            // Check the first few children of EXTERNAL_DECLARATIONS for #build[ignore]
+            for (size_t i = 0; i < first_child->list.count && i < 3; i++)
+            {
+                odin_grammar_node_t * child = first_child->list.children[i];
+                if (child != NULL && child->type == AST_NODE_DIRECTIVE_WITH_ARGS
+                    && child->text != NULL && strcmp(child->text, "#build[ignore]") == 0)
+                {
+                    ctx->build_ignored = true;
+                    return;
+                }
+            }
+        }
+    }
+
     // Snapshot the pending-bundle list so only bundles deferred while processing
     // THIS file/package are resolved when this call returns (nested import calls
     // resolve their own bundles, but not bundles deferred by the outer file).
@@ -1926,9 +1948,14 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                         ctx->source_file_path = pkg->source_path;
 
                         pkg->analysed = true;
-                        sem_pass1_register_top_level_ex(ctx, pkg->ast);
+                        
+                        // Skip semantic analysis for build-ignored packages
+                        if (!pkg->build_ignored)
+                        {
+                            sem_pass1_register_top_level_ex(ctx, pkg->ast);
 
-                        sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
+                            sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
+                        }
 
                         if (pkg->package_name == NULL && ctx->package_name != NULL)
                             pkg->package_name = strdup(ctx->package_name);
@@ -3269,6 +3296,10 @@ sem_analyse(SemContext * ctx)
     sem_pass1_register_top_level(ctx);
     if (sem_error_list_has_errors(&ctx->errors))
         return false;
+
+    // Skip semantic analysis if build-ignored
+    if (ctx->build_ignored)
+        return true;
 
     sem_pass2_analyse_bodies_ast(ctx, ctx->ast);
     if (sem_error_list_has_errors(&ctx->errors))

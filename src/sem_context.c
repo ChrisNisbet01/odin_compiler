@@ -112,6 +112,7 @@ sem_context_init(
     ctx->pending_bundle_count = 0;
     ctx->pending_bundle_capacity = 0;
     ctx->import_reg_depth = 0;
+    ctx->build_ignored = false;
     register_builtin_context_types(type_registry);
 }
 

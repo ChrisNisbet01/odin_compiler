@@ -1,96 +1,214 @@
-# Implementation Plan: io.odin Writer/Stream Support
+# Implementation Plan: Official `core:math/linalg/general.odin` Support
 
-## Current State
+## Overview
+Support the official Odin `core:math/linalg/general.odin` module by implementing:
+1. `#build[ignore]` directive
+2. Native matrix IR type support
+3. Advanced type constraints (`$T/matrix[...]`)
+4. Complete intrinsic implementations
 
-All 208+ tests pass. No uncommitted source changes (only this plan file is untracked).
+---
 
-## Blockers for io.odin
+## Phase 1: Implement `#build[ignore]` Directive ✅ COMPLETE
 
-io.odin (`stubs/core/io/io.odin`) fails to parse with `End of input not found` because it
-uses two enum-value syntaxes the compiler does not yet support:
+### Objective
+Recognize and skip compilation of files marked with `#build[ignore]`.
 
-### Issue 1: Dot-prefixed unqualified enum values (grammar)
+### Implementation
+- Added `build_ignored` field to `SemContext` and `IrGenContext`
+- Added check in `sem_pass1_register_top_level_ex` to detect `#build[ignore]` directive
+- Modified `sem_analyse` to skip pass 2 for build-ignored files
+- Modified `ir_generate` to skip AST processing and emit minimal main for build-ignored files
+- Added check in `parse_imported_file` and semantic analysis to skip imported build-ignored packages
 
-**Used in io.odin:**
-```odin
-w.procedure(w.data, .Write, p, 0, .Start)   // .Write and .Start are arguments
-w.procedure(w.data, .Flush, nil[:], 0, .Start)
-return Unsupported                           // bare unqualified name (already works)
+### Files Modified
+- `src/semantic_analyser.c` - Build ignore detection and early returns
+- `src/semantic_analyser.h` - Added `build_ignored` field
+- `src/sem_context.c` - Initialize `build_ignored = false`
+- `src/package_resolver.c` - Detect build ignore in imported packages
+- `src/llvm_ir_generator.c` - Skip codegen for build-ignored files
+- `src/llvm_ir_generator.h` - Added `build_ignored` field
+
+### Testing
+- `tests/test_build_ignore.odin` - Verifies compilation succeeds without errors from ignored code
+
+---
+
+## Phase 2: Native Matrix IR Type Support
+
+### Objective
+Implement proper matrix types in the IR generator instead of treating them as nested arrays.
+
+### Files to Modify
+- `src/type_descriptors.c` - Add matrix type creation/registration
+- `src/type_descriptors.h` - Add `TD_KIND_MATRIX` if not present
+- `src/semantic_analyser.c` - Register matrix types
+- `src/llvm_ir_generator.c` - Generate matrix IR values
+
+### Implementation Details
+
+#### Step 2.1: Type Descriptor Support
+Add matrix type to `TypeDescriptor` union:
+```c
+type_descriptor_kind_e {
+    // ... existing kinds
+    TD_KIND_MATRIX,
+};
+
+union {
+    // ... existing unions
+    struct {
+        int64_t rows;
+        int64_t columns;
+        TypeDescriptor const * element_type;
+        LLVMTypeRef llvm_type;
+    } matrix;
+};
 ```
 
-**Root cause:** `PrimaryExpression` in `src/odin_grammar.gdl:397` has no `.FieldName`
-alternative. The `Dot` token is only consumed by `PostfixOpMember`, which requires a
-preceding expression to attach to. A bare `.Write` with nothing before it is unparseable.
+#### Step 2.2: Matrix Type Creation
+Implement `get_or_create_matrix_type` similar to other types:
+- Key: rows x columns x element_type
+- Value: LLVM struct type
 
-**Failed attempt:** Adding `| Dot FieldName` to `PrimaryExpression` caused parsing
-conflicts — the `Dot` was consumed greedily by PrimaryExpression, starving
-`PostfixOpMember` of its `.member` tokens and breaking `os.exit()` (which chains
-`.exit` as a member of `os`).
+#### Step 2.3: IR Generation
+- Allocation: `LLVMBuildAlloca(matrix_llvm_type, "matrix")`
+- Element access: `LLVMBuildExtractValue` (or equivalent)
+- Element store: `LLVMBuildInsertValue`
 
-**Possible fixes:**
-- (A) Add `Dot FieldName` to PrimaryExpression AND restructure PostfixExpression so
-  that `PostfixOpMember` is not starved. This requires understanding exactly why the
-  greedy match broke downstream parsing — likely needs the PEG parser to backtrack.
-- (B) Rewrite io.odin to avoid `.EnumValue` syntax entirely (use qualified form
-  `Error.Unsupported`, `Stream_Mode.Write`, etc.). Simpler but loses idiomatic Odin.
-- (C) Handle `.EnumValue` in the lexer as a special token type (e.g. `DotEnumValue`)
-  that only fires when followed by a known enum member name. Fragile and circular.
+### Testing
+- Test matrix variable declaration
+- Test matrix subscript access
+- Test matrix return types
 
-### Issue 2: Qualified enum member access (semantic + IR gen)
+### Estimated Effort: 8-12 hours
 
-**Grammar:** `Error.None` already parses correctly as
-`PrimaryExpression("Error") → PostfixOpMember(".None")`.
+---
 
-**Semantic analyzer:** `sem_evaluate_postfix_expr` in `src/sem_evaluate_expr.c`
-handles `POSTFIX_MEMBER` for struct, union, bit_field, maybe, vector, string, slice,
-dynamic_array, array, pointer — but has **no `TD_KIND_ENUM` case**. When the base
-expression resolves to an enum type, the `.None` member falls through to a "type has
-no member" error.
+## Phase 3: Advanced Type Constraints
 
-**IR generator:** `ir_gen_postfix_member` in `src/ir_gen_postfix.c` similarly has no
-`TD_KIND_ENUM` case — the fallthrough at line 810 rejects enum types.
+### Objective
+Support type constraints like `$T/matrix[$M, $N]$E` in procedure signatures.
 
-**Fix needed:** Add `TD_KIND_ENUM` handling in both semantic analyzer and IR gen:
-- Semantic: look up member name in `type_descriptor->as.enum_type.enumerator_names[]`,
-  set `resolved_type` to the enum type.
-- IR gen: return the integer constant value for the matched enumerator
-  (`LLVMConstInt(enum_llvm_type, enumerator_value)`).
+### Files to Modify
+- `src/sem_type_resolver.c` - Type application resolution
+- `src/polymorphism.c` - Poly environment building
+- `src/odin_grammar.gdl` - Grammar rules (if needed)
 
-### Issue 3: Bare unqualified enum values in scope (already works)
+### Implementation Details
 
-`B` in `val := cast(int) B` works because `B` is registered as a symbol with
-`has_const_int_val = true` during enum type registration. No changes needed.
+#### Step 3.1: Type Application Enhancement
+Extend `sem_resolve_type_application` to:
+1. Parse matrix type arguments (`$M`, `$N`)
+2. Bind integer parameters in poly environment
+3. Match matrix field types against value types
 
-## Other files affected by Issue 1
+#### Step 3.2: Constraint Validation
+When resolving `$T/matrix[$M, $N]$E`:
+1. Expect argument is a matrix type
+2. Extract dimensions and element type
+3. Bind `$T` = matrix type
+4. Bind `$M` = rows (int)
+5. Bind `$N` = columns (int)
+6. Bind `$E` = element type
 
-- `stubs/core/runtime/internal.odin`: `.Free_All` argument to allocator proc
-- `stubs/core/runtime/default_temporary_allocator.odin`: `.Freestanding` in comparison
+### Testing
+- Test proc with matrix param
+- Test deteminant style usage: `det := matrix_determinant(m)`
+- Verify dimension information is correctly bound
 
-## Remaining Work (ordered by dependency)
+### Estimated Effort: 6-10 hours
 
-### Step 1: Fix qualified enum member access (Issue 2)
-**Files:** `src/sem_evaluate_expr.c`, `src/ir_gen_postfix.c`
-- Add `TD_KIND_ENUM` case in the `POSTFIX_MEMBER` chain of `sem_evaluate_postfix_expr`
-- Add `TD_KIND_ENUM` case in `ir_gen_postfix_member`
-- Test: `Error.None` in a return statement, passing it to a function
+---
 
-### Step 2: Fix dot-prefixed unqualified enum values (Issue 1)
-**Files:** `src/odin_grammar.gdl`, possibly `src/ir_gen_postfix.c`
-- Decide between approach (A) grammar fix vs (B) rewrite io.odin
-- If grammar fix: add `Dot FieldName` to PrimaryExpression, fix the conflict
-- If rewrite: change io.odin to use `Error.Unsupported`, `Stream_Mode.Write`, etc.
+## Phase 4: Complete Intrinsic Implementations
 
-### Step 3: Implement sys_write syscall for stdout/stderr
-**Files:** `src/ir_intrinsic.c` (or `src/ir_gen_runtime_intrinsics.c`)
-- Wire `ir_gen_intrinsic_sys_write()` to the stream procedures
-- Create `Stream` instances for stdout (fd=1) and stderr (fd=2)
+### Objective
+Implement the matrix intrinsics required by official `general.odin`.
 
-### Step 4: Wire fmt.odin to use io.Writer
-**Files:** `stubs/core/fmt/fmt.odin`
-- Change `println` to accept `io.Writer` parameter
-- Or create `print_to` / `println_to` variants
+### Files to Modify
+- `src/llvm_ir_generator.c` - Add intrinsic case handling
+- `src/ir_gen_postfix.c` - Existing transpose support
 
-## Test Status
-- `test_enum.odin`: PASS
-- `test_fmt.odin`: PASS
-- io.odin: **FAILS** (parse error — needs Issue 1 or Issue 2 fix)
+### Required Intrinsics
+
+#### 4.1: `transpose`
+Signature: `proc(m: $T/matrix[$R, $C]$E) -> matrix[C, R]E`
+Implementation: Element swap (i,j) -> (j,i)
+
+#### 4.2: `outer_product`
+Signature: `proc(a: $A/[$X]$E, b: $B/[$Y]E) -> matrix[X, Y]E`
+Implementation: C = a[i] * b[j]
+
+#### 4.3: `hadamard_product`
+Signature: `proc(a, b: $T/matrix[$R, $C]$E) -> T`
+Implementation: Element-wise multiply
+
+#### 4.4: `matrix_flatten`
+Signature: `proc(m: $T/matrix[$R, $C]$E) -> [R*C]E`
+Implementation: Linear scan copy
+
+### Implementation Pattern
+```c
+// In ir_gen_runtime_intrinsic_body or similar
+if (strcmp(func_name, "transpose") == 0) {
+    // Generate transpose IR
+    return result_value;
+}
+// ... other intrinsics
+```
+
+### Testing
+- Test `t := transpose(m)`
+- Test scalar_dot, vector_dot style operations
+- Verify no link errors
+
+### Estimated Effort: 4-6 hours
+
+---
+
+## Implementation Order
+
+1. **Phase 1** - `#build[ignore]` ✅ COMPLETE
+2. **Phase 2** - Matrix IR Types (NOT STARTED)
+3. **Phase 3** - Advanced Type Constraints (NOT STARTED)
+4. **Phase 4** - Intrinsics (NOT STARTED)
+
+---
+
+## Milestone Checklist
+
+- [x] `#build[ignore]` works - test files compile successfully
+- [ ] Matrix types recognized in semantic analysis
+- [ ] Matrix codegen generates valid IR
+- [ ] Matrix subscripts work in user code
+- [ ] `$T/matrix[$M, $N]$E` constraints work
+- [ ] `transpose` intrinsic generates correct IR
+- [ ] `determinant` works end-to-end with official `general.odin`
+
+---
+
+## Testing Strategy
+
+### Unit Tests
+Each phase should have specific tests:
+- Phase 1: Test build ignore explicitly
+- Phase 2: Test matrix allocation and access
+- Phase 3: Test poly dispatch with matrix constraints
+- Phase 4: Test each intrinsic individually
+
+### Integration Tests
+- `test_matrix_basic.odin` with official `general.odin`
+- Full linalg test suite
+
+### Verification
+```bash
+# Build
+cmake --build build
+
+# Run tests
+bash tests/run_tests.sh
+
+# Specific matrix test
+./build/src/odinc run tests/test_matrix_basic.odin
+```

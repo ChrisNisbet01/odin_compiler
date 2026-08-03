@@ -3974,7 +3974,11 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
     LLVMSetInitializer(ctx->odin_argv_global, LLVMConstNull(argv_llvm_type));
 
     // Generate code for the main AST
-    ir_gen_process_ast(ctx, ast);
+    // Skip if build-ignored - the entry point wrapper will create a valid empty main
+    if (!ctx->build_ignored)
+    {
+        ir_gen_process_ast(ctx, ast);
+    }
 
     // Drain pending polymorphic specializations — generate function bodies
     // for each specialization that was created during the semantic pass.
@@ -3994,8 +3998,34 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
     }
 
     // Phase 5: Generate entry point wrapper for Odin main with hidden context param
-    LLVMValueRef odin_main = LLVMGetNamedFunction(ctx->module, "main");
-    if (odin_main != NULL && LLVMCountParams(odin_main) > 0)
+    LLVMValueRef odin_main = NULL;
+    bool need_entry_wrapper = false;
+    
+    if (ctx->build_ignored)
+    {
+        // Create a dummy main function for build-ignored files
+        LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->context);
+        LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+        LLVMTypeRef argv_llvm_type = LLVMPointerType(i8ptr, 0);
+        LLVMTypeRef main_param_types[] = {i32t, argv_llvm_type};
+        LLVMTypeRef main_type = LLVMFunctionType(i32t, main_param_types, 2, false);
+        odin_main = LLVMAddFunction(ctx->module, "main", main_type);
+        
+        // Simple implementation: return 0
+        LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, odin_main, "entry");
+        LLVMPositionBuilderAtEnd(ctx->builder, entry);
+        LLVMBuildRet(ctx->builder, LLVMConstInt(i32t, 0, false));
+        
+        need_entry_wrapper = false;  // No wrapper needed, we're done
+    }
+    else
+    {
+        odin_main = LLVMGetNamedFunction(ctx->module, "main");
+        if (odin_main != NULL && LLVMCountParams(odin_main) > 0)
+            need_entry_wrapper = true;
+    }
+    
+    if (need_entry_wrapper)
     {
         LLVMSetValueName(odin_main, "__odin_main");
         LLVMSetLinkage(odin_main, LLVMPrivateLinkage);

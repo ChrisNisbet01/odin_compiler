@@ -88,6 +88,9 @@ typedef struct
 
     bool bounds_checking_enabled;
 
+    // Build ignore flag - if true, skip IR generation and emit empty main
+    bool build_ignored;
+
     // Pending polymorphic specializations (from semantic analyser)
     PolySpecialization ** pending_specializations;
     int pending_spec_count;
