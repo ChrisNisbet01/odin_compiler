@@ -91,6 +91,7 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
         case AST_NODE_LOG_AND_EXPRESSION:
         case AST_NODE_LOG_OR_EXPRESSION:
         case AST_NODE_IDENTIFIER:
+        case AST_NODE_POLY_IDENT:
             can_eval = 1;
             break;
         case AST_NODE_POSTFIX_EXPRESSION:
@@ -127,12 +128,37 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
         return 0;
 
     case AST_NODE_IDENTIFIER:
+    case AST_NODE_POLY_IDENT:
     {
-        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
-        if (sym != NULL && sym->has_const_int_val)
+        char const * name = node->text;
+        if (name == NULL)
+        {
+            *ok = 0;
+            return 0;
+        }
+        
+        // For poly_idents, look up in poly environment
+        if (node->type == AST_NODE_POLY_IDENT && name[0] == '$')
+        {
+            name++; // Skip the $ prefix
+        }
+        else if (node->type == AST_NODE_IDENTIFIER)
+        {
+            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name);
+            if (sym != NULL && sym->has_const_int_val)
+            {
+                *ok = 1;
+                return sym->const_int_val;
+            }
+            *ok = 0;
+            return 0;
+        }
+        
+        long long val = 0;
+        if (poly_env_lookup_int(ctx, name, &val))
         {
             *ok = 1;
-            return sym->const_int_val;
+            return val;
         }
         *ok = 0;
         return 0;
