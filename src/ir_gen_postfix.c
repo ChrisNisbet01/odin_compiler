@@ -3,6 +3,7 @@
 #include "ast_metadata.h"
 #include "ast_utils.h"
 #include "hash.h"
+#include "ir_gen_matrix.h"
 #include "type_descriptors.h"
 
 #include <string.h>
@@ -26,8 +27,7 @@ ir_gen_postfix_transpose(
         return NULL;
     LLVMTypeRef elem_llvm = elem_type->llvm_type;
     LLVMTypeRef result_llvm = result_type->llvm_type;
-    LLVMTypeRef m_type_llvm = m_type->llvm_type;
-    if (elem_llvm == NULL || result_llvm == NULL || m_type_llvm == NULL)
+    if (elem_llvm == NULL || result_llvm == NULL)
         return NULL;
 
     // m_param should be a pointer to the matrix
@@ -39,22 +39,15 @@ ir_gen_postfix_transpose(
     {
         for (int64_t j = 0; j < cols; j++)
         {
-            LLVMValueRef midx[]
-                = {LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false),
-                   LLVMConstInt(LLVMInt64TypeInContext(ctx->context), i, false),
-                   LLVMConstInt(LLVMInt64TypeInContext(ctx->context), j, false)};
-            LLVMValueRef m_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, m_type_llvm, m_param, midx, 3, "tr.m.e");
+            LLVMValueRef m_elem_ptr = ir_gen_matrix_elem_ptr(ctx, m_param, m_type, i, j, "tr.m.e");
             LLVMValueRef m_elem = LLVMBuildLoad2(ctx->builder, elem_llvm, m_elem_ptr, "tr.m.v");
 
-            LLVMValueRef ridx[]
-                = {LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false),
-                   LLVMConstInt(LLVMInt64TypeInContext(ctx->context), j, false),
-                   LLVMConstInt(LLVMInt64TypeInContext(ctx->context), i, false)};
-            LLVMValueRef res_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, ridx, 3, "tr.r.e");
+            LLVMValueRef res_elem_ptr = ir_gen_matrix_elem_ptr(ctx, result_ptr, result_type, j, i, "tr.r.e");
             LLVMBuildStore(ctx->builder, m_elem, res_elem_ptr);
         }
     }
 
+    // Return the pointer (matrix variables store pointers, subscripts work via GEP)
     return result_ptr;
 }
 
@@ -122,14 +115,11 @@ ir_gen_postfix_outer_product(
             LLVMValueRef prod = ir_gen_llvm_is_floating(elem_llvm)
                                     ? LLVMBuildFMul(ctx->builder, a_elem, b_elem, "oa.fmul")
                                     : LLVMBuildMul(ctx->builder, a_elem, b_elem, "oa.mul");
-            LLVMValueRef idx[2]
-                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)i, false),
-                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)j, false)};
-            LLVMValueRef slot = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, idx, 2, "oa.s");
+            LLVMValueRef slot = ir_gen_matrix_elem_ptr(ctx, result_ptr, result_type, i, j, "oa.s");
             LLVMBuildStore(ctx->builder, prod, slot);
         }
     }
-    return result_ptr;
+    return LLVMBuildLoad2(ctx->builder, result_type->llvm_type, result_ptr, "outer.result");
 }
 
 // hadamard_product(a: T, b: T) -> T  (element-wise multiply; matrix or array)
@@ -178,10 +168,10 @@ ir_gen_postfix_hadamard_product(
         LLVMValueRef a_elem, b_elem;
         if (t->kind == TD_KIND_MATRIX)
         {
-            LLVMValueRef a_row = LLVMBuildExtractValue(ctx->builder, a_val, (unsigned)(k / cols), "ha.ar");
-            LLVMValueRef b_row = LLVMBuildExtractValue(ctx->builder, b_val, (unsigned)(k / cols), "ha.br");
-            a_elem = LLVMBuildExtractValue(ctx->builder, a_row, (unsigned)(k % cols), "ha.a");
-            b_elem = LLVMBuildExtractValue(ctx->builder, b_row, (unsigned)(k % cols), "ha.b");
+            int64_t row = k / cols;
+            int64_t col = k % cols;
+            a_elem = ir_gen_matrix_elem_value(ctx, a_val, t, row, col, "ha.a");
+            b_elem = ir_gen_matrix_elem_value(ctx, b_val, t, row, col, "ha.b");
         }
         else
         {
@@ -193,10 +183,7 @@ ir_gen_postfix_hadamard_product(
         LLVMValueRef slot;
         if (t->kind == TD_KIND_MATRIX)
         {
-            LLVMValueRef idx[2]
-                = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)(k / cols), false),
-                   LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)(k % cols), false)};
-            slot = LLVMBuildInBoundsGEP2(ctx->builder, llvm, result_ptr, idx, 2, "ha.s");
+            slot = ir_gen_matrix_elem_ptr(ctx, result_ptr, t, k / cols, k % cols, "ha.s");
         }
         else
         {
@@ -236,14 +223,14 @@ ir_gen_postfix_matrix_flatten(
     {
         for (int64_t j = 0; j < cols; j++)
         {
-            LLVMValueRef row = LLVMBuildExtractValue(ctx->builder, m_val, (unsigned)i, "flt.r");
-            LLVMValueRef elem_v = LLVMBuildExtractValue(ctx->builder, row, (unsigned)j, "flt.e");
-            LLVMValueRef idx[1] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)(i * cols + j), false)};
+            LLVMValueRef elem_v = ir_gen_matrix_elem_value(ctx, m_val, m_type, i, j, "flt.e");
+            int64_t flat = ir_gen_matrix_offset(i, j, rows, cols, m_type->as.matrix.is_row_major);
+            LLVMValueRef idx[1] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)flat, false)};
             LLVMValueRef slot = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, idx, 1, "flt.s");
             LLVMBuildStore(ctx->builder, elem_v, slot);
         }
     }
-    return result_ptr;
+    return LLVMBuildLoad2(ctx->builder, result_llvm, result_ptr, "flt.result");
 }
 
 // --- Postfix expression / call codegen ---
@@ -510,12 +497,22 @@ ir_gen_postfix_call(
             }
             else if (ir_gen_name_matches(func_name, "matrix_flatten") && arg_count == 1)
             {
-                TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
-                LLVMValueRef r = ir_gen_postfix_matrix_flatten(ctx, args[0], arg_types[0], result_type);
+                // Runtime declares matrix_flatten as proc(m: any) -> any.
+                // Compute the actual result type: [rows*cols x element_type].
+                TypeDescriptor const * arg_type = arg_types[0];
+                TypeDescriptor const * flatten_result = NULL;
+                if (arg_type && arg_type->kind == TD_KIND_MATRIX)
+                {
+                    flatten_result = get_or_create_array_type(
+                        ctx->type_registry,
+                        arg_type->as.matrix.element_type,
+                        (size_t)(arg_type->as.matrix.rows * arg_type->as.matrix.columns));
+                }
+                LLVMValueRef r = ir_gen_postfix_matrix_flatten(ctx, args[0], arg_type, flatten_result);
                 if (r != NULL)
                 {
                     *val = r;
-                    *cur_type = result_type;
+                    *cur_type = flatten_result;
                     return false;
                 }
             }
@@ -867,14 +864,13 @@ ir_gen_postfix_subscript(
         return;
     }
 
-    // Check for multi-index subscript (comma-separated indices)
-    // e.g., m[0, 1] should compute the element directly
+    // Check for multi-index subscript (comma-separated indices) on matrix type
+    // Works for TD_KIND_MATRIX (pointer to matrix)
     if (index_expr->type == AST_NODE_EXPRESSION && index_expr->list.count >= 2 && (*cur_type)->kind == TD_KIND_MATRIX)
     {
         int index_count = (int)index_expr->list.count;
         if (index_count == 2)
         {
-            // Multi-index subscript for matrix: m[i, j]
             odin_grammar_node_t * row_node = index_expr->list.children[0];
             odin_grammar_node_t * col_node = index_expr->list.children[1];
 
@@ -909,16 +905,10 @@ ir_gen_postfix_subscript(
             }
 
             // Compute element directly: m[row][col]
-            // Matrix is stored as [rows x [cols x T]]
-            // Use 2-level GEP: [0, row] to get row pointer, then [col] to get element pointer
-            LLVMTypeRef mtx_type = mtx->llvm_type;
-
-            // Use combined GEP with 3 indices: [0, row, col]
-            // This is equivalent to m[row][col] for a matrix [rows x [cols x T]]
-            LLVMValueRef combined_indices[]
-                = {LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false), row_idx, col_idx};
+            // Matrix is stored as a flat [rows*columns x T] array; the linear
+            // offset depends on the declared layout (column-major default).
             LLVMValueRef elem_ptr
-                = LLVMBuildInBoundsGEP2(ctx->builder, mtx_type, *val, combined_indices, 3, "mat.elem");
+                = ir_gen_matrix_elem_ptr_runtime(ctx, *val, mtx, row_idx, col_idx, "mat.elem");
 
             // Load the element value
             *val = LLVMBuildLoad2(ctx->builder, elem_type->llvm_type, elem_ptr, "mat.load");
@@ -944,28 +934,15 @@ ir_gen_postfix_subscript(
             index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
         }
         LLVMTypeRef arr_type = (*cur_type)->llvm_type;
-        LLVMValueRef indices[] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false), index_val};
-        LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, *val, indices, 2, "subs");
+        // All arrays are now flat [N x T] in the new layout. Use single-index GEP.
+        LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, *val, &index_val, 1, "subs");
         *val = elem_ptr;
     }
     else if ((*cur_type)->kind == TD_KIND_MATRIX)
     {
-        // First subscript on a matrix: index into rows, producing a row pointer.
-        // Update cur_type to inner array type for the second subscript.
-        // Return early to prevent fallthrough type-narrowing (which would turn
-        // the inner array type into the element type prematurely).
-        TypeDescriptor const * mtx = *cur_type;
-        if (ctx->bounds_checking_enabled)
-        {
-            LLVMValueRef len_val = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), mtx->as.matrix.rows, false);
-            index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
-        }
-        LLVMTypeRef mtx_type = mtx->llvm_type;
-        LLVMValueRef indices[] = {LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false), index_val};
-        LLVMValueRef row_ptr = LLVMBuildInBoundsGEP2(ctx->builder, mtx_type, *val, indices, 2, "row");
-        *val = row_ptr;
-        *cur_type
-            = get_or_create_array_type(ctx->type_registry, mtx->as.matrix.element_type, (size_t)mtx->as.matrix.columns);
+        // Single-index matrix access is not valid Odin; requires m[row, col].
+        ir_gen_error_collection_add(&ctx->errors, NULL, op,
+            "matrix index requires both a row and column index: use m[row, col]");
         return;
     }
     else if ((*cur_type)->kind == TD_KIND_SLICE || (*cur_type)->kind == TD_KIND_DYNAMIC_ARRAY)
@@ -1040,33 +1017,6 @@ ir_gen_postfix_subscript(
         *val = ir_gen_map_subscript(ctx, *val, *cur_type, index_val, NULL, false, "mr.");
         if (*val == NULL)
             return;
-    }
-    else if ((*cur_type)->kind == TD_KIND_MATRIX)
-    {
-        // Matrix subscript: m[i][j] is two subscripts
-        // First subscript returns a row (array of columns)
-        // Second subscript returns an element
-        // Matrix is stored as [rows x [cols x element_type]]
-        // First subscript: m[i] returns [cols x element_type]
-        fprintf(
-            stderr,
-            "DEBUG: Matrix subscript: val type=%s, cur_type kind=%d, rows=%lld, cols=%lld\n",
-            LLVMGetTypeKind(LLVMTypeOf(*val)) == LLVMPointerTypeKind ? "pointer" : "other",
-            (*cur_type)->kind,
-            (long long)(*cur_type)->as.matrix.rows,
-            (long long)(*cur_type)->as.matrix.columns
-        );
-
-        LLVMValueRef indices[] = {index_val};
-        LLVMValueRef row_ptr
-            = LLVMBuildInBoundsGEP2(ctx->builder, (*cur_type)->llvm_type, *val, indices, 1, "matrix.subs");
-        // Load the row (which is an array)
-        TypeDescriptor const * row_type = get_or_create_array_type(
-            ctx->type_registry, (*cur_type)->as.matrix.element_type, (*cur_type)->as.matrix.columns
-        );
-        LLVMValueRef row_val = LLVMBuildLoad2(ctx->builder, row_type->llvm_type, row_ptr, "matrix.row");
-        *val = row_val;
-        *cur_type = row_type;
     }
     else
     {

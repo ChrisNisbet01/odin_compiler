@@ -7,6 +7,7 @@
 #include "ast_utils.h"
 #include "scope.h"
 #include "ir_gen_statement.h"
+#include "ir_gen_matrix.h"
 
 #include <llvm-c/Core.h>
 #include <llvm-c/Analysis.h>
@@ -365,15 +366,7 @@ ir_gen_lvalue_postfix_subscript(IrGenContext * ctx, LLVMValueRef * ptr,
                 col_idx = ir_gen_emit_bounds_check(ctx, col_idx, col_len, op);
             }
             
-            // Use combined GEP with 3 indices: [0, row, col]
-            // This is equivalent to m[row][col] for a matrix [rows x [cols x T]]
-            LLVMTypeRef mtx_type = mtx->llvm_type;
-            LLVMValueRef combined_indices[] = {
-                LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false),
-                row_idx,
-                col_idx
-            };
-            *ptr = LLVMBuildInBoundsGEP2(ctx->builder, mtx_type, *ptr, combined_indices, 3, "mat.elem");
+            *ptr = ir_gen_matrix_elem_ptr_runtime(ctx, *ptr, mtx, row_idx, col_idx, "mat.elem");
             *cur_type = elem_type;
             return true;
         }
@@ -404,23 +397,10 @@ ir_gen_lvalue_postfix_subscript(IrGenContext * ctx, LLVMValueRef * ptr,
     }
     else if ((*cur_type)->kind == TD_KIND_MATRIX)
     {
-        // First subscript on a matrix: index into rows, producing a row (inner array)
-        TypeDescriptor const * mtx = *cur_type;
-        if (ctx->bounds_checking_enabled)
-        {
-            LLVMValueRef len_val = LLVMConstInt(
-                LLVMInt64TypeInContext(ctx->context), mtx->as.matrix.rows, false
-            );
-            index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
-        }
-        LLVMTypeRef mtx_type = mtx->llvm_type;
-        LLVMValueRef indices[] = {LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false), index_val};
-        *ptr = LLVMBuildInBoundsGEP2(ctx->builder, mtx_type, *ptr, indices, 2, "row");
-
-        // Update cur_type to inner array type [cols x T] so the next subscript works
-        *cur_type = get_or_create_array_type(
-            ctx->type_registry, mtx->as.matrix.element_type, (size_t)mtx->as.matrix.columns
-        );
+        // Single-index matrix access is not valid Odin; requires m[row, col].
+        ir_gen_error_collection_add(&ctx->errors, NULL, op,
+            "matrix index requires both a row and column index: use m[row, col]");
+        return false;
     }
     else if ((*cur_type)->kind == TD_KIND_SLICE || (*cur_type)->kind == TD_KIND_DYNAMIC_ARRAY)
     {

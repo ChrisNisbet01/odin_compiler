@@ -1,6 +1,7 @@
 #include "ir_gen_operator.h"
 #include "ast_metadata.h"
 #include "ast_utils.h"
+#include "ir_gen_matrix.h"
 #include "type_descriptors.h"
 
 // --- Binary expression codegen ---
@@ -325,10 +326,6 @@ ir_gen_matrix_mul(IrGenContext * ctx, odin_grammar_node_t * node,
         && (LLVMGetTypeKind(elem_llvm) == LLVMFloatTypeKind
             || LLVMGetTypeKind(elem_llvm) == LLVMDoubleTypeKind));
 
-    LLVMTypeRef lhs_llvm = lhs_td->llvm_type;
-    LLVMTypeRef rhs_llvm = rhs_td->llvm_type;
-    LLVMTypeRef res_llvm = result_td->llvm_type;
-
     for (int64_t i = 0; i < I; i++)
     {
         for (int64_t k = 0; k < K; k++)
@@ -338,21 +335,11 @@ ir_gen_matrix_mul(IrGenContext * ctx, odin_grammar_node_t * node,
             for (int64_t j = 0; j < J; j++)
             {
                 // lhs[i][j]
-                LLVMValueRef li[] = {
-                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
-                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
-                };
-                LLVMValueRef lhs_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, lhs_llvm, lhs_ptr, li, 3, "mmul.le");
+                LLVMValueRef lhs_elem_ptr = ir_gen_matrix_elem_ptr(ctx, lhs_ptr, lhs_td, i, j, "mmul.le");
                 LLVMValueRef lhs_elem = LLVMBuildLoad2(ctx->builder, elem_llvm, lhs_elem_ptr, "mmul.lev");
 
                 // rhs[j][k]
-                LLVMValueRef ri[] = {
-                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false),
-                    LLVMConstInt(LLVMInt32TypeInContext(ctx->context), k, false)
-                };
-                LLVMValueRef rhs_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, rhs_llvm, rhs_ptr, ri, 3, "mmul.re");
+                LLVMValueRef rhs_elem_ptr = ir_gen_matrix_elem_ptr(ctx, rhs_ptr, rhs_td, j, k, "mmul.re");
                 LLVMValueRef rhs_elem = LLVMBuildLoad2(ctx->builder, elem_llvm, rhs_elem_ptr, "mmul.rev");
 
                 LLVMValueRef prod = is_float ? LLVMBuildFMul(ctx->builder, lhs_elem, rhs_elem, "mmul.pr")
@@ -362,17 +349,12 @@ ir_gen_matrix_mul(IrGenContext * ctx, odin_grammar_node_t * node,
             }
 
             // Store result[i][k]
-            LLVMValueRef si[] = {
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), k, false)
-            };
-            LLVMValueRef res_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, res_llvm, result_ptr, si, 3, "mmul.se");
+            LLVMValueRef res_elem_ptr = ir_gen_matrix_elem_ptr(ctx, result_ptr, result_td, i, k, "mmul.se");
             LLVMBuildStore(ctx->builder, sum, res_elem_ptr);
         }
     }
 
-    return result_ptr;
+    return LLVMBuildLoad2(ctx->builder, result_td->llvm_type, result_ptr, "mmul.result");
 }
 
 static LLVMValueRef
@@ -397,12 +379,7 @@ ir_gen_matrix_scalar_op(IrGenContext * ctx, LLVMValueRef matrix_ptr, LLVMValueRe
     {
         for (int64_t j = 0; j < cols; j++)
         {
-            LLVMValueRef idx[] = {
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
-            };
-            LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, mat_llvm, matrix_ptr, idx, 3, "mscal.ep");
+            LLVMValueRef elem_ptr = ir_gen_matrix_elem_ptr(ctx, matrix_ptr, td, i, j, "mscal.ep");
             LLVMValueRef elem_val = LLVMBuildLoad2(ctx->builder, elem_llvm, elem_ptr, "mscal.ev");
 
             LLVMValueRef result_val;
@@ -413,7 +390,7 @@ ir_gen_matrix_scalar_op(IrGenContext * ctx, LLVMValueRef matrix_ptr, LLVMValueRe
                 result_val = is_float ? LLVMBuildFDiv(ctx->builder, elem_val, scalar_val, "mscal.qt")
                                       : LLVMBuildSDiv(ctx->builder, elem_val, scalar_val, "mscal.qt");
 
-            LLVMValueRef res_elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, mat_llvm, result_ptr, idx, 3, "mscal.sl");
+            LLVMValueRef res_elem_ptr = ir_gen_matrix_elem_ptr(ctx, result_ptr, td, i, j, "mscal.sl");
             LLVMBuildStore(ctx->builder, result_val, res_elem_ptr);
         }
     }
@@ -442,15 +419,9 @@ ir_gen_matrix_binop(IrGenContext * ctx, LLVMValueRef lhs_ptr, LLVMValueRef rhs_p
     {
         for (int64_t j = 0; j < cols; j++)
         {
-            LLVMValueRef idx[] = {
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
-            };
-
-            LLVMValueRef le_ptr = LLVMBuildInBoundsGEP2(ctx->builder, mat_llvm, lhs_ptr, idx, 3, "mbin.le");
+            LLVMValueRef le_ptr = ir_gen_matrix_elem_ptr(ctx, lhs_ptr, td, i, j, "mbin.le");
             LLVMValueRef le_val = LLVMBuildLoad2(ctx->builder, elem_llvm, le_ptr, "mbin.lev");
-            LLVMValueRef re_ptr = LLVMBuildInBoundsGEP2(ctx->builder, mat_llvm, rhs_ptr, idx, 3, "mbin.re");
+            LLVMValueRef re_ptr = ir_gen_matrix_elem_ptr(ctx, rhs_ptr, td, i, j, "mbin.re");
             LLVMValueRef re_val = LLVMBuildLoad2(ctx->builder, elem_llvm, re_ptr, "mbin.rev");
 
             LLVMValueRef result_val;
@@ -461,7 +432,7 @@ ir_gen_matrix_binop(IrGenContext * ctx, LLVMValueRef lhs_ptr, LLVMValueRef rhs_p
                 result_val = is_float ? LLVMBuildFSub(ctx->builder, le_val, re_val, "mbin.sub")
                                       : LLVMBuildSub(ctx->builder, le_val, re_val, "mbin.sub");
 
-            LLVMValueRef se_ptr = LLVMBuildInBoundsGEP2(ctx->builder, mat_llvm, result_ptr, idx, 3, "mbin.sl");
+            LLVMValueRef se_ptr = ir_gen_matrix_elem_ptr(ctx, result_ptr, td, i, j, "mbin.sl");
             LLVMBuildStore(ctx->builder, result_val, se_ptr);
         }
     }
@@ -494,13 +465,7 @@ ir_gen_matrix_vector_mul(IrGenContext * ctx, LLVMValueRef matrix_ptr, LLVMValueR
         for (int64_t j = 0; j < cols; j++)
         {
             // matrix[i][j]
-            LLVMValueRef midx[] = {
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), i, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false)
-            };
-            LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder,
-                matrix_td->llvm_type, matrix_ptr, midx, 3, "mmv.me");
+            LLVMValueRef elem_ptr = ir_gen_matrix_elem_ptr(ctx, matrix_ptr, matrix_td, i, j, "mmv.me");
             LLVMValueRef mval = LLVMBuildLoad2(ctx->builder, elem_llvm, elem_ptr, "mmv.mv");
 
             // vector[j]
@@ -565,13 +530,7 @@ ir_gen_vector_matrix_mul(IrGenContext * ctx, LLVMValueRef vector_ptr, LLVMValueR
             LLVMValueRef vval = LLVMBuildLoad2(ctx->builder, elem_llvm, vec_ptr, "vmv.vv");
 
             // matrix[j][k]
-            LLVMValueRef midx[] = {
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), j, false),
-                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), k, false)
-            };
-            LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder,
-                matrix_td->llvm_type, matrix_ptr, midx, 3, "vmv.me");
+            LLVMValueRef elem_ptr = ir_gen_matrix_elem_ptr(ctx, matrix_ptr, matrix_td, j, k, "vmv.me");
             LLVMValueRef mval = LLVMBuildLoad2(ctx->builder, elem_llvm, elem_ptr, "vmv.mv");
 
             LLVMValueRef prod = is_float ? LLVMBuildFMul(ctx->builder, vval, mval, "vmv.pr")

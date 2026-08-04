@@ -3,6 +3,7 @@
 #include "ast_metadata.h"
 #include "ast_utils.h"
 #include "ir_gen_assign.h"
+#include "ir_gen_matrix.h"
 #include "ir_gen_operator.h"
 #include "ir_gen_postfix.h"
 #include "ir_gen_statement.h"
@@ -2598,15 +2599,15 @@ ir_gen_matrix_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
             val = coerce_value_to_type(ctx, val, elem_llvm_type, src_unsigned, "mtxlit.elem");
         }
 
-        // Matrix is [rows x [cols x T]]. Insert at [row, col].
+        // Matrix is stored as a flat [rows*columns x T] array; the linear
+        // offset depends on the declared layout (column-major default).
         unsigned row = idx / (unsigned)cols;
         unsigned col = idx % (unsigned)cols;
+        int64_t flat = ir_gen_matrix_offset(
+            (int64_t)row, (int64_t)col, rows, cols, mtx_type->as.matrix.is_row_major);
 
-        // Extract the current row, insert element, then insert row back.
-        LLVMTypeRef row_type = LLVMArrayType(elem_llvm_type, (unsigned)cols);
-        LLVMValueRef row_val = LLVMBuildExtractValue(ctx->builder, result, row, "mtxlit.row");
-        row_val = LLVMBuildInsertValue(ctx->builder, row_val, val, col, "mtxlit.col");
-        result = LLVMBuildInsertValue(ctx->builder, result, row_val, row, "mtxlit.row");
+        // Insert directly at the flat offset.
+        result = LLVMBuildInsertValue(ctx->builder, result, val, (unsigned)flat, "mtxlit.elem");
 
         idx++;
     }
