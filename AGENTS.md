@@ -5,7 +5,11 @@
 ### EBNF grammar (odin.ebnf)
 - This grammar file may be useful for hints on how to construct our own GDL grammar rules.
  GDL is similar to EBNF, but not exactly the same.
- 
+
+## test suite notes
+
+### The test suite takes a long time to run, so always use a longer timeout (~4 minutes)
+
 ## Syntax notes
 
 ### 'if cond break' (without braces or 'do') is not valid Odin. Either use braces, or use 'if cond do break' .

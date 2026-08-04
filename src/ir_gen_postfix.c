@@ -913,16 +913,6 @@ ir_gen_postfix_subscript(
             // Use 2-level GEP: [0, row] to get row pointer, then [col] to get element pointer
             LLVMTypeRef mtx_type = mtx->llvm_type;
 
-            if (ctx->bounds_checking_enabled)
-            {
-                LLVMValueRef row_len = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), mtx->as.matrix.rows, false);
-                row_idx = ir_gen_emit_bounds_check(ctx, row_idx, row_len, op);
-
-                LLVMValueRef col_len
-                    = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), mtx->as.matrix.columns, false);
-                col_idx = ir_gen_emit_bounds_check(ctx, col_idx, col_len, op);
-            }
-
             // Use combined GEP with 3 indices: [0, row, col]
             // This is equivalent to m[row][col] for a matrix [rows x [cols x T]]
             LLVMValueRef combined_indices[]
