@@ -186,8 +186,10 @@ KwNoBoundsCheck = lexeme("no_bounds_check" IdBoundary);
 KwCallerLocation = lexeme("caller_location" IdBoundary);
 KwAlign = lexeme("align" IdBoundary);
 KwAnyInt = lexeme("any_int" IdBoundary);
+KwRowMajor = lexeme("row_major" IdBoundary);
+KwColumnMajor = lexeme("column_major" IdBoundary);
 
-DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert | KwNoBoundsCheck | KwCallerLocation | KwAlign | KwUnroll;
+DirectiveName = Identifier | KwPartial | KwSoa | KwPacked | KwRawUnion | KwForceInline | KwNoInline | KwLoad | KwAssert | KwNoBoundsCheck | KwCallerLocation | KwAlign | KwRowMajor | KwColumnMajor | KwUnroll;
 Directive = lexeme("#" DirectiveName) @AST_ACTION_DIRECTIVE;
 DirectiveWithArgs = lexeme("#" DirectiveName) LBracket Expression RBracket @AST_ACTION_DIRECTIVE_WITH_ARGS;
 
@@ -363,7 +365,7 @@ MaybeType = KwMaybe LParen TypePrefix RParen @AST_ACTION_MAYBE_TYPE;
 
 VectorType = KwSimd LBracket IntegerLiteral RBracket TypePrefix @AST_ACTION_VECTOR_TYPE;
 
-MatrixType = KwMatrix LBracket AssignExpression Comma AssignExpression RBracket TypePrefix @AST_ACTION_MATRIX_TYPE;
+MatrixType = (Directive)? KwMatrix LBracket AssignExpression Comma AssignExpression RBracket TypePrefix @AST_ACTION_MATRIX_TYPE;
 
 TupleType = LBracket TypePrefix (Comma TypePrefix)+ RBracket @AST_ACTION_TUPLE_TYPE;
 

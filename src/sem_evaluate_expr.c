@@ -1672,7 +1672,7 @@ sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
                 left_type->as.matrix.rows,
                 right_type->as.matrix.columns,
                 left_type->as.matrix.element_type,
-                true
+                left_type->as.matrix.is_row_major
             );
             node->resolved_type = (TypeDescriptor *)result_type;
             return result_type;
@@ -2009,7 +2009,7 @@ sem_matrix_intrinsic_result_type(SemContext * ctx, char const * name,
         {
             return get_or_create_matrix_type(ctx->type_registry,
                 arg_type->as.matrix.columns, arg_type->as.matrix.rows,
-                arg_type->as.matrix.element_type, true);
+                arg_type->as.matrix.element_type, arg_type->as.matrix.is_row_major);
         }
     }
     else if (strcmp(name, "outer_product") == 0 && nargs == 2
@@ -2024,7 +2024,7 @@ sem_matrix_intrinsic_result_type(SemContext * ctx, char const * name,
         {
             return get_or_create_matrix_type(ctx->type_registry,
                 (int64_t)a->as.array.count, (int64_t)b->as.array.count,
-                a->element_type, true);
+                a->element_type, false);
         }
     }
     else if (strcmp(name, "hadamard_product") == 0 && nargs == 2
@@ -2341,16 +2341,15 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             }
                             else if (type && type->kind == TD_KIND_MATRIX)
                             {
-                                if (idx == 0)
+                                // Matrix indexing requires both row and column indices: m[row, col]
+                                if (index_count == 1)
                                 {
-                                    type = get_or_create_array_type(
-                                        ctx->type_registry, type->as.matrix.element_type, (size_t)type->as.matrix.columns
-                                    );
+                                    sem_error_list_add(&ctx->errors, ctx->source_file_path, op,
+                                        "matrix index requires both a row and column index: use m[row, col]");
+                                    type = NULL;
+                                    break;
                                 }
-                                else
-                                {
-                                    type = type->element_type;
-                                }
+                                type = type->as.matrix.element_type;
                             }
                             else if (type && type->kind == TD_KIND_MAP)
                             {
@@ -2876,20 +2875,17 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     }
                     else if (type && type->kind == TD_KIND_MATRIX)
                     {
-                        // Subscript on a matrix: returns row (inner array) for first index,
-                        // or element for second index when used as multi-index
-                        if (idx == 0)
+                        // Matrix indexing requires both row and column indices: m[row, col]
+                        if (index_count == 1)
                         {
-                            // First index: return row
-                            type = get_or_create_array_type(
-                                ctx->type_registry, type->as.matrix.element_type, (size_t)type->as.matrix.columns
-                            );
+                            sem_error_list_add(&ctx->errors, ctx->source_file_path, op,
+                                "matrix index requires both a row and column index: use m[row, col]");
+                            type = NULL;
+                            break;
                         }
-                        else
-                        {
-                            // Second index (or subsequent): return element
-                            type = type->element_type;
-                        }
+                        // First index selects the element position (row in math terms);
+                        // the multi-index subscript consumes both indices → element type
+                        type = type->as.matrix.element_type;
                     }
                     else if (type && type->kind == TD_KIND_MAP)
                     {

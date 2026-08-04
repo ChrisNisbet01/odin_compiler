@@ -1487,16 +1487,40 @@ static TypeDescriptor const *
 sem_resolve_matrix_type(SemContext * ctx, odin_grammar_node_t * node)
 {
 
-    // MatrixType = KwMatrix LBracket AssignExpression Comma AssignExpression RBracket TypePrefix
-    // Children (terminals excluded): [rows_Expr, columns_Expr, ElementType]
+    // MatrixType = (Directive)? KwMatrix LBracket AssignExpression Comma AssignExpression RBracket TypePrefix
+    // Children (terminals excluded): [Directive?, rows_Expr, columns_Expr, ElementType]
     size_t child_count = node->list.count;
-    if (child_count < 3)
+
+    // Optional leading directive: #row_major / #column_major
+    size_t offset = 0;
+    bool is_row_major = false;
+    if (child_count > 0 && node->list.children[0] != NULL
+        && node->list.children[0]->type == AST_NODE_DIRECTIVE)
+    {
+        odin_grammar_node_t * dir = node->list.children[0];
+        if (dir->text)
+        {
+            if (strcmp(dir->text, "#row_major") == 0)
+                is_row_major = true;
+            else if (strcmp(dir->text, "#column_major") == 0)
+                is_row_major = false;
+            else
+            {
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, dir,
+                    "invalid matrix directive: expected #row_major or #column_major");
+                return NULL;
+            }
+        }
+        offset = 1;
+    }
+
+    if (child_count < offset + 3)
         return NULL;
 
-    // Use positional children: [0]=rows_expr, [1]=cols_expr, [2]=type
-    odin_grammar_node_t * rows_node = node->list.children[0];
-    odin_grammar_node_t * cols_node = node->list.children[1];
-    odin_grammar_node_t * type_child = node->list.children[2];
+    // Use positional children: [offset+0]=rows_expr, [offset+1]=cols_expr, [offset+2]=type
+    odin_grammar_node_t * rows_node = node->list.children[offset];
+    odin_grammar_node_t * cols_node = node->list.children[offset + 1];
+    odin_grammar_node_t * type_child = node->list.children[offset + 2];
     if (rows_node == NULL || cols_node == NULL || type_child == NULL)
         return NULL;
 
@@ -1505,7 +1529,7 @@ sem_resolve_matrix_type(SemContext * ctx, odin_grammar_node_t * node)
     // type-relevant child.
     if (!is_type_node(type_child) && type_child->type != AST_NODE_IDENTIFIER)
     {
-        for (size_t i = child_count; i > 0; i--)
+        for (size_t i = child_count; i > offset; i--)
         {
             odin_grammar_node_t * candidate = node->list.children[i - 1];
             if (candidate != NULL
@@ -1530,7 +1554,7 @@ sem_resolve_matrix_type(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
 
     TypeDescriptor const * mtx_type = get_or_create_matrix_type(
-        ctx->type_registry, rows, columns, elem_type, true
+        ctx->type_registry, rows, columns, elem_type, is_row_major
     );
     if (mtx_type)
         node->resolved_type = (TypeDescriptor *)mtx_type;

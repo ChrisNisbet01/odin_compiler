@@ -598,9 +598,10 @@ type_write_canonical_name_internal(TypeDescriptor const * td, char * buf, size_t
     {
         char inner[512];
         type_write_canonical_name_internal(td->element_type, inner, sizeof(inner), depth + 1);
-        snprintf(buf, buf_size, "matrix[%lld,%lld]%s",
+        snprintf(buf, buf_size, "matrix[%lld,%lld]%s%s",
                  (long long)td->as.matrix.rows,
                  (long long)td->as.matrix.columns,
+                 td->as.matrix.is_row_major ? "#row_major" : "",
                  inner);
         break;
     }
@@ -1544,8 +1545,8 @@ get_or_create_matrix_type(TypeDescriptors * registry, int64_t rows, int64_t colu
     td->as.matrix.element_type = element_type;
     td->as.matrix.is_row_major = is_row_major;
     td->llvm_type = LLVMArrayType(
-        LLVMArrayType(element_type->llvm_type, (unsigned)columns),
-        (unsigned)rows
+        element_type->llvm_type,
+        (unsigned)(rows * columns)
     );
     type_compute_hash(td);
     return td;
