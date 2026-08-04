@@ -187,8 +187,11 @@ ir_gen_postfix_hadamard_product(
         }
         else
         {
-            LLVMValueRef idx[1] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)k, false)};
-            slot = LLVMBuildInBoundsGEP2(ctx->builder, llvm, result_ptr, idx, 1, "ha.s");
+            LLVMValueRef idx[2] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)k, false)
+            };
+            slot = LLVMBuildInBoundsGEP2(ctx->builder, llvm, result_ptr, idx, 2, "ha.s");
         }
         LLVMBuildStore(ctx->builder, prod, slot);
     }
@@ -225,8 +228,11 @@ ir_gen_postfix_matrix_flatten(
         {
             LLVMValueRef elem_v = ir_gen_matrix_elem_value(ctx, m_val, m_type, i, j, "flt.e");
             int64_t flat = ir_gen_matrix_offset(i, j, rows, cols, m_type->as.matrix.is_row_major);
-            LLVMValueRef idx[1] = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)flat, false)};
-            LLVMValueRef slot = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, idx, 1, "flt.s");
+            LLVMValueRef idx[2] = {
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (uint64_t)flat, false)
+            };
+            LLVMValueRef slot = LLVMBuildInBoundsGEP2(ctx->builder, result_llvm, result_ptr, idx, 2, "flt.s");
             LLVMBuildStore(ctx->builder, elem_v, slot);
         }
     }
@@ -934,8 +940,12 @@ ir_gen_postfix_subscript(
             index_val = ir_gen_emit_bounds_check(ctx, index_val, len_val, op);
         }
         LLVMTypeRef arr_type = (*cur_type)->llvm_type;
-        // All arrays are now flat [N x T] in the new layout. Use single-index GEP.
-        LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, *val, &index_val, 1, "subs");
+        // Flat array GEP: 2-index {0, offset}
+        LLVMValueRef indices[] = {
+            LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false),
+            index_val
+        };
+        LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP2(ctx->builder, arr_type, *val, indices, 2, "subs");
         *val = elem_ptr;
     }
     else if ((*cur_type)->kind == TD_KIND_MATRIX)

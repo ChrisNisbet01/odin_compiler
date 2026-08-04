@@ -30,8 +30,11 @@ ir_gen_matrix_elem_ptr(
     int64_t offset = ir_gen_matrix_offset(
         row, col, matrix_type->as.matrix.rows, matrix_type->as.matrix.columns,
         matrix_type->as.matrix.is_row_major);
-    LLVMValueRef idx = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)offset, false);
-    return LLVMBuildInBoundsGEP2(ctx->builder, matrix_type->llvm_type, matrix_ptr, &idx, 1, name);
+    LLVMValueRef indices[] = {
+        LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false),
+        LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)offset, false)
+    };
+    return LLVMBuildInBoundsGEP2(ctx->builder, matrix_type->llvm_type, matrix_ptr, indices, 2, name);
 }
 
 // GEP address of element at runtime (row_val, col_val) given a pointer to the
@@ -56,8 +59,12 @@ ir_gen_matrix_elem_ptr_runtime(
     LLVMValueRef offset = matrix_type->as.matrix.is_row_major
                               ? LLVMBuildAdd(ctx->builder, row_times_cols, col_val, "mm.off")
                               : LLVMBuildAdd(ctx->builder, col_times_rows, row_val, "mm.off");
-    // Flat array GEP: single index
-    return LLVMBuildInBoundsGEP2(ctx->builder, matrix_type->llvm_type, matrix_ptr, &offset, 1, name);
+    // Flat array GEP: 2-index {0, offset}
+    LLVMValueRef indices[] = {
+        LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false),
+        offset
+    };
+    return LLVMBuildInBoundsGEP2(ctx->builder, matrix_type->llvm_type, matrix_ptr, indices, 2, name);
 }
 
 // Extract element (row, col) from a loaded flat matrix value.
