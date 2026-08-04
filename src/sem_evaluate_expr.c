@@ -43,6 +43,7 @@ static TypeDescriptor const * sem_evaluate_soa_zip_expr(SemContext * ctx, odin_g
 static TypeDescriptor const * sem_evaluate_soa_unzip_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_array_lit_expr(SemContext * ctx, odin_grammar_node_t * node);
+static TypeDescriptor const * sem_evaluate_matrix_lit_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_incl_excl_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * node);
 static TypeDescriptor const * sem_evaluate_size_align_of_expr(SemContext * ctx, odin_grammar_node_t * node);
@@ -97,6 +98,7 @@ static TypeDescriptor const * (* const sem_evaluate_dispatch[])(SemContext *, od
     [AST_NODE_SOA_UNZIP_EXPR] = sem_evaluate_soa_unzip_expr,
     [AST_NODE_STRUCT_LIT_EXPR] = sem_evaluate_struct_lit_expr,
     [AST_NODE_ARRAY_LIT_EXPR] = sem_evaluate_array_lit_expr,
+    [AST_NODE_MATRIX_LIT_EXPR] = sem_evaluate_matrix_lit_expr,
     [AST_NODE_INCL_EXPR] = sem_evaluate_incl_excl_expr,
     [AST_NODE_EXCL_EXPR] = sem_evaluate_incl_excl_expr,
     [AST_NODE_COMPLEX_EXPR] = sem_evaluate_complex_quaternion_expr,
@@ -985,6 +987,84 @@ sem_evaluate_array_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     node->resolved_type = (TypeDescriptor *)array_type;
     return array_type;
+}
+
+// --- MatrixLitExpr: matrix[2,2]int{1, 2, 3, 4} ---
+// Children: [MatrixType, MatrixLitElements?]
+static TypeDescriptor const *
+sem_evaluate_matrix_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1)
+    {
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
+    // First child is the MatrixType (e.g. matrix[2,2]int)
+    odin_grammar_node_t * type_node = node->list.children[0];
+    if (type_node == NULL || type_node->type != AST_NODE_MATRIX_TYPE)
+    {
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
+    // Resolve the matrix type to get rows, cols, element type
+    TypeDescriptor const * mtx_type = sem_resolve_type_expr(ctx, type_node);
+    if (mtx_type == NULL)
+    {
+        sem_error_list_add(&ctx->errors, ctx->source_file_path, type_node,
+            "matrix literal: could not resolve matrix type");
+        node->resolved_type = NULL;
+        return NULL;
+    }
+    if (mtx_type->kind != TD_KIND_MATRIX)
+    {
+        sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
+            "matrix literal: type is not a matrix");
+        node->resolved_type = NULL;
+        return NULL;
+    }
+
+    long long rows = mtx_type->as.matrix.rows;
+    long long cols = mtx_type->as.matrix.columns;
+    long long expected_count = rows * cols;
+
+    // Find the optional MatrixLitElements child
+    odin_grammar_node_t * elements_node = NULL;
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        if (node->list.children[i] != NULL
+            && node->list.children[i]->type == AST_NODE_MATRIX_LIT_ELEMENTS)
+        {
+            elements_node = node->list.children[i];
+            break;
+        }
+    }
+
+    // Validate element count
+    if (elements_node != NULL)
+    {
+        if ((long long)elements_node->list.count != expected_count)
+        {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "matrix literal: expected %lld elements (%lldx%lld matrix), got %zu",
+                     expected_count, rows, cols, elements_node->list.count);
+            sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
+            node->resolved_type = NULL;
+            return NULL;
+        }
+
+        // Evaluate each element expression so IR gen has resolved_type on each
+        for (size_t i = 0; i < elements_node->list.count; i++)
+        {
+            odin_grammar_node_t * elem = elements_node->list.children[i];
+            if (elem != NULL)
+                sem_evaluate_expr(ctx, elem);
+        }
+    }
+
+    node->resolved_type = (TypeDescriptor *)mtx_type;
+    return mtx_type;
 }
 
 static TypeDescriptor const *

@@ -460,6 +460,8 @@ DEFINE_ACTION(ast_action_struct_lit_field_action, AST_NODE_STRUCT_LIT_FIELD, fal
 DEFINE_ACTION(ast_action_struct_lit_fields_action, AST_NODE_STRUCT_LIT_FIELDS, false)
 DEFINE_ACTION(ast_action_array_lit_expr_action, AST_NODE_ARRAY_LIT_EXPR, false)
 DEFINE_ACTION(ast_action_array_lit_elements_action, AST_NODE_ARRAY_LIT_ELEMENTS, false)
+DEFINE_ACTION(ast_action_matrix_lit_expr_action, AST_NODE_MATRIX_LIT_EXPR, false)
+DEFINE_ACTION(ast_action_matrix_lit_elements_action, AST_NODE_MATRIX_LIT_ELEMENTS, false)
 DEFINE_ACTION(ast_action_quaternion_named_arg_action, AST_NODE_QUATERNION_FIELD, false)
 DEFINE_ACTION(ast_action_quaternion_named_args_action, AST_NODE_QUATERNION_FIELDS, false)
 // --- Terminal nodes (text captured for semantic use) ---
@@ -669,6 +671,8 @@ odin_grammar_ast_hook_registry_init(epc_ast_hook_registry_t * registry)
     REGISTER(AST_ACTION_QUATERNION_EXPR, ast_action_quaternion_expr_action);
     REGISTER(AST_ACTION_MULTI_POINTER_TYPE, ast_action_multi_pointer_type_action);
     REGISTER(AST_ACTION_MAYBE_TYPE, ast_action_maybe_type_action);
+    REGISTER(AST_ACTION_MATRIX_LIT_EXPR, ast_action_matrix_lit_expr_action);
+    REGISTER(AST_ACTION_MATRIX_LIT_ELEMENTS, ast_action_matrix_lit_elements_action);
 #undef REGISTER
 }
 

@@ -410,9 +410,14 @@ ArrayLitExpr = ArrayType LBrace ArrayLitElements? RBrace @AST_ACTION_ARRAY_LIT_E
 ArrayLitElement = StructLitExpr | ArrayLitExpr | AssignExpression;
 ArrayLitElements = delimited_flex(ArrayLitElement, Comma) Comma? @AST_ACTION_ARRAY_LIT_ELEMENTS;
 
+// Matrix literal: matrix[R,C]T{e1, e2, ...}
+MatrixLitExpr = MatrixType LBrace MatrixLitElements? RBrace @AST_ACTION_MATRIX_LIT_EXPR;
+MatrixLitElement = StructLitExpr | MatrixLitExpr | ArrayLitExpr | AssignExpression;
+MatrixLitElements = delimited_flex(MatrixLitElement, Comma) Comma? @AST_ACTION_MATRIX_LIT_ELEMENTS;
+
 // ExpressionOrStructLit: tries compound literals first (for positions where { is unambiguous),
 // falls back to plain expression.
-ExpressionOrStructLit = StructLitExpr | ArrayLitExpr | Expression;
+ExpressionOrStructLit = StructLitExpr | ArrayLitExpr | MatrixLitExpr | Expression;
 
 PrimaryExpression = StringLiteral | RawStringLiteral | RuneLiteral
                   | FloatLiteral | IntegerLiteral

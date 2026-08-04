@@ -355,6 +355,10 @@ get_node_type_name_from_type(odin_grammar_node_type_t node_type)
         return "ArrayLitExpr";
     case AST_NODE_ARRAY_LIT_ELEMENTS:
         return "ArrayLitElements";
+    case AST_NODE_MATRIX_LIT_EXPR:
+        return "MatrixLitExpr";
+    case AST_NODE_MATRIX_LIT_ELEMENTS:
+        return "MatrixLitElements";
     case AST_NODE_QUATERNION_FIELD:
         return "QuaternionField";
     case AST_NODE_QUATERNION_FIELDS:

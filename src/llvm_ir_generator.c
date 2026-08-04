@@ -2537,6 +2537,83 @@ ir_gen_array_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     return result;
 }
 
+// --- MatrixLitExpr: matrix[2,2]int{1, 2, 3, 4} ---
+static LLVMValueRef
+ir_gen_matrix_lit_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->resolved_type == NULL)
+        return NULL;
+    TypeDescriptor const * mtx_type = node->resolved_type;
+    if (mtx_type->kind != TD_KIND_MATRIX)
+        return NULL;
+    LLVMTypeRef llvm_type = mtx_type->llvm_type;
+    if (llvm_type == NULL)
+        return NULL;
+
+    long long rows = mtx_type->as.matrix.rows;
+    long long cols = mtx_type->as.matrix.columns;
+
+    // Start with undef matrix, then insert each element.
+    LLVMValueRef result = LLVMGetUndef(llvm_type);
+
+    // Find the optional MatrixLitElements child.
+    odin_grammar_node_t * elements_node = NULL;
+    for (size_t i = 1; i < node->list.count; i++)
+    {
+        if (node->list.children[i] != NULL && node->list.children[i]->type == AST_NODE_MATRIX_LIT_ELEMENTS)
+        {
+            elements_node = node->list.children[i];
+            break;
+        }
+    }
+    if (elements_node == NULL)
+        return result; // empty literal: return undef (zero-init by caller)
+
+    TypeDescriptor const * elem_type = mtx_type->element_type;
+    LLVMTypeRef elem_llvm_type = elem_type ? elem_type->llvm_type : NULL;
+
+    unsigned idx = 0;
+    for (size_t i = 0; i < elements_node->list.count && idx < (unsigned)(rows * cols); i++)
+    {
+        odin_grammar_node_t * elem = elements_node->list.children[i];
+        if (elem == NULL)
+            continue;
+        LLVMValueRef val = ir_gen_node(ctx, elem);
+        if (val == NULL)
+            continue;
+
+        // If element is a composite-typed identifier, load from alloca.
+        if (elem_type != NULL && elem_llvm_type != NULL && LLVMGetTypeKind(LLVMTypeOf(val)) == LLVMPointerTypeKind
+            && LLVMTypeOf(val) != elem_llvm_type
+            && (elem_type->kind == TD_KIND_ARRAY || elem_type->kind == TD_KIND_STRUCT
+                || elem_type->kind == TD_KIND_SLICE))
+        {
+            val = LLVMBuildLoad2(ctx->builder, elem_llvm_type, val, "mtxlit.load");
+        }
+
+        // Coerce scalar types when needed.
+        if (elem_llvm_type != NULL && LLVMTypeOf(val) != elem_llvm_type)
+        {
+            bool src_unsigned = (elem_type && elem_type->kind == TD_KIND_BASIC && elem_type->as.basic.is_unsigned);
+            val = coerce_value_to_type(ctx, val, elem_llvm_type, src_unsigned, "mtxlit.elem");
+        }
+
+        // Matrix is [rows x [cols x T]]. Insert at [row, col].
+        unsigned row = idx / (unsigned)cols;
+        unsigned col = idx % (unsigned)cols;
+
+        // Extract the current row, insert element, then insert row back.
+        LLVMTypeRef row_type = LLVMArrayType(elem_llvm_type, (unsigned)cols);
+        LLVMValueRef row_val = LLVMBuildExtractValue(ctx->builder, result, row, "mtxlit.row");
+        row_val = LLVMBuildInsertValue(ctx->builder, row_val, val, col, "mtxlit.col");
+        result = LLVMBuildInsertValue(ctx->builder, result, row_val, row, "mtxlit.row");
+
+        idx++;
+    }
+
+    return result;
+}
+
 // --- ComplexExpr / QuaternionExpr: complex(1.0, 2.0) or quaternion(w = 1, x = 0, ...) ---
 // Supports both positional components (children are expressions, index = position)
 // and named fields (children[0] is a QuaternionFields node). Each component value is
@@ -3033,6 +3110,9 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_ARRAY_LIT_EXPR:
         return ir_gen_array_lit_expr(ctx, node);
+
+    case AST_NODE_MATRIX_LIT_EXPR:
+        return ir_gen_matrix_lit_expr(ctx, node);
 
     case AST_NODE_NIL:
     case AST_NODE_NONE:
