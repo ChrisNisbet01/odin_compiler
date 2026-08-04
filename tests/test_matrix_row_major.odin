@@ -76,7 +76,7 @@ main :: proc() {
     if rp[1,1] != 50 { result = result + 8 }
 
     // 7. Row-major matrix literal
-    lit: #row_major matrix[2,2]int = {1, 2, 3, 4}
+    lit: #row_major matrix[2,2]int = #row_major matrix[2,2]int{1, 2, 3, 4}
     if lit[0,0] != 1 { result = result + 16 }
     if lit[0,1] != 2 { result = result + 32 }
     if lit[1,0] != 3 { result = result + 64 }
