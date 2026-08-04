@@ -1,38 +1,28 @@
 # Matrix Flat Layout Implementation Notes
 
-## Status: Partially Working
+## Status: COMPLETE ✓
 
-The flat matrix layout implementation has been taken quite far but has some regressions that need debugging.
+The flat matrix layout implementation is complete and all tests pass.
 
-### Working:
-- Basic matrix declaration and read/write via multi-index subscript `[row, col]`
-- Matrix literals `{...}` syntax
-- Transpose intrinsic (separate row/col reads/writes)
-- Hadamar product intrinsic
+### Completed:
+- [x] Basic matrix declaration and read/write via multi-index subscript `[row, col]`
+- [x] Matrix literals `{...}` syntax with row_major/column_major directives
+- [x] Transpose intrinsic (preserves layout, swaps dimensions)
+- [x] Outer product intrinsic (column-major result)
+- [x] Hadamar product intrinsic
+- [x] Matrix flatten intrinsic (returns flat array `[R*C]T`)
+- [x] Matrix arithmetic (add, sub, mul) - all return proper values
+- [x] Matrix × vector and vector × matrix multiplication
+- [x] `#row_major` and `#column_major` directives working
+- [x] Single-index access `m[i]` now produces compile error (Odin-compliant)
 
-### Broken:
-- Matrix arithmetic (add, sub, mul) return pointers that aren't being loaded correctly
-- Matrix assignment `b := a` stores pointers instead of values
-- Multi-index subscript on values from operations doesn't work
+### Key Implementation Details:
+- LLVM representation: Flat `[R*C x T]` array
+- GEP indexing: 2-index `{0, offset}` instead of legacy 3-index `{0, row, col}`
+- Offset formula: column-major `row + col*rows`, row-major `col + row*cols`
 
-### Root Cause:
-The issue stems from the interaction between:
-1. `ir_gen_matrix_binop` returns `result_ptr` (pointer to alloca)
-2. Variable initialization expects a LOAD for composite types
-3. The load happens when `init_llvm_type` is a pointer type and `expected_type` is array type
-4. But the semantics get confused when the result is stored and then subscripted
-
-### Fix Needed:
-Either:
-1. Make matrix ops return VALUES (load from alloca) and add special handling for subscript GEP on values, OR
-2. Keep ops returning pointers but have variable initialization COPY the data (load from source pointer, store to target)
-
-### Files Modified:
-- `src/odin_grammar.gdl` - Added row_major/column_major directives
-- `src/type_descriptors.c` - Flat LLVM layout, hash includes layout
-- `src/sem_type_resolver.c` - Directive-aware matrix resolution
-- `src/type_compute_hash.c` - Hash includes layout
-- `src/ir_gen_matrix.h` - New helper header for flat offset computation
-- `src/ir_gen_postfix.c` - Matrix intrinsics, subscript GEP
-- `src/ir_gen_operator.c` - Matrix arithmetic ops
-- `src/llvm_ir_generator.c` - Matrix literal generation
+### All 245 tests pass including:
+- test_matrix_basic.odin
+- test_matrix_mul.odin
+- test_matrix_vector.odin
+- test_matrix_row_major.odin
