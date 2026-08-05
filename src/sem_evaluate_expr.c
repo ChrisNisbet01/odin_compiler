@@ -2300,14 +2300,20 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 TypeDescriptor const * proc_type = winner->value.type_info;
                                 if (proc_type && proc_type->kind == TD_KIND_PROC)
                                 {
-                                    if (proc_type->proc_metadata.return_count > 1)
+                                    if (proc_type->proc_metadata.return_count > 0)
                                     {
-                                        op->resolved_type = (TypeDescriptor *)proc_type;
-                                    }
-                                    else
-                                    {
-                                        type = proc_type->proc_metadata.return_type;
-                                        op->resolved_type = (TypeDescriptor *)type;
+                                        // Named returns have the type in returns[0], implicit returns in return_type
+                                        if (proc_type->proc_metadata.returns != NULL
+                                            && proc_type->proc_metadata.return_count > 0)
+                                        {
+                                            type = proc_type->proc_metadata.returns[0];
+                                            op->resolved_type = (TypeDescriptor *)type;
+                                        }
+                                        else if (proc_type->proc_metadata.return_type != NULL)
+                                        {
+                                            type = proc_type->proc_metadata.return_type;
+                                            op->resolved_type = (TypeDescriptor *)type;
+                                        }
                                     }
                                 }
                             }
