@@ -19,7 +19,7 @@ matrix3x3_determinant :: proc "contextless" (m: $M/matrix[3, 3]$T) -> T #no_boun
 }
 
 @(require_results)
-matrix4x4_determinant :: proc "contextless" (m: $M/matrix[4, 4]$T) -> (det: T) #no_bounds_check {
+matrix4x4_determinant :: proc "contextless" (m: $M/matrix[4, 4]$T) -> T #no_bounds_check {
 	s0 := m[0, 0] * m[1, 1] - m[1, 0] * m[0, 1]
 	s1 := m[0, 0] * m[1, 2] - m[1, 0] * m[0, 2]
 	s2 := m[0, 0] * m[1, 3] - m[1, 0] * m[0, 3]
@@ -34,27 +34,26 @@ matrix4x4_determinant :: proc "contextless" (m: $M/matrix[4, 4]$T) -> (det: T) #
 	c1 := m[2, 0] * m[3, 2] - m[3, 0] * m[2, 2]
 	c0 := m[2, 0] * m[3, 1] - m[3, 0] * m[2, 1]
 
-	det = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0
-	return
+	return s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0
 }
 
 @(require_results)
-matrix5x5_determinant :: proc "contextless" (m: $M/matrix[5, 5]$T) -> (det: T) #no_bounds_check {
+matrix5x5_determinant :: proc "contextless" (m: $M/matrix[5, 5]$T) -> T #no_bounds_check {
 	return matrix_determinant_generic(m)
 }
 
 @(require_results)
-matrix6x6_determinant :: proc "contextless" (m: $M/matrix[6, 6]$T) -> (det: T) #no_bounds_check {
+matrix6x6_determinant :: proc "contextless" (m: $M/matrix[6, 6]$T) -> T #no_bounds_check {
 	return matrix_determinant_generic(m)
 }
 
 @(require_results)
-matrix7x7_determinant :: proc "contextless" (m: $M/matrix[7, 7]$T) -> (det: T) #no_bounds_check {
+matrix7x7_determinant :: proc "contextless" (m: $M/matrix[7, 7]$T) -> T #no_bounds_check {
 	return matrix_determinant_generic(m)
 }
 
 @(require_results)
-matrix8x8_determinant :: proc "contextless" (m: $M/matrix[8, 8]$T) -> (det: T) #no_bounds_check {
+matrix8x8_determinant :: proc "contextless" (m: $M/matrix[8, 8]$T) -> T #no_bounds_check {
 	return matrix_determinant_generic(m)
 }
 
@@ -122,10 +121,6 @@ determinant :: proc{
     matrix8x8_determinant
 }
 
-// Matrix intrinsics — aliased to the base:intrinsics body-less declarations.
-// The compiler intercepts calls by name in semantic analysis (return-type
-// inference) and IR generation (inline element-wise codegen), so these aliases
-// produce no runtime reference to the body-less intrinsics procedures.
 outer_product    :: intrinsics.outer_product
 hadamard_product :: intrinsics.hadamard_product
 matrix_flatten   :: intrinsics.matrix_flatten
