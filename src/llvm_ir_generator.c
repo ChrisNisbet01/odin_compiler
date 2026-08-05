@@ -3149,7 +3149,9 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), field_name_node->text);
         if (sym == NULL)
         {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "undeclared identifier");
+            char buf[256];
+            snprintf(buf, sizeof(buf), "undeclared identifier: '%s'", field_name_node->text);
+            ir_gen_error_collection_add(&ctx->errors, NULL, node, buf);
             return NULL;
         }
         TypeDescriptor const * td = sym->value.type_info;

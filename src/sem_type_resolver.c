@@ -2012,7 +2012,8 @@ sem_resolve_qualified_type_name(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
     
-    sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
-                       "undeclared identifier");
+    char buf[256];
+    snprintf(buf, sizeof(buf), "undeclared identifier: '%s'", type_node->text ? type_node->text : "?");
+    sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
     return NULL;
 }

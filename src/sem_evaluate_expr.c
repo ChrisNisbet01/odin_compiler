@@ -1562,7 +1562,9 @@ sem_evaluate_identifier(SemContext * ctx, odin_grammar_node_t * node)
         node->resolved_type = (TypeDescriptor *)sym->value.type_info;
         return sym->value.type_info;
     }
-    sem_error_list_add(&ctx->errors, NULL, node, "undeclared identifier");
+    char buf[256];
+    snprintf(buf, sizeof(buf), "undeclared identifier: '%s'", node->text ? node->text : "?");
+    sem_error_list_add(&ctx->errors, NULL, node, buf);
     return NULL;
     
 }
@@ -1853,7 +1855,9 @@ sem_evaluate_postfix_member(SemContext * ctx, odin_grammar_node_t * node)
         return sym->value.type_info;
     }
 
-    sem_error_list_add(&ctx->errors, NULL, node->list.children[0], "undeclared identifier");
+    char buf[256];
+    snprintf(buf, sizeof(buf), "undeclared identifier: '%s'", field_name ? field_name : "?");
+    sem_error_list_add(&ctx->errors, NULL, node->list.children[0], buf);
     return NULL;
 }
 
@@ -2136,7 +2140,9 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             }
                             else
                             {
-                                sem_error_list_add(&ctx->errors, NULL, op, "undeclared name in package");
+                                char buf[256];
+                                snprintf(buf, sizeof(buf), "undeclared name in package: '%s'", member_name ? member_name : "?");
+                                sem_error_list_add(&ctx->errors, NULL, op, buf);
                             }
                         }
                         break;
