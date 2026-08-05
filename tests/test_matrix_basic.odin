@@ -1,6 +1,7 @@
 package main
 
 import "core:os"
+import "core:fmt"
 import "core:math/linalg"
 
 main :: proc() {
@@ -36,7 +37,7 @@ main :: proc() {
     if z[2,3] != 0 { result = result + 512 }
 
     // 4. Transpose (builtin)
-    t := transpose(m)
+    t := linalg.transpose(m)
     if t[0,0] != 1 { result = result + 1024 }
     if t[0,1] != 4 { result = result + 2048 }
     if t[1,0] != 2 { result = result + 4096 }
@@ -53,6 +54,8 @@ main :: proc() {
     o[0,0] = 3
     od := linalg.determinant(o)
     if od != 3 { result = result + 65536 * 2 } 
+
+    fmt.println("result: ", result);
 
     os.exit(result)
 }

@@ -1990,10 +1990,10 @@ sem_evaluate_assign_expr(SemContext * ctx, odin_grammar_node_t * node)
 
 // Compute the return type of a matrix intrinsic (transpose, outer_product,
 // hadamard_product, matrix_flatten) from its evaluated argument expressions.
-// These procs are declared with `---` bodies (see stubs/base/runtime/runtime.odin
-// and stubs/base/intrinsics/intrinsics.odin) and are intercepted here (type
-// inference) and in ir_gen_postfix.c (codegen) by name. Returns NULL when the
-// intrinsic/args don't match.
+// These procs are declared with `---` bodies (see stubs/base/intrinsics/intrinsics.odin)
+// and are intercepted here (type inference) and in ir_gen_postfix.c (codegen)
+// by name. They are only reachable via the linalg package alias. Returns NULL
+// when the intrinsic/args don't match.
 static TypeDescriptor const *
 sem_matrix_intrinsic_result_type(SemContext * ctx, char const * name,
                                  odin_grammar_node_t ** args, int nargs)

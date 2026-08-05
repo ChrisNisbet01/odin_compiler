@@ -503,8 +503,9 @@ ir_gen_postfix_call(
             }
             else if (ir_gen_name_matches(func_name, "matrix_flatten") && arg_count == 1)
             {
-                // Runtime declares matrix_flatten as proc(m: any) -> any.
-                // Compute the actual result type: [rows*cols x element_type].
+                // Declared as proc "contextless" ($T: typeid, m: T) -> [R*C]E ---
+                // in stubs/base/intrinsics/intrinsics.odin. Compute the actual
+                // result type: [rows*cols x element_type].
                 TypeDescriptor const * arg_type = arg_types[0];
                 TypeDescriptor const * flatten_result = NULL;
                 if (arg_type && arg_type->kind == TD_KIND_MATRIX)

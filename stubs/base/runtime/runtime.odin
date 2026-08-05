@@ -31,15 +31,3 @@ align_forward_uint :: proc(x: uint, alignment: uint) -> uint ---
 
 @(builtin)
 mem_zero :: proc(ptr: rawptr, size: uint) ---
-
-@(builtin)
-transpose :: proc(m: any) -> any ---
-
-@(builtin)
-outer_product :: proc(a: any, b: any) -> any ---
-
-@(builtin)
-hadamard_product :: proc(a: any, b: any) -> any ---
-
-@(builtin)
-matrix_flatten :: proc(m: any) -> any ---
