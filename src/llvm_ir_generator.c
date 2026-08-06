@@ -4000,102 +4000,14 @@ ir_gen_pending_specialization(IrGenContext * ctx, PolySpecialization * spec)
     func_pop(ctx);
 }
 
-bool
-ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
+
+static void
+ir_gen_entry_wrapper(IrGenContext * ctx)
 {
-    if (ctx == NULL || ast == NULL)
-        return false;
-
-    // Generate code for imported packages first
-    for (int i = 0; i < ctx->import_count; i++)
-    {
-        ImportedPackage * pkg = ctx->imports[i];
-        if (pkg == NULL || pkg->ast == NULL || pkg->codegen_done || pkg->build_ignored)
-            continue;
-
-        // Phase 1 import-usage tracking: skip unused direct imports.
-        // Transitive imports (is_direct_import=false) default is_used=true
-        // and are always processed (their parent package may need them).
-        if (!pkg->is_used)
-        {
-            // Essential packages must always be processed even if unused,
-            // as they provide runtime support that other code depends on.
-            // This is a conservative approach - a proper dependency analysis
-            // would determine which packages are truly essential.
-            if (pkg->package_name && (
-                    strcmp(pkg->package_name, "os") == 0 ||
-                    strcmp(pkg->package_name, "io") == 0 ||
-                    strcmp(pkg->package_name, "runtime") == 0 ||
-                    strcmp(pkg->package_name, "mem") == 0))
-            {
-                // Keep essential packages
-            }
-            else
-                continue;
-        }
-
-        int saved_count = ctx->gen_ctx->count;
-        if (pkg->package_scope)
-            ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg->package_scope;
-
-        ir_gen_process_ast(ctx, pkg->ast);
-
-        ctx->gen_ctx->count = saved_count;
-        pkg->codegen_done = true;
-    }
-
-    // Re-copy symbols for 'import using' packages (codegen now has LLVM values)
-    scope_t * current = generator_current_scope(ctx->gen_ctx);
-    for (int i = 0; i < ctx->import_count; i++)
-    {
-        ImportedPackage * pkg = ctx->imports[i];
-        if (pkg == NULL || !pkg->is_using || pkg->package_scope == NULL)
-            continue;
-        // TEMPORARY: Disabled to isolate issue
-        // if (!pkg->is_used)
-        //     continue;
-        generic_hash_table_iterate(pkg->package_scope->symbols.by_name, import_using_copy_symbol, current);
-    }
-
-    // Create argc/argv globals for os.args init (needed before main AST is processed)
-    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
-    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
-    LLVMTypeRef argv_llvm_type = LLVMPointerType(i8ptr, 0);
-
-    ctx->odin_argc_global = LLVMAddGlobal(ctx->module, i64t, "__odin_argc");
-    LLVMSetInitializer(ctx->odin_argc_global, LLVMConstInt(i64t, 0, false));
-
-    ctx->odin_argv_global = LLVMAddGlobal(ctx->module, argv_llvm_type, "__odin_argv");
-    LLVMSetInitializer(ctx->odin_argv_global, LLVMConstNull(argv_llvm_type));
-
-    // Generate code for the main AST
-    // Skip if build-ignored - the entry point wrapper will create a valid empty main
-    if (!ctx->build_ignored)
-    {
-        ir_gen_process_ast(ctx, ast);
-    }
-
-    // Drain pending polymorphic specializations — generate function bodies
-    // for each specialization that was created during the semantic pass.
-    for (int i = 0; i < ctx->pending_spec_count; i++)
-    {
-        ir_gen_pending_specialization(ctx, ctx->pending_specializations[i]);
-    }
-
-    // Emit foreign library metadata
-    // !llvm.dependent.libraries expects direct MDString operands: !{!"lib1", !"lib2"}
-    for (int fi = 0; fi < ctx->foreign_library_count; fi++)
-    {
-        LLVMValueRef lib_md = LLVMMDStringInContext(
-            ctx->context, ctx->foreign_libraries[fi], (unsigned)strlen(ctx->foreign_libraries[fi])
-        );
-        LLVMAddNamedMetadataOperand(ctx->module, "llvm.dependent.libraries", lib_md);
-    }
-
     // Phase 5: Generate entry point wrapper for Odin main with hidden context param
     LLVMValueRef odin_main = NULL;
     bool need_entry_wrapper = false;
-    
+
     if (ctx->build_ignored)
     {
         // Create a dummy main function for build-ignored files
@@ -4105,12 +4017,12 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         LLVMTypeRef main_param_types[] = {i32t, argv_llvm_type};
         LLVMTypeRef main_type = LLVMFunctionType(i32t, main_param_types, 2, false);
         odin_main = LLVMAddFunction(ctx->module, "main", main_type);
-        
+
         // Simple implementation: return 0
         LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, odin_main, "entry");
         LLVMPositionBuilderAtEnd(ctx->builder, entry);
         LLVMBuildRet(ctx->builder, LLVMConstInt(i32t, 0, false));
-        
+
         need_entry_wrapper = false;  // No wrapper needed, we're done
     }
     else
@@ -4119,7 +4031,7 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         if (odin_main != NULL && LLVMCountParams(odin_main) > 0)
             need_entry_wrapper = true;
     }
-    
+
     if (need_entry_wrapper)
     {
         LLVMSetValueName(odin_main, "__odin_main");
@@ -4298,6 +4210,103 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
         // Odin main is always void; exit code is set via os.exit()
         LLVMBuildRet(ctx->builder, LLVMConstInt(i32t, 0, false));
     }
+
+}
+
+bool
+ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
+{
+    if (ctx == NULL || ast == NULL)
+        return false;
+
+    // Generate code for imported packages first
+    for (int i = 0; i < ctx->import_count; i++)
+    {
+        ImportedPackage * pkg = ctx->imports[i];
+        if (pkg == NULL || pkg->ast == NULL || pkg->codegen_done || pkg->build_ignored)
+            continue;
+
+        // Phase 1 import-usage tracking: skip unused direct imports.
+        // Transitive imports (is_direct_import=false) default is_used=true
+        // and are always processed (their parent package may need them).
+        if (!pkg->is_used)
+        {
+            // Essential packages must always be processed even if unused,
+            // as they provide runtime support that other code depends on.
+            // This is a conservative approach - a proper dependency analysis
+            // would determine which packages are truly essential.
+            if (pkg->package_name && (
+                    strcmp(pkg->package_name, "os") == 0 ||
+                    strcmp(pkg->package_name, "io") == 0 ||
+                    strcmp(pkg->package_name, "runtime") == 0 ||
+                    strcmp(pkg->package_name, "mem") == 0))
+            {
+                // Keep essential packages
+            }
+            else
+                continue;
+        }
+
+        int saved_count = ctx->gen_ctx->count;
+        if (pkg->package_scope)
+            ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg->package_scope;
+
+        ir_gen_process_ast(ctx, pkg->ast);
+
+        ctx->gen_ctx->count = saved_count;
+        pkg->codegen_done = true;
+    }
+
+    // Re-copy symbols for 'import using' packages (codegen now has LLVM values)
+    scope_t * current = generator_current_scope(ctx->gen_ctx);
+    for (int i = 0; i < ctx->import_count; i++)
+    {
+        ImportedPackage * pkg = ctx->imports[i];
+        if (pkg == NULL || !pkg->is_using || pkg->package_scope == NULL)
+            continue;
+        // TEMPORARY: Disabled to isolate issue
+        // if (!pkg->is_used)
+        //     continue;
+        generic_hash_table_iterate(pkg->package_scope->symbols.by_name, import_using_copy_symbol, current);
+    }
+
+    // Create argc/argv globals for os.args init (needed before main AST is processed)
+    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef argv_llvm_type = LLVMPointerType(i8ptr, 0);
+
+    ctx->odin_argc_global = LLVMAddGlobal(ctx->module, i64t, "__odin_argc");
+    LLVMSetInitializer(ctx->odin_argc_global, LLVMConstInt(i64t, 0, false));
+
+    ctx->odin_argv_global = LLVMAddGlobal(ctx->module, argv_llvm_type, "__odin_argv");
+    LLVMSetInitializer(ctx->odin_argv_global, LLVMConstNull(argv_llvm_type));
+
+    // Generate code for the main AST
+    // Skip if build-ignored - the entry point wrapper will create a valid empty main
+    if (!ctx->build_ignored)
+    {
+        ir_gen_process_ast(ctx, ast);
+    }
+
+    // Drain pending polymorphic specializations — generate function bodies
+    // for each specialization that was created during the semantic pass.
+    for (int i = 0; i < ctx->pending_spec_count; i++)
+    {
+        ir_gen_pending_specialization(ctx, ctx->pending_specializations[i]);
+    }
+
+    // Emit foreign library metadata
+    // !llvm.dependent.libraries expects direct MDString operands: !{!"lib1", !"lib2"}
+    for (int fi = 0; fi < ctx->foreign_library_count; fi++)
+    {
+        LLVMValueRef lib_md = LLVMMDStringInContext(
+            ctx->context, ctx->foreign_libraries[fi], (unsigned)strlen(ctx->foreign_libraries[fi])
+        );
+        LLVMAddNamedMetadataOperand(ctx->module, "llvm.dependent.libraries", lib_md);
+    }
+
+    // Phase 5: Generate entry point wrapper
+    ir_gen_entry_wrapper(ctx);
 
     return !ir_gen_error_collection_has_errors(&ctx->errors);
 }
