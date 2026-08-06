@@ -126,8 +126,6 @@ LLVMValueRef coerce_value_to_type(IrGenContext * ctx, LLVMValueRef value, LLVMTy
                                    bool src_is_unsigned, char const * name_hint);
 LLVMValueRef ir_gen_lvalue(IrGenContext * ctx, odin_grammar_node_t * node);
 LLVMValueRef ir_gen_lvalue_ptr(IrGenContext * ctx, odin_grammar_node_t * node);
-odin_grammar_node_t * expression_unwrap_to_identifier(odin_grammar_node_t * node);
-bool is_expression_wrapper_type(odin_grammar_node_type_t type);
 LLVMValueRef ir_gen_emit_bounds_check(IrGenContext * ctx, LLVMValueRef index_val,
                                       LLVMValueRef len_val, odin_grammar_node_t * node);
 LLVMValueRef ir_gen_map_subscript(IrGenContext * ctx, LLVMValueRef map_val,

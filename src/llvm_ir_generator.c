@@ -309,13 +309,7 @@ ir_gen_identifier(IrGenContext * ctx, odin_grammar_node_t * node)
         }
         // Don't load composite types — the pointer is needed for
         // GEP/subscript/member access
-        if (sym->value.type_info
-            && (sym->value.type_info->kind == TD_KIND_ARRAY || sym->value.type_info->kind == TD_KIND_SLICE
-                || sym->value.type_info->kind == TD_KIND_STRUCT || sym->value.type_info->kind == TD_KIND_SOA
-                || sym->value.type_info->kind == TD_KIND_DYNAMIC_ARRAY || sym->value.type_info->kind == TD_KIND_MAP
-                || sym->value.type_info->kind == TD_KIND_BIT_FIELD || sym->value.type_info->kind == TD_KIND_UNION
-                || sym->value.type_info->kind == TD_KIND_MAYBE || sym->value.type_info->kind == TD_KIND_MULTI_POINTER
-                || sym->value.type_info->kind == TD_KIND_VECTOR || sym->value.type_info->kind == TD_KIND_MATRIX))
+        if (is_composite_kind(sym->value.type_info))
         {
             return sym->value.value;
         }

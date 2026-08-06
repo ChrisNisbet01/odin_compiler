@@ -119,8 +119,17 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       its callers already hold non-const pointers — it contributed no casts).
       **246/246 tests pass.** Note: `sem_evaluate_expr.c` was also reformatted per
       `.clang-format` (editor format-on-save); no behavioural change.
-- [ ] A. `td_is_composite()` helper
-- [ ] B. Shared expression-wrapper unwrap helpers
+- [x] A. `is_composite_kind()` (12-kind identifier-loading list) + `is_pointer_valued_kind()`
+      (11-kind auto-load-exemption list) helpers in `type_descriptors.h`; replaced the
+      duplicated kind lists in `llvm_ir_generator.c:312` and `ir_gen_postfix.c:1822/1858`.
+      Kept two distinct helpers — the lists differ (MAYBE/VECTOR/MATRIX vs PROC/BIT_SET).
+- [x] B. Moved `is_expression_wrapper_type` + `expression_unwrap_to_identifier` from
+      `ir_gen_assign.c`/`llvm_ir_generator.h` into layer-neutral `ast_utils.c/h`; added
+      `expression_unwrap_chain()`. Replaced the duplicate wrapper-walk loops in
+      `sem_check.c` (both) and the inline loop in `ir_gen_postfix.c:1766`. The
+      `ir_gen_assign.c:717/1070/1243` loops were left as-is (different semantics:
+      single-step recursion / stop-at-postfix).
+      **246/246 tests pass.**
 - [ ] C. `type_is_*` dispatch table in `polymorphism.c`
 - [ ] C. Matrix intrinsic extraction in `ir_gen_postfix.c`
 - [ ] D. Named-boolean conditions

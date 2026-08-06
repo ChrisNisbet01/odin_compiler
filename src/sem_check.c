@@ -1,5 +1,6 @@
 #include "sem_check.h"
 
+#include "ast_utils.h"
 #include "sem_context.h"
 
 #include <stdio.h>
@@ -18,20 +19,7 @@ sem_can_implicitly_convert(
 
     if (expr_node != NULL)
     {
-        odin_grammar_node_t * inner = expr_node;
-        while (inner != NULL && inner->list.count > 0
-               && (inner->type == AST_NODE_EXPRESSION || inner->type == AST_NODE_ASSIGN_EXPRESSION
-                   || inner->type == AST_NODE_OR_ELSE || inner->type == AST_NODE_TERNARY_EXPRESSION
-                   || inner->type == AST_NODE_RANGE_EXPRESSION || inner->type == AST_NODE_LOG_OR_EXPRESSION
-                   || inner->type == AST_NODE_LOG_AND_EXPRESSION || inner->type == AST_NODE_COMP_EXPRESSION
-                   || inner->type == AST_NODE_BIT_OR_EXPRESSION || inner->type == AST_NODE_BIT_XOR_EXPRESSION
-                   || inner->type == AST_NODE_BIT_AND_EXPRESSION || inner->type == AST_NODE_SHIFT_EXPRESSION
-                   || inner->type == AST_NODE_ADD_EXPRESSION || inner->type == AST_NODE_MUL_EXPRESSION
-                   || inner->type == AST_NODE_UNARY_EXPRESSION || inner->type == AST_NODE_POSTFIX_EXPRESSION
-                   || inner->type == AST_NODE_PRIMARY_EXPRESSION))
-        {
-            inner = inner->list.children[0];
-        }
+        odin_grammar_node_t * inner = expression_unwrap_chain(expr_node);
         if (inner != NULL && inner->type == AST_NODE_INTEGER_VALUE
             && (is_integer_kind(to_type) || is_floating_kind(to_type)))
             return true;
@@ -70,13 +58,7 @@ sem_check_assignment(
         return;
     if (src_node != NULL)
     {
-        odin_grammar_node_t * inner = src_node;
-        while (inner != NULL && inner->list.count > 0
-               && (inner->type == AST_NODE_EXPRESSION || inner->type == AST_NODE_ASSIGN_EXPRESSION
-                   || inner->type == AST_NODE_PRIMARY_EXPRESSION))
-        {
-            inner = inner->list.children[0];
-        }
+        odin_grammar_node_t * inner = expression_unwrap_chain(src_node);
         if (inner != NULL && inner->type == AST_NODE_AUTO_CAST_EXPR)
             return;
     }

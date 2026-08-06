@@ -1762,9 +1762,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         // Handle 'context' keyword — unwraps through PrimaryExpression/Expression to ContextExpr
         if (cur_type == NULL)
         {
-            odin_grammar_node_t * inner = pe_child;
-            while (inner != NULL && is_expression_wrapper_type(inner->type) && inner->list.count > 0)
-                inner = inner->list.children[0];
+            odin_grammar_node_t * inner = expression_unwrap_chain(pe_child);
             if (inner != NULL && inner->type == AST_NODE_CONTEXT_EXPR)
             {
                 symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
@@ -1819,13 +1817,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
                     bool is_ptr_valued_basic
                         = (cur_type->kind == TD_KIND_BASIC
                            && LLVMGetTypeKind(cur_type->llvm_type) == LLVMPointerTypeKind);
-                    bool is_composite
-                        = (cur_type->kind == TD_KIND_STRUCT || cur_type->kind == TD_KIND_SOA
-                           || cur_type->kind == TD_KIND_ARRAY || cur_type->kind == TD_KIND_SLICE
-                           || cur_type->kind == TD_KIND_PROC || cur_type->kind == TD_KIND_DYNAMIC_ARRAY
-                           || cur_type->kind == TD_KIND_MAP || cur_type->kind == TD_KIND_BIT_FIELD
-                           || cur_type->kind == TD_KIND_BIT_SET || cur_type->kind == TD_KIND_UNION
-                           || cur_type->kind == TD_KIND_MULTI_POINTER);
+                    bool is_composite = is_pointer_valued_kind(cur_type);
                     if (!is_composite && !is_ptr_valued_basic)
                         val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "deref.preload");
                 }
@@ -1855,11 +1847,7 @@ ir_gen_postfix_expression(IrGenContext * ctx, odin_grammar_node_t * node)
         {
             bool is_ptr_valued_basic
                 = (cur_type->kind == TD_KIND_BASIC && LLVMGetTypeKind(cur_type->llvm_type) == LLVMPointerTypeKind);
-            if (cur_type->kind != TD_KIND_STRUCT && cur_type->kind != TD_KIND_SOA && cur_type->kind != TD_KIND_ARRAY
-                && cur_type->kind != TD_KIND_SLICE && cur_type->kind != TD_KIND_PROC
-                && cur_type->kind != TD_KIND_DYNAMIC_ARRAY && cur_type->kind != TD_KIND_MAP
-                && cur_type->kind != TD_KIND_BIT_FIELD && cur_type->kind != TD_KIND_BIT_SET
-                && cur_type->kind != TD_KIND_UNION && cur_type->kind != TD_KIND_MULTI_POINTER && !is_ptr_valued_basic)
+            if (!is_pointer_valued_kind(cur_type) && !is_ptr_valued_basic)
             {
                 val = LLVMBuildLoad2(ctx->builder, cur_type->llvm_type, val, "loadtmp");
             }

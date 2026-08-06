@@ -1846,6 +1846,34 @@ is_floating_kind(TypeDescriptor const * desc)
     return desc->as.basic.is_float;
 }
 
+// Composite types are stored behind an alloca pointer: code that resolves an
+// identifier (and similar) returns the pointer rather than loading the value so
+// that GEP, subscript and member access can operate on it.
+bool
+is_composite_kind(TypeDescriptor const * desc)
+{
+    if (desc == NULL)
+        return false;
+    return desc->kind == TD_KIND_ARRAY || desc->kind == TD_KIND_SLICE || desc->kind == TD_KIND_STRUCT
+           || desc->kind == TD_KIND_SOA || desc->kind == TD_KIND_DYNAMIC_ARRAY || desc->kind == TD_KIND_MAP
+           || desc->kind == TD_KIND_BIT_FIELD || desc->kind == TD_KIND_UNION || desc->kind == TD_KIND_MAYBE
+           || desc->kind == TD_KIND_MULTI_POINTER || desc->kind == TD_KIND_VECTOR || desc->kind == TD_KIND_MATRIX;
+}
+
+// Kinds whose rvalue after member/subscript access is pointer-shaped and must
+// NOT be auto-loaded (the pointer IS the value): proc values are function
+// pointers; the others live behind an address.
+bool
+is_pointer_valued_kind(TypeDescriptor const * desc)
+{
+    if (desc == NULL)
+        return false;
+    return desc->kind == TD_KIND_STRUCT || desc->kind == TD_KIND_SOA || desc->kind == TD_KIND_ARRAY
+           || desc->kind == TD_KIND_SLICE || desc->kind == TD_KIND_PROC || desc->kind == TD_KIND_DYNAMIC_ARRAY
+           || desc->kind == TD_KIND_MAP || desc->kind == TD_KIND_BIT_FIELD || desc->kind == TD_KIND_BIT_SET
+           || desc->kind == TD_KIND_UNION || desc->kind == TD_KIND_MULTI_POINTER;
+}
+
 int
 type_descriptor_find_struct_field_index(TypeDescriptor const * desc, char const * name)
 {

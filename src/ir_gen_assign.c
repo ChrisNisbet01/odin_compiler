@@ -28,56 +28,6 @@ static LLVMValueRef ir_gen_assign_store(
 
 // --- Assignment codegen ---
 
-// Recursively unwrap expression wrapper nodes to find the identifier child.
-// Wrapper nodes simply delegate to their first child.
-bool
-is_expression_wrapper_type(odin_grammar_node_type_t type)
-{
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch-enum"
-
-    switch (type)
-    {
-    case AST_NODE_EXPRESSION:
-    case AST_NODE_ASSIGN_EXPRESSION:
-    case AST_NODE_OR_ELSE:
-    case AST_NODE_TERNARY_EXPRESSION:
-    case AST_NODE_RANGE_EXPRESSION:
-    case AST_NODE_LOG_OR_EXPRESSION:
-    case AST_NODE_LOG_AND_EXPRESSION:
-    case AST_NODE_COMP_EXPRESSION:
-    case AST_NODE_BIT_OR_EXPRESSION:
-    case AST_NODE_BIT_XOR_EXPRESSION:
-    case AST_NODE_BIT_AND_EXPRESSION:
-    case AST_NODE_SHIFT_EXPRESSION:
-    case AST_NODE_ADD_EXPRESSION:
-    case AST_NODE_MUL_EXPRESSION:
-    case AST_NODE_UNARY_EXPRESSION:
-    case AST_NODE_POSTFIX_EXPRESSION:
-    case AST_NODE_PRIMARY_EXPRESSION:
-        return true;
-    default:
-        return false;
-    }
-
-#pragma GCC diagnostic pop
-}
-
-odin_grammar_node_t *
-expression_unwrap_to_identifier(odin_grammar_node_t * node)
-{
-    while (node != NULL && is_expression_wrapper_type(node->type))
-    {
-        if (node->list.count > 0)
-            node = node->list.children[0];
-        else
-            return NULL;
-    }
-    if (node != NULL && node->type == AST_NODE_IDENTIFIER)
-        return node;
-    return NULL;
-}
-
 // slice_bounds_info and slice_get_bounds_info moved to ir_gen_postfix.c
 
 static LLVMBasicBlockRef

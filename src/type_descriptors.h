@@ -320,6 +320,10 @@ bool is_integer_kind(TypeDescriptor const * desc);
 
 bool is_floating_kind(TypeDescriptor const * desc);
 
+bool is_composite_kind(TypeDescriptor const * desc);
+
+bool is_pointer_valued_kind(TypeDescriptor const * desc);
+
 int type_descriptor_find_struct_field_index(TypeDescriptor const * desc, char const * name);
 
 struct_field_t const * type_descriptor_get_struct_field(TypeDescriptor const * desc, int index);

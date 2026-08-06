@@ -65,6 +65,58 @@ expression_chain_unwrap(odin_grammar_node_t * node)
     return node;
 }
 
+// Recursively unwrap expression wrapper nodes to find the inner node.
+// Wrapper nodes simply delegate to their first child.
+bool
+is_expression_wrapper_type(odin_grammar_node_type_t type)
+{
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
+
+    switch (type)
+    {
+    case AST_NODE_EXPRESSION:
+    case AST_NODE_ASSIGN_EXPRESSION:
+    case AST_NODE_OR_ELSE:
+    case AST_NODE_TERNARY_EXPRESSION:
+    case AST_NODE_RANGE_EXPRESSION:
+    case AST_NODE_LOG_OR_EXPRESSION:
+    case AST_NODE_LOG_AND_EXPRESSION:
+    case AST_NODE_COMP_EXPRESSION:
+    case AST_NODE_BIT_OR_EXPRESSION:
+    case AST_NODE_BIT_XOR_EXPRESSION:
+    case AST_NODE_BIT_AND_EXPRESSION:
+    case AST_NODE_SHIFT_EXPRESSION:
+    case AST_NODE_ADD_EXPRESSION:
+    case AST_NODE_MUL_EXPRESSION:
+    case AST_NODE_UNARY_EXPRESSION:
+    case AST_NODE_POSTFIX_EXPRESSION:
+    case AST_NODE_PRIMARY_EXPRESSION:
+        return true;
+    default:
+        return false;
+    }
+
+#pragma GCC diagnostic pop
+}
+
+odin_grammar_node_t *
+expression_unwrap_chain(odin_grammar_node_t * node)
+{
+    while (node != NULL && is_expression_wrapper_type(node->type) && node->list.count > 0)
+        node = node->list.children[0];
+    return node;
+}
+
+odin_grammar_node_t *
+expression_unwrap_to_identifier(odin_grammar_node_t * node)
+{
+    node = expression_unwrap_chain(node);
+    if (node != NULL && node->type == AST_NODE_IDENTIFIER)
+        return node;
+    return NULL;
+}
+
 odin_grammar_node_t *
 node_find_op(odin_grammar_node_t * node)
 {
