@@ -128,7 +128,7 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
                             if (type_node == NULL)
                                 continue;
                             TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
-                            type_node->resolved_type = (TypeDescriptor *)td;
+                            type_node->resolved_type = td;
                             if (td)
                                 return_types[return_count++] = td;
                         }
@@ -161,7 +161,7 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
                             if (type_node == NULL)
                                 continue;
                             TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
-                            type_node->resolved_type = (TypeDescriptor *)td;
+                            type_node->resolved_type = td;
                             if (td)
                             {
                                 return_types[return_count] = td;
@@ -241,7 +241,7 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
                         pt = get_or_create_slice_type(ctx->type_registry, pt);
                         if (pt == NULL)
                             continue;
-                        type_node->resolved_type = (TypeDescriptor *)pt;
+                        type_node->resolved_type = pt;
                     }
 
                     // Register the type once per name (multi-name params consume
@@ -285,7 +285,7 @@ sem_resolve_proc_sig_type(SemContext * ctx, odin_grammar_node_t * node)
         free((void *)named_return_names);
     }
     if (proc_type)
-        node->resolved_type = (TypeDescriptor *)proc_type;
+        node->resolved_type = proc_type;
     return proc_type;
 
 }
@@ -305,7 +305,7 @@ sem_resolve_basic_or_type_name(SemContext * ctx, odin_grammar_node_t * node)
             td = sem_resolve_type_expr(ctx, node->list.children[i]);
             if (td != NULL)
             {
-                node->resolved_type = (TypeDescriptor *)td;
+                node->resolved_type = td;
                 return td;
             }
         }
@@ -403,7 +403,7 @@ sem_resolve_array_type(SemContext * ctx, odin_grammar_node_t * node)
 
     TypeDescriptor const * arr_type = get_or_create_array_type(ctx->type_registry, elem_type, count);
     if (arr_type)
-        node->resolved_type = (TypeDescriptor *)arr_type;
+        node->resolved_type = arr_type;
     return arr_type;
     
 }
@@ -431,7 +431,7 @@ sem_resolve_distinct_type(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     TypeDescriptor const * distinct_td = create_distinct_type(ctx->type_registry, base);
     if (distinct_td)
-        node->resolved_type = (TypeDescriptor *)distinct_td;
+        node->resolved_type = distinct_td;
     return distinct_td;
     
 }
@@ -460,7 +460,7 @@ sem_resolve_slice_type(SemContext * ctx, odin_grammar_node_t * node)
 
     TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, elem_type);
     if (slice_type)
-        node->resolved_type = (TypeDescriptor *)slice_type;
+        node->resolved_type = slice_type;
     return slice_type;
     
 }
@@ -489,7 +489,7 @@ sem_resolve_multi_pointer_type(SemContext * ctx, odin_grammar_node_t * node)
 
     TypeDescriptor const * mp_type = get_or_create_multi_pointer_type(ctx->type_registry, elem_type);
     if (mp_type)
-        node->resolved_type = (TypeDescriptor *)mp_type;
+        node->resolved_type = mp_type;
     return mp_type;
     
 }
@@ -517,7 +517,7 @@ sem_resolve_dynamic_array_type(SemContext * ctx, odin_grammar_node_t * node)
 
     TypeDescriptor const * da_type = get_or_create_dynamic_array_type(ctx->type_registry, elem_type);
     if (da_type)
-        node->resolved_type = (TypeDescriptor *)da_type;
+        node->resolved_type = da_type;
     return da_type;
     
 }
@@ -551,7 +551,7 @@ sem_resolve_map_type(SemContext * ctx, odin_grammar_node_t * node)
 
     TypeDescriptor const * map_type = get_or_create_map_type(ctx->type_registry, key_type, val_type);
     if (map_type)
-        node->resolved_type = (TypeDescriptor *)map_type;
+        node->resolved_type = map_type;
     return map_type;
     
 }
@@ -626,7 +626,7 @@ sem_resolve_bit_field_type(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * bf_type
         = get_or_create_bit_field_type(ctx->type_registry, fields, num_fields, total_bits);
     if (bf_type)
-        node->resolved_type = (TypeDescriptor *)bf_type;
+        node->resolved_type = bf_type;
     return bf_type;
     
 }
@@ -764,7 +764,7 @@ sem_resolve_bit_set_type(SemContext * ctx, odin_grammar_node_t * node)
 
             TypeDescriptor const * bs_type = get_or_create_bit_set_type(ctx->type_registry, backing_type, num_bits);
             if (bs_type)
-                node->resolved_type = (TypeDescriptor *)bs_type;
+                node->resolved_type = bs_type;
             return bs_type;
     
 }
@@ -809,6 +809,8 @@ sem_resolve_enum_type(SemContext * ctx, odin_grammar_node_t * node)
     // Allocate arrays to store enumerator names and values in the type descriptor
     // (only if not already set — get_or_create_enum_type deduplicates, so existing
     // enum types may already have arrays from a previous analysis pass)
+    // Cast is intentional: lazily caches enumerator data in the shared descriptor
+    // after its const registry handle has been handed out.
     TypeDescriptor * mutable_td = (TypeDescriptor *)enum_td;
     if (mutable_td->as.enum_type.enumerator_count == 0 && num_enumerators > 0)
     {
@@ -849,7 +851,7 @@ sem_resolve_enum_type(SemContext * ctx, odin_grammar_node_t * node)
             }
 
             odin_grammar_node_t * val_node = enumerator;
-            val_node->resolved_type = (TypeDescriptor *)enum_td;
+            val_node->resolved_type = enum_td;
 
             LLVMValueRef llvm_val = LLVMConstInt(llvm_int_type, (unsigned long long)next_value, false);
             TypedValue tv = create_typed_value(llvm_val, enum_td, false);
@@ -878,7 +880,7 @@ sem_resolve_enum_type(SemContext * ctx, odin_grammar_node_t * node)
     }
 
     if (enum_td)
-        node->resolved_type = (TypeDescriptor *)enum_td;
+        node->resolved_type = enum_td;
     return enum_td;
     
 }
@@ -1082,7 +1084,7 @@ sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
         free(members.fields);
 
         if (soa_td)
-            node->resolved_type = (TypeDescriptor *)soa_td;
+            node->resolved_type = soa_td;
         return soa_td;
     }
 
@@ -1109,6 +1111,8 @@ sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
     // Override struct alignment if user specified #align
     if (struct_td && struct_alignment > 0)
     {
+        // Cast is intentional: user #align overrides the computed alignment in the
+        // shared descriptor after its const registry handle has been handed out.
         TypeDescriptor * mutable_td = (TypeDescriptor *)struct_td;
         if (struct_alignment > mutable_td->struct_metadata.alignment)
             mutable_td->struct_metadata.alignment = struct_alignment;
@@ -1122,7 +1126,7 @@ sem_resolve_struct_type(SemContext * ctx, odin_grammar_node_t * node)
     free(members.fields);
 
     if (struct_td)
-        node->resolved_type = (TypeDescriptor *)struct_td;
+        node->resolved_type = struct_td;
     return struct_td;
     
 }
@@ -1200,7 +1204,7 @@ sem_resolve_union_type(SemContext * ctx, odin_grammar_node_t * node)
     free(members.fields);
 
     if (union_td)
-        node->resolved_type = (TypeDescriptor *)union_td;
+        node->resolved_type = union_td;
     return union_td;
     
 }
@@ -1270,7 +1274,7 @@ sem_resolve_soa_type(SemContext * ctx, odin_grammar_node_t * node)
         free(backing_members.fields);
 
         if (soa_td)
-            node->resolved_type = (TypeDescriptor *)soa_td;
+            node->resolved_type = soa_td;
         return soa_td;
     }
 
@@ -1368,7 +1372,7 @@ sem_resolve_soa_type(SemContext * ctx, odin_grammar_node_t * node)
     free(backing_members.fields);
 
     if (soa_td)
-        node->resolved_type = (TypeDescriptor *)soa_td;
+        node->resolved_type = soa_td;
     return soa_td;
     
 }
@@ -1397,7 +1401,7 @@ sem_resolve_maybe_type(SemContext * ctx, odin_grammar_node_t * node)
 
     TypeDescriptor const * maybe_type = get_or_create_maybe_type(ctx->type_registry, inner_type);
     if (maybe_type)
-        node->resolved_type = (TypeDescriptor *)maybe_type;
+        node->resolved_type = maybe_type;
     return maybe_type;
     
 }
@@ -1440,7 +1444,7 @@ sem_resolve_tuple_type(SemContext * ctx, odin_grammar_node_t * node)
     );
     free(elem_types);
     if (tuple_type)
-        node->resolved_type = (TypeDescriptor *)tuple_type;
+        node->resolved_type = tuple_type;
     return tuple_type;
     
 }
@@ -1478,7 +1482,7 @@ sem_resolve_vector_type(SemContext * ctx, odin_grammar_node_t * node)
         ctx->type_registry, elem_type, (int)lane_count
     );
     if (vec_type)
-        node->resolved_type = (TypeDescriptor *)vec_type;
+        node->resolved_type = vec_type;
     return vec_type;
     
 }
@@ -1557,7 +1561,7 @@ sem_resolve_matrix_type(SemContext * ctx, odin_grammar_node_t * node)
         ctx->type_registry, rows, columns, elem_type, is_row_major
     );
     if (mtx_type)
-        node->resolved_type = (TypeDescriptor *)mtx_type;
+        node->resolved_type = mtx_type;
     return mtx_type;
     
 }
@@ -1578,7 +1582,7 @@ sem_resolve_spec_type(SemContext * ctx, odin_grammar_node_t * node)
     {
         TypeDescriptor const * td = get_basic_type_by_name(ctx->type_registry, "typeid");
         if (td)
-            node->resolved_type = (TypeDescriptor *)td;
+            node->resolved_type = td;
         return td;
     }
     if (poly_ident->type != AST_NODE_POLY_IDENT)
@@ -1590,7 +1594,7 @@ sem_resolve_spec_type(SemContext * ctx, odin_grammar_node_t * node)
         name++;
     TypeDescriptor const * td = poly_env_lookup_type(ctx, name);
     if (td)
-        node->resolved_type = (TypeDescriptor *)td;
+        node->resolved_type = td;
     return td;
 }
 
@@ -1607,7 +1611,7 @@ sem_resolve_poly_ident_type(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * td = poly_env_lookup_type(ctx, lookup_name);
     if (td)
     {
-        node->resolved_type = (TypeDescriptor *)td;
+        node->resolved_type = td;
         return td;
     }
     return NULL;
@@ -1628,7 +1632,7 @@ sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * poly_type = poly_env_lookup_type(ctx, node->text);
         if (poly_type)
         {
-            node->resolved_type = (TypeDescriptor *)poly_type;
+            node->resolved_type = poly_type;
             return poly_type;
         }
     }
@@ -1637,21 +1641,21 @@ sem_resolve_type_identifier(SemContext * ctx, odin_grammar_node_t * node)
     symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), node->text);
     if (sym != NULL && sym->value.type_info != NULL)
     {
-        node->resolved_type = (TypeDescriptor *)sym->value.type_info;
+        node->resolved_type = sym->value.type_info;
         return sym->value.type_info;
     }
     // Fallback: check if this is a known built-in type name (e.g. i128, u128)
     TypeDescriptor const * bt = get_basic_type_by_name(ctx->type_registry, node->text);
     if (bt != NULL)
     {
-        node->resolved_type = (TypeDescriptor *)bt;
+        node->resolved_type = bt;
         return bt;
     }
     // Fallback: check for compiler-internal named types (Allocator, Context, etc.)
     TypeDescriptor const * named = type_descriptor_find_named_type(ctx->type_registry, node->text);
     if (named != NULL)
     {
-        node->resolved_type = (TypeDescriptor *)named;
+        node->resolved_type = named;
         return named;
     }
     return NULL;
@@ -1944,7 +1948,7 @@ sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node)
             // poly_env_pop won't run, so free the strdup'd names here
             for (int ai = 0; ai < env.count; ai++)
                 free((void *)env.entries[ai].name);
-            node->resolved_type = (TypeDescriptor *)e->result;
+            node->resolved_type = e->result;
             return e->result;
         }
     }
@@ -1977,7 +1981,7 @@ sem_resolve_type_application(SemContext * ctx, odin_grammar_node_t * node)
     }
 
     if (result != NULL)
-        node->resolved_type = (TypeDescriptor *)result;
+        node->resolved_type = result;
     return result;
 }
 
@@ -2005,7 +2009,7 @@ sem_resolve_qualified_type_name(SemContext * ctx, odin_grammar_node_t * node)
             symbol_t * sym = scope_find_symbol_entry(pkg->package_scope, type_node->text);
             if (sym != NULL && sym->value.type_info != NULL)
             {
-                type_node->resolved_type = (TypeDescriptor *)sym->value.type_info;
+                type_node->resolved_type = sym->value.type_info;
                 return sym->value.type_info;
             }
             break;

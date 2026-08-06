@@ -629,7 +629,7 @@ sem_resolve_procedure_signature(
                             if (tn == NULL)
                                 continue;
                             TypeDescriptor const * td = sem_resolve_type_expr(ctx, tn);
-                            tn->resolved_type = (TypeDescriptor *)td;
+                            tn->resolved_type = td;
                             if (td)
                                 return_types[return_count++] = td;
                         }
@@ -661,7 +661,7 @@ sem_resolve_procedure_signature(
                             if (type_node == NULL)
                                 continue;
                             TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
-                            type_node->resolved_type = (TypeDescriptor *)td;
+                            type_node->resolved_type = td;
                             if (td)
                             {
                                 return_types[return_count] = td;
@@ -740,7 +740,7 @@ sem_resolve_procedure_signature(
                 TypeDescriptor const * pt = sem_resolve_type_expr(ctx, param_type_node);
                 if (pt == NULL)
                     continue;
-                param_type_node->resolved_type = (TypeDescriptor *)pt;
+                param_type_node->resolved_type = pt;
 
                 // If this is a variadic .. parameter, wrap the type in a slice
                 bool is_variadic_param = false;
@@ -757,7 +757,7 @@ sem_resolve_procedure_signature(
                     pt = get_or_create_slice_type(ctx->type_registry, pt);
                     if (pt == NULL)
                         continue;
-                    param_type_node->resolved_type = (TypeDescriptor *)pt;
+                    param_type_node->resolved_type = pt;
                     is_variadic = true;
                 }
 
@@ -876,6 +876,8 @@ sem_resolve_procedure_signature(
     // Populate default parameter values in the proc type metadata
     if (proc_type != NULL && default_value_nodes != NULL && param_count > 0)
     {
+        // Cast is intentional: stores per-signature default-value AST nodes in the
+        // shared descriptor after its const registry handle has been handed out.
         TypeDescriptor * mutable_proc = (TypeDescriptor *)proc_type;
         for (int di = 0; di < param_count; di++)
         {
@@ -905,7 +907,7 @@ sem_resolve_procedure_signature(
     if (return_types && out_return_count == NULL)
         free((void *)return_types);
 
-    node->resolved_type = (TypeDescriptor *)proc_type;
+    node->resolved_type = proc_type;
     return proc_type;
 }
 
@@ -947,7 +949,7 @@ sem_analyse_procedure_literal(SemContext * ctx, odin_grammar_node_t * node, char
     TypeDescriptor const * proc_type = sem_resolve_procedure_signature(
         ctx, node, &param_types, &param_count, &return_type, &return_count, &cc, &is_variadic
     );
-    node->resolved_type = (TypeDescriptor *)proc_type;
+    node->resolved_type = proc_type;
 
     // Push a new scope, register parameters, analyse body
     generator_push_scope(ctx->gen_ctx);
@@ -1157,7 +1159,7 @@ sem_resolve_overload_bundle(SemContext * ctx, odin_grammar_node_t * value_node, 
     {
         resolved
             = get_or_create_overload_bundle_type(ctx->type_registry, candidate_types, candidate_symbols, valid_count);
-        value_node->resolved_type = (TypeDescriptor *)resolved;
+        value_node->resolved_type = resolved;
     }
     free(candidate_types);
     free(candidate_symbols);
@@ -1220,7 +1222,7 @@ sem_resolve_pending_bundles(SemContext * ctx, int start_index)
         // Back-fill the bundle symbol's type (registered earlier with NULL).
         symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
         if (sym)
-            sym->value.type_info = (TypeDescriptor *)resolved;
+            sym->value.type_info = resolved;
     }
     // Drop the entries we just resolved; they will not be revisited.
     ctx->pending_bundle_count = start_index;
@@ -1281,18 +1283,18 @@ sem_register_top_level_declaration(SemContext * ctx, odin_grammar_node_t * node)
     else if (value_node != NULL && is_type_node(value_node))
     {
         resolved_type = sem_resolve_type_expr(ctx, value_node);
-        value_node->resolved_type = (TypeDescriptor *)resolved_type;
+        value_node->resolved_type = resolved_type;
     }
     else if (value_node != NULL && value_node->type == AST_NODE_IDENTIFIER)
     {
         resolved_type = sem_resolve_type_expr(ctx, value_node);
-        value_node->resolved_type = (TypeDescriptor *)resolved_type;
+        value_node->resolved_type = resolved_type;
     }
 
     // Store resolved type on value_node for procedure definitions
     if (value_node != NULL && value_node->type == AST_NODE_PROCEDURE_DEFINITION)
     {
-        value_node->resolved_type = (TypeDescriptor *)resolved_type;
+        value_node->resolved_type = resolved_type;
     }
 
     if (name_node->type == AST_NODE_IDENTIFIER)
@@ -2316,7 +2318,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         {
             var_type = sem_resolve_type_expr(ctx, type_node);
             if (type_node)
-                type_node->resolved_type = (TypeDescriptor *)var_type;
+                type_node->resolved_type = var_type;
         }
 
         if (init_node)
@@ -2457,7 +2459,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
 
         if (var_type)
         {
-            node->resolved_type = (TypeDescriptor *)var_type;
+            node->resolved_type = var_type;
             if (id_count == 1)
             {
                 odin_grammar_node_t * name_node = id_list->list.children[0];
@@ -2554,7 +2556,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             TypeDescriptor const * td = sem_resolve_type_expr(ctx, value_node);
             if (td != NULL)
             {
-                value_node->resolved_type = (TypeDescriptor *)td;
+                value_node->resolved_type = td;
                 TypedValue tv = create_typed_value(NULL, td, false);
                 scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
                 symbol_t * s = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
@@ -2578,7 +2580,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             TypeDescriptor const * td = sem_resolve_type_expr(ctx, value_node);
             if (td != NULL)
             {
-                value_node->resolved_type = (TypeDescriptor *)td;
+                value_node->resolved_type = td;
                 TypedValue tv = create_typed_value(NULL, td, false);
                 scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
                 symbol_t * s = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
@@ -2602,7 +2604,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             TypeDescriptor const * td = sem_resolve_type_expr(ctx, value_node);
             if (td != NULL)
             {
-                value_node->resolved_type = (TypeDescriptor *)td;
+                value_node->resolved_type = td;
                 TypedValue tv = create_typed_value(NULL, td, false);
                 scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
                 symbol_t * s = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);
@@ -2653,7 +2655,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
                     TypeDescriptor const * bundle_type = get_or_create_overload_bundle_type(
                         ctx->type_registry, candidate_types, candidate_symbols, valid_count
                     );
-                    value_node->resolved_type = (TypeDescriptor *)bundle_type;
+                    value_node->resolved_type = bundle_type;
                 }
                 free(candidate_types);
                 free(candidate_symbols);
@@ -2665,7 +2667,7 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
             if (td != NULL)
             {
                 // Type alias: Handle :: int, Handle :: MyType
-                value_node->resolved_type = (TypeDescriptor *)td;
+                value_node->resolved_type = td;
                 TypedValue tv = create_typed_value(NULL, td, false);
                 scope_add_symbol(generator_current_scope(ctx->gen_ctx), name_node->text, tv);
                 symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name_node->text);

@@ -1,14 +1,13 @@
 #include "sem_evaluate_expr.h"
 
 #include "ast_utils.h"
-#include "scope.h"
-#include "symbols.h"
-#include "typed_value.h"
-
 #include "polymorphism.h"
+#include "scope.h"
 #include "sem_check.h"
 #include "sem_context.h"
 #include "sem_type_resolver.h"
+#include "symbols.h"
+#include "typed_value.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,7 +74,7 @@ static TypeDescriptor const * sem_evaluate_directive_expr(SemContext * ctx, odin
 
 // --- Dispatch table ---
 
-static TypeDescriptor const * (* const sem_evaluate_dispatch[])(SemContext *, odin_grammar_node_t *) = {
+static TypeDescriptor const * (*const sem_evaluate_dispatch[])(SemContext *, odin_grammar_node_t *) = {
     [AST_NODE_INTEGER_VALUE] = sem_evaluate_integer_value,
     [AST_NODE_FLOAT_VALUE] = sem_evaluate_float_value,
     [AST_NODE_STRING_LITERAL] = sem_evaluate_string_literal,
@@ -162,10 +161,9 @@ sem_evaluate_integer_value(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
     if (int_type)
     {
-        node->resolved_type = (TypeDescriptor *)int_type;
+        node->resolved_type = int_type;
     }
     return int_type;
-    
 }
 
 static TypeDescriptor const *
@@ -186,10 +184,9 @@ sem_evaluate_float_value(SemContext * ctx, odin_grammar_node_t * node)
         flt_type = get_basic_type_by_name(ctx->type_registry, "f64");
     if (flt_type)
     {
-        node->resolved_type = (TypeDescriptor *)flt_type;
+        node->resolved_type = flt_type;
     }
     return flt_type;
-    
 }
 
 static TypeDescriptor const *
@@ -199,10 +196,9 @@ sem_evaluate_string_literal(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * str_type = get_basic_type_by_name(ctx->type_registry, "string");
     if (str_type)
     {
-        node->resolved_type = (TypeDescriptor *)str_type;
+        node->resolved_type = str_type;
     }
     return str_type;
-    
 }
 
 static TypeDescriptor const *
@@ -212,10 +208,9 @@ sem_evaluate_rune_literal(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * rune_type = get_basic_type_by_name(ctx->type_registry, "rune");
     if (rune_type)
     {
-        node->resolved_type = (TypeDescriptor *)rune_type;
+        node->resolved_type = rune_type;
     }
     return rune_type;
-    
 }
 
 static TypeDescriptor const *
@@ -225,10 +220,9 @@ sem_evaluate_bool_value(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * bool_type = get_basic_type_by_name(ctx->type_registry, "bool");
     if (bool_type)
     {
-        node->resolved_type = (TypeDescriptor *)bool_type;
+        node->resolved_type = bool_type;
     }
     return bool_type;
-    
 }
 
 static TypeDescriptor const *
@@ -238,7 +232,6 @@ sem_evaluate_auto_cast_expr(SemContext * ctx, odin_grammar_node_t * node)
     if (node->list.count >= 1)
         sem_evaluate_expr(ctx, node->list.children[0]);
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -252,9 +245,8 @@ sem_evaluate_cast_expr(SemContext * ctx, odin_grammar_node_t * node)
         target_type = sem_resolve_type_expr(ctx, type_node);
     if (node->list.count >= 2)
         sem_evaluate_expr(ctx, node->list.children[1]);
-    node->resolved_type = (TypeDescriptor *)target_type;
+    node->resolved_type = target_type;
     return target_type;
-    
 }
 
 static TypeDescriptor const *
@@ -285,7 +277,8 @@ sem_evaluate_len_cap_expr(SemContext * ctx, odin_grammar_node_t * node)
     if (!valid)
     {
         sem_error_list_add(
-            &ctx->errors, NULL,
+            &ctx->errors,
+            NULL,
             node,
             node->type == AST_NODE_LEN_EXPR ? "invalid operand type for len" : "invalid operand type for cap"
         );
@@ -293,9 +286,8 @@ sem_evaluate_len_cap_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
 
     TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
-    node->resolved_type = (TypeDescriptor *)int_type;
+    node->resolved_type = int_type;
     return int_type;
-    
 }
 
 static TypeDescriptor const *
@@ -318,7 +310,7 @@ sem_evaluate_make_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
     sem_evaluate_expr(ctx, len_node);
-    
+
     // For maps: evaluate optional allocator argument (children[2])
     // For slices/DAs: children[2] is cap (optional), evaluate it
     if (node->list.count >= 3)
@@ -326,10 +318,9 @@ sem_evaluate_make_expr(SemContext * ctx, odin_grammar_node_t * node)
         odin_grammar_node_t * third_arg = node->list.children[2];
         sem_evaluate_expr(ctx, third_arg);
     }
-    
-    node->resolved_type = (TypeDescriptor *)td;
+
+    node->resolved_type = td;
     return td;
-    
 }
 
 static TypeDescriptor const *
@@ -346,9 +337,8 @@ sem_evaluate_new_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
     TypeDescriptor const * ptr_type = get_or_create_pointer_type(ctx->type_registry, td);
-    node->resolved_type = (TypeDescriptor *)ptr_type;
+    node->resolved_type = ptr_type;
     return ptr_type;
-    
 }
 
 static TypeDescriptor const *
@@ -360,7 +350,6 @@ sem_evaluate_delete_expr(SemContext * ctx, odin_grammar_node_t * node)
     sem_evaluate_expr(ctx, node->list.children[0]);
     node->resolved_type = NULL;
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -394,7 +383,7 @@ sem_evaluate_append_expr(SemContext * ctx, odin_grammar_node_t * node)
     {
         sem_evaluate_expr(ctx, node->list.children[i]);
     }
-    node->resolved_type = (TypeDescriptor *)arr_type;
+    node->resolved_type = arr_type;
     return arr_type;
 }
 
@@ -412,14 +401,12 @@ sem_evaluate_expand_values_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     if (inner_type->kind != TD_KIND_STRUCT && inner_type->kind != TD_KIND_ARRAY)
     {
-        sem_error_list_add(&ctx->errors, NULL, node,
-            "expand_values: argument must be a struct or array type");
+        sem_error_list_add(&ctx->errors, NULL, node, "expand_values: argument must be a struct or array type");
         node->resolved_type = NULL;
         return NULL;
     }
-    node->resolved_type = (TypeDescriptor *)inner_type;
+    node->resolved_type = inner_type;
     return inner_type;
-    
 }
 
 static TypeDescriptor const *
@@ -435,15 +422,13 @@ sem_evaluate_compress_values_expr(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, type_node);
     if (target_type == NULL)
     {
-        sem_error_list_add(&ctx->errors, NULL, node,
-            "compress_values: first argument must be a type");
+        sem_error_list_add(&ctx->errors, NULL, node, "compress_values: first argument must be a type");
         node->resolved_type = NULL;
         return NULL;
     }
     if (target_type->kind != TD_KIND_STRUCT && target_type->kind != TD_KIND_ARRAY)
     {
-        sem_error_list_add(&ctx->errors, NULL, node,
-            "compress_values: target type must be a struct or array");
+        sem_error_list_add(&ctx->errors, NULL, node, "compress_values: target type must be a struct or array");
         node->resolved_type = NULL;
         return NULL;
     }
@@ -456,9 +441,7 @@ sem_evaluate_compress_values_expr(SemContext * ctx, odin_grammar_node_t * node)
     if (actual_count != expected_count)
     {
         char buf[256];
-        snprintf(buf, sizeof(buf),
-            "compress_values: expected %d values but got %d",
-            expected_count, actual_count);
+        snprintf(buf, sizeof(buf), "compress_values: expected %d values but got %d", expected_count, actual_count);
         sem_error_list_add(&ctx->errors, NULL, node, buf);
         node->resolved_type = NULL;
         return NULL;
@@ -467,9 +450,8 @@ sem_evaluate_compress_values_expr(SemContext * ctx, odin_grammar_node_t * node)
     {
         sem_evaluate_expr(ctx, node->list.children[i]);
     }
-    node->resolved_type = (TypeDescriptor *)target_type;
+    node->resolved_type = target_type;
     return target_type;
-    
 }
 
 static TypeDescriptor const *
@@ -516,9 +498,8 @@ sem_evaluate_soa_zip_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     TypeDescriptor const * soa_type = get_or_create_soa_type(ctx->type_registry, &backing_members);
     free(backing_members.fields);
-    node->resolved_type = (TypeDescriptor *)soa_type;
+    node->resolved_type = soa_type;
     return soa_type;
-    
 }
 
 static TypeDescriptor const *
@@ -540,7 +521,9 @@ sem_evaluate_soa_unzip_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     if (arg_type->kind != TD_KIND_SOA)
     {
-        sem_error_list_add(&ctx->errors, NULL, node->list.children[0], "soa_unzip: argument must be an SOA struct type");
+        sem_error_list_add(
+            &ctx->errors, NULL, node->list.children[0], "soa_unzip: argument must be an SOA struct type"
+        );
         node->resolved_type = NULL;
         return NULL;
     }
@@ -553,9 +536,8 @@ sem_evaluate_soa_unzip_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     TypeDescriptor const * tuple_type = get_or_create_tuple_type(ctx->type_registry, elem_types, field_count);
     free(elem_types);
-    node->resolved_type = (TypeDescriptor *)tuple_type;
+    node->resolved_type = tuple_type;
     return tuple_type;
-    
 }
 
 // --- Poly struct type inference from struct literal field values ---
@@ -565,8 +547,8 @@ sem_evaluate_soa_unzip_expr(SemContext * ctx, odin_grammar_node_t * node)
 static TypeDescriptor const *
 sem_infer_poly_struct_type(
     SemContext * ctx,
-    odin_grammar_node_t * type_node,  // the bare Identifier (e.g. "Box")
-    odin_grammar_node_t * lit_node     // the StructLitExpr node
+    odin_grammar_node_t * type_node, // the bare Identifier (e.g. "Box")
+    odin_grammar_node_t * lit_node   // the StructLitExpr node
 )
 {
     symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), type_node->text);
@@ -634,8 +616,7 @@ sem_infer_poly_struct_type(
                 names[name_count++] = child;
             else if (is_type_node(child) || child->type == AST_NODE_DIRECTIVE)
             {
-                if (child->type == AST_NODE_DIRECTIVE && child->text
-                    && strcmp(child->text, "#align") == 0)
+                if (child->type == AST_NODE_DIRECTIVE && child->text && strcmp(child->text, "#align") == 0)
                 {
                     ci++; // skip #align's integer argument
                     continue;
@@ -670,8 +651,7 @@ sem_infer_poly_struct_type(
     odin_grammar_node_t * lit_fields = NULL;
     for (size_t i = 1; i < lit_node->list.count; i++)
     {
-        if (lit_node->list.children[i] != NULL
-            && lit_node->list.children[i]->type == AST_NODE_STRUCT_LIT_FIELDS)
+        if (lit_node->list.children[i] != NULL && lit_node->list.children[i]->type == AST_NODE_STRUCT_LIT_FIELDS)
         {
             lit_fields = lit_node->list.children[i];
             break;
@@ -745,12 +725,11 @@ sem_infer_poly_struct_type(
         {
             odin_grammar_node_t * child = param->list.children[ci];
             if (child != NULL && child->text
-                && (strcmp(child->text, "int") == 0 || strcmp(child->text, "i8") == 0
-                    || strcmp(child->text, "i16") == 0 || strcmp(child->text, "i32") == 0
-                    || strcmp(child->text, "i64") == 0 || strcmp(child->text, "i128") == 0
-                    || strcmp(child->text, "u8") == 0 || strcmp(child->text, "u16") == 0
-                    || strcmp(child->text, "u32") == 0 || strcmp(child->text, "u64") == 0
-                    || strcmp(child->text, "u128") == 0))
+                && (strcmp(child->text, "int") == 0 || strcmp(child->text, "i8") == 0 || strcmp(child->text, "i16") == 0
+                    || strcmp(child->text, "i32") == 0 || strcmp(child->text, "i64") == 0
+                    || strcmp(child->text, "i128") == 0 || strcmp(child->text, "u8") == 0
+                    || strcmp(child->text, "u16") == 0 || strcmp(child->text, "u32") == 0
+                    || strcmp(child->text, "u64") == 0 || strcmp(child->text, "u128") == 0))
             {
                 is_int_param = true;
                 break;
@@ -765,8 +744,7 @@ sem_infer_poly_struct_type(
             if (field_type_nodes[f] == NULL)
                 continue;
             // The field type must be a bare Identifier matching the param name
-            if (field_type_nodes[f]->type != AST_NODE_IDENTIFIER
-                || field_type_nodes[f]->text == NULL)
+            if (field_type_nodes[f]->type != AST_NODE_IDENTIFIER || field_type_nodes[f]->text == NULL)
                 continue;
             char const * ftype_text = field_type_nodes[f]->text;
             if (strcmp(ftype_text, pname) != 0)
@@ -775,8 +753,7 @@ sem_infer_poly_struct_type(
             // Find the matching literal field value
             for (int v = 0; v < lit_field_count; v++)
             {
-                if (strcmp(lit_field_names[v], field_names[f]) == 0
-                    && lit_field_types[v] != NULL)
+                if (strcmp(lit_field_names[v], field_names[f]) == 0 && lit_field_types[v] != NULL)
                 {
                     // Bind the poly param to this value's type
                     if (env.count < 16)
@@ -810,7 +787,7 @@ sem_infer_poly_struct_type(
     // However, LLVM struct types are deduplicated by layout, so the llvm_type will match.
 
     if (result != NULL)
-        type_node->resolved_type = (TypeDescriptor *)result;
+        type_node->resolved_type = result;
     return result;
 }
 
@@ -837,9 +814,7 @@ sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
     // structs, poly struct template lookups, and TypeApplication
     // instantiation, e.g. Box(int)).
     TypeDescriptor const * struct_type = sem_resolve_type_expr(ctx, type_node);
-    if (struct_type == NULL
-        && type_node->type == AST_NODE_IDENTIFIER
-        && type_node->text != NULL)
+    if (struct_type == NULL && type_node->type == AST_NODE_IDENTIFIER && type_node->text != NULL)
     {
         // Fallback: poly struct type inference from field values.
         // e.g. `b := Box{val=42}` infers T=int (Box is polymorphic,
@@ -848,16 +823,16 @@ sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     if (struct_type == NULL)
     {
-        sem_error_list_add(&ctx->errors, ctx->source_file_path, type_node,
-            "struct literal: could not resolve struct type");
+        sem_error_list_add(
+            &ctx->errors, ctx->source_file_path, type_node, "struct literal: could not resolve struct type"
+        );
         node->resolved_type = NULL;
         return NULL;
     }
     if (struct_type->kind != TD_KIND_STRUCT)
     {
         char buf[256];
-        snprintf(buf, sizeof(buf),
-            "struct literal: type is not a struct (got kind %d)", struct_type->kind);
+        snprintf(buf, sizeof(buf), "struct literal: type is not a struct (got kind %d)", struct_type->kind);
         sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
         node->resolved_type = NULL;
         return NULL;
@@ -867,8 +842,7 @@ sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
     odin_grammar_node_t * fields_node = NULL;
     for (size_t i = 1; i < node->list.count; i++)
     {
-        if (node->list.children[i] != NULL
-            && node->list.children[i]->type == AST_NODE_STRUCT_LIT_FIELDS)
+        if (node->list.children[i] != NULL && node->list.children[i]->type == AST_NODE_STRUCT_LIT_FIELDS)
         {
             fields_node = node->list.children[i];
             break;
@@ -898,8 +872,7 @@ sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
             }
             if (name_node == NULL || name_node->text == NULL)
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, field,
-                    "struct literal: field is missing name");
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, field, "struct literal: field is missing name");
                 node->resolved_type = NULL;
                 return NULL;
             }
@@ -907,8 +880,7 @@ sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
             if (field_idx < 0)
             {
                 char buf[256];
-                snprintf(buf, sizeof(buf),
-                    "struct literal: struct has no field '%s'", name_node->text);
+                snprintf(buf, sizeof(buf), "struct literal: struct has no field '%s'", name_node->text);
                 sem_error_list_add(&ctx->errors, ctx->source_file_path, name_node, buf);
                 node->resolved_type = NULL;
                 return NULL;
@@ -922,7 +894,7 @@ sem_evaluate_struct_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-    node->resolved_type = (TypeDescriptor *)struct_type;
+    node->resolved_type = struct_type;
     return struct_type;
 }
 
@@ -949,15 +921,15 @@ sem_evaluate_array_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * array_type = sem_resolve_type_expr(ctx, type_node);
     if (array_type == NULL)
     {
-        sem_error_list_add(&ctx->errors, ctx->source_file_path, type_node,
-            "array literal: could not resolve array type");
+        sem_error_list_add(
+            &ctx->errors, ctx->source_file_path, type_node, "array literal: could not resolve array type"
+        );
         node->resolved_type = NULL;
         return NULL;
     }
     if (array_type->kind != TD_KIND_ARRAY)
     {
-        sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
-            "array literal: type is not an array");
+        sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "array literal: type is not an array");
         node->resolved_type = NULL;
         return NULL;
     }
@@ -966,8 +938,7 @@ sem_evaluate_array_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
     odin_grammar_node_t * elements_node = NULL;
     for (size_t i = 1; i < node->list.count; i++)
     {
-        if (node->list.children[i] != NULL
-            && node->list.children[i]->type == AST_NODE_ARRAY_LIT_ELEMENTS)
+        if (node->list.children[i] != NULL && node->list.children[i]->type == AST_NODE_ARRAY_LIT_ELEMENTS)
         {
             elements_node = node->list.children[i];
             break;
@@ -985,7 +956,7 @@ sem_evaluate_array_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-    node->resolved_type = (TypeDescriptor *)array_type;
+    node->resolved_type = array_type;
     return array_type;
 }
 
@@ -1012,15 +983,15 @@ sem_evaluate_matrix_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * mtx_type = sem_resolve_type_expr(ctx, type_node);
     if (mtx_type == NULL)
     {
-        sem_error_list_add(&ctx->errors, ctx->source_file_path, type_node,
-            "matrix literal: could not resolve matrix type");
+        sem_error_list_add(
+            &ctx->errors, ctx->source_file_path, type_node, "matrix literal: could not resolve matrix type"
+        );
         node->resolved_type = NULL;
         return NULL;
     }
     if (mtx_type->kind != TD_KIND_MATRIX)
     {
-        sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
-            "matrix literal: type is not a matrix");
+        sem_error_list_add(&ctx->errors, ctx->source_file_path, node, "matrix literal: type is not a matrix");
         node->resolved_type = NULL;
         return NULL;
     }
@@ -1033,8 +1004,7 @@ sem_evaluate_matrix_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
     odin_grammar_node_t * elements_node = NULL;
     for (size_t i = 1; i < node->list.count; i++)
     {
-        if (node->list.children[i] != NULL
-            && node->list.children[i]->type == AST_NODE_MATRIX_LIT_ELEMENTS)
+        if (node->list.children[i] != NULL && node->list.children[i]->type == AST_NODE_MATRIX_LIT_ELEMENTS)
         {
             elements_node = node->list.children[i];
             break;
@@ -1047,8 +1017,15 @@ sem_evaluate_matrix_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
         if ((long long)elements_node->list.count != expected_count)
         {
             char buf[256];
-            snprintf(buf, sizeof(buf), "matrix literal: expected %lld elements (%lldx%lld matrix), got %zu",
-                     expected_count, rows, cols, elements_node->list.count);
+            snprintf(
+                buf,
+                sizeof(buf),
+                "matrix literal: expected %lld elements (%lldx%lld matrix), got %zu",
+                expected_count,
+                rows,
+                cols,
+                elements_node->list.count
+            );
             sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
             node->resolved_type = NULL;
             return NULL;
@@ -1063,7 +1040,7 @@ sem_evaluate_matrix_lit_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-    node->resolved_type = (TypeDescriptor *)mtx_type;
+    node->resolved_type = mtx_type;
     return mtx_type;
 }
 
@@ -1118,7 +1095,6 @@ sem_evaluate_incl_excl_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     node->resolved_type = NULL;
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -1136,8 +1112,7 @@ sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * nod
     odin_grammar_node_t * fields_node = NULL;
     for (size_t i = 0; i < node->list.count; i++)
     {
-        if (node->list.children[i] != NULL
-            && node->list.children[i]->type == AST_NODE_QUATERNION_FIELDS)
+        if (node->list.children[i] != NULL && node->list.children[i]->type == AST_NODE_QUATERNION_FIELDS)
         {
             fields_node = node->list.children[i];
             break;
@@ -1167,22 +1142,30 @@ sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * nod
             }
             if (name_node == NULL || name_node->text == NULL || value_expr == NULL)
             {
-                sem_error_list_add(&ctx->errors, NULL, field,
-                    "complex/quaternion: named argument is missing a name or value");
+                sem_error_list_add(
+                    &ctx->errors, NULL, field, "complex/quaternion: named argument is missing a name or value"
+                );
                 node->resolved_type = NULL;
                 return NULL;
             }
             int field_index = -1;
-            if (strcmp(name_node->text, "w") == 0) field_index = 0;
-            else if (strcmp(name_node->text, "x") == 0) field_index = 1;
-            else if (strcmp(name_node->text, "y") == 0) field_index = 2;
-            else if (strcmp(name_node->text, "z") == 0) field_index = 3;
+            if (strcmp(name_node->text, "w") == 0)
+                field_index = 0;
+            else if (strcmp(name_node->text, "x") == 0)
+                field_index = 1;
+            else if (strcmp(name_node->text, "y") == 0)
+                field_index = 2;
+            else if (strcmp(name_node->text, "z") == 0)
+                field_index = 3;
             if (field_index < 0)
             {
                 char buf[256];
-                snprintf(buf, sizeof(buf),
+                snprintf(
+                    buf,
+                    sizeof(buf),
                     "complex/quaternion: invalid component name '%s' (expected w, x, y, or z)",
-                    name_node->text);
+                    name_node->text
+                );
                 sem_error_list_add(&ctx->errors, NULL, name_node, buf);
                 node->resolved_type = NULL;
                 return NULL;
@@ -1223,8 +1206,7 @@ sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * nod
             node->resolved_type = NULL;
             return NULL;
         }
-        if (arg->llvm_type == LLVMHalfTypeInContext(llvm_ctx)
-            || arg->llvm_type == LLVMFloatTypeInContext(llvm_ctx)
+        if (arg->llvm_type == LLVMHalfTypeInContext(llvm_ctx) || arg->llvm_type == LLVMFloatTypeInContext(llvm_ctx)
             || arg->llvm_type == LLVMDoubleTypeInContext(llvm_ctx))
         {
             if (component_type == NULL)
@@ -1233,8 +1215,12 @@ sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * nod
             }
             else if (component_type->llvm_type != arg->llvm_type)
             {
-                sem_error_list_add(&ctx->errors, NULL, value_exprs[i],
-                    "complex/quaternion: all float arguments must have the same type");
+                sem_error_list_add(
+                    &ctx->errors,
+                    NULL,
+                    value_exprs[i],
+                    "complex/quaternion: all float arguments must have the same type"
+                );
                 node->resolved_type = NULL;
                 return NULL;
             }
@@ -1245,8 +1231,12 @@ sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * nod
         }
         else
         {
-            sem_error_list_add(&ctx->errors, NULL, value_exprs[i],
-                "complex/quaternion: arguments must be f16, f32, f64, or integer types");
+            sem_error_list_add(
+                &ctx->errors,
+                NULL,
+                value_exprs[i],
+                "complex/quaternion: arguments must be f16, f32, f64, or integer types"
+            );
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1256,8 +1246,9 @@ sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * nod
     {
         if (!saw_integer)
         {
-            sem_error_list_add(&ctx->errors, NULL, node,
-                "complex/quaternion: arguments must be f16, f32, f64, or integer types");
+            sem_error_list_add(
+                &ctx->errors, NULL, node, "complex/quaternion: arguments must be f16, f32, f64, or integer types"
+            );
             node->resolved_type = NULL;
             return NULL;
         }
@@ -1273,15 +1264,13 @@ sem_evaluate_complex_quaternion_expr(SemContext * ctx, odin_grammar_node_t * nod
         target_name = is_complex ? "complex128" : "quaternion256";
     else
     {
-        sem_error_list_add(&ctx->errors, NULL, node,
-            "complex/quaternion: arguments must be f16, f32, or f64");
+        sem_error_list_add(&ctx->errors, NULL, node, "complex/quaternion: arguments must be f16, f32, or f64");
         node->resolved_type = NULL;
         return NULL;
     }
     TypeDescriptor const * result_type = get_basic_type_by_name(ctx->type_registry, target_name);
-    node->resolved_type = (TypeDescriptor *)result_type;
+    node->resolved_type = result_type;
     return result_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1301,11 +1290,10 @@ sem_evaluate_size_align_of_expr(SemContext * ctx, odin_grammar_node_t * node)
         node->resolved_type = NULL;
         return NULL;
     }
-    type_node->resolved_type = (TypeDescriptor *)td;
+    type_node->resolved_type = td;
     TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
-    node->resolved_type = (TypeDescriptor *)int_type;
+    node->resolved_type = int_type;
     return int_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1326,7 +1314,7 @@ sem_evaluate_offset_of_expr(SemContext * ctx, odin_grammar_node_t * node)
         node->resolved_type = NULL;
         return NULL;
     }
-    type_node->resolved_type = (TypeDescriptor *)td;
+    type_node->resolved_type = td;
     if (td->kind != TD_KIND_STRUCT && td->kind != TD_KIND_SOA && td->kind != TD_KIND_UNION)
     {
         sem_error_list_add(&ctx->errors, NULL, node, "offset_of requires a struct, SOA, or union type");
@@ -1335,9 +1323,8 @@ sem_evaluate_offset_of_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     (void)field_node;
     TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
-    node->resolved_type = (TypeDescriptor *)int_type;
+    node->resolved_type = int_type;
     return int_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1359,8 +1346,10 @@ sem_evaluate_raw_data_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     if (operand_type->kind != TD_KIND_SLICE && operand_type->kind != TD_KIND_ARRAY
         && operand_type->kind != TD_KIND_DYNAMIC_ARRAY
-        && !(operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name != NULL
-             && strcmp(operand_type->as.basic.name, "string") == 0))
+        && !(
+            operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name != NULL
+            && strcmp(operand_type->as.basic.name, "string") == 0
+        ))
     {
         sem_error_list_add(&ctx->errors, NULL, node, "raw_data requires a slice, array, dynamic array, or string");
         node->resolved_type = NULL;
@@ -1374,9 +1363,8 @@ sem_evaluate_raw_data_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
     TypeDescriptor const * ptr_type = get_or_create_pointer_type(ctx->type_registry, elem_type);
-    node->resolved_type = (TypeDescriptor *)ptr_type;
+    node->resolved_type = ptr_type;
     return ptr_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1393,16 +1381,15 @@ sem_evaluate_type_of_expr(SemContext * ctx, odin_grammar_node_t * node)
     {
         TypeDescriptor const * td = sem_resolve_type_expr(ctx, operand);
         if (td)
-            operand->resolved_type = (TypeDescriptor *)td;
+            operand->resolved_type = td;
     }
     else
     {
         sem_evaluate_expr(ctx, operand);
     }
     TypeDescriptor const * typeid_type = get_basic_type_by_name(ctx->type_registry, "typeid");
-    node->resolved_type = (TypeDescriptor *)typeid_type;
+    node->resolved_type = typeid_type;
     return typeid_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1421,11 +1408,10 @@ sem_evaluate_typeid_of_expr(SemContext * ctx, odin_grammar_node_t * node)
         node->resolved_type = NULL;
         return NULL;
     }
-    operand->resolved_type = (TypeDescriptor *)td;
+    operand->resolved_type = td;
     TypeDescriptor const * typeid_type = get_basic_type_by_name(ctx->type_registry, "typeid");
-    node->resolved_type = (TypeDescriptor *)typeid_type;
+    node->resolved_type = typeid_type;
     return typeid_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1444,11 +1430,10 @@ sem_evaluate_type_info_of_expr(SemContext * ctx, odin_grammar_node_t * node)
         node->resolved_type = NULL;
         return NULL;
     }
-    operand->resolved_type = (TypeDescriptor *)td;
+    operand->resolved_type = td;
     TypeDescriptor const * ti_ptr = type_descriptor_get_type_info_ptr_type(ctx->type_registry);
-    node->resolved_type = (TypeDescriptor *)ti_ptr;
+    node->resolved_type = ti_ptr;
     return ti_ptr;
-    
 }
 
 static TypeDescriptor const *
@@ -1476,9 +1461,8 @@ sem_evaluate_min_max_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     }
     TypeDescriptor const * int_type = get_basic_type_by_name(ctx->type_registry, "int");
-    node->resolved_type = (TypeDescriptor *)int_type;
+    node->resolved_type = int_type;
     return int_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1486,9 +1470,8 @@ sem_evaluate_distinct_type(SemContext * ctx, odin_grammar_node_t * node)
 {
 
     TypeDescriptor const * td = sem_resolve_type_expr(ctx, node);
-    node->resolved_type = (TypeDescriptor *)td;
+    node->resolved_type = td;
     return td;
-    
 }
 
 static TypeDescriptor const *
@@ -1497,7 +1480,6 @@ sem_evaluate_nil(SemContext * ctx, odin_grammar_node_t * node)
 
     node->resolved_type = NULL;
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -1509,14 +1491,13 @@ sem_evaluate_directive(SemContext * ctx, odin_grammar_node_t * node)
         TypeDescriptor const * sl_type = type_descriptor_get_source_location_type(ctx->type_registry);
         if (sl_type != NULL)
         {
-            node->resolved_type = (TypeDescriptor *)sl_type;
+            node->resolved_type = sl_type;
             return sl_type;
         }
         sem_error_list_add(&ctx->errors, NULL, node, "#caller_location: Source_Location type not available");
         return NULL;
     }
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -1528,7 +1509,7 @@ sem_evaluate_directive_expr(SemContext * ctx, odin_grammar_node_t * node)
         return NULL;
     odin_grammar_node_t * operand = node->list.children[1];
     TypeDescriptor const * t = sem_evaluate_expr(ctx, operand);
-    node->resolved_type = (TypeDescriptor *)t;
+    node->resolved_type = t;
     return t;
 }
 
@@ -1540,12 +1521,11 @@ sem_evaluate_context_expr(SemContext * ctx, odin_grammar_node_t * node)
     if (sym)
     {
         node->resolved_symbol = sym;
-        node->resolved_type = (TypeDescriptor *)sym->value.type_info;
+        node->resolved_type = sym->value.type_info;
         return sym->value.type_info;
     }
     sem_error_list_add(&ctx->errors, NULL, node, "'context' used outside of a procedure scope");
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -1559,14 +1539,13 @@ sem_evaluate_identifier(SemContext * ctx, odin_grammar_node_t * node)
     if (sym)
     {
         node->resolved_symbol = sym;
-        node->resolved_type = (TypeDescriptor *)sym->value.type_info;
+        node->resolved_type = sym->value.type_info;
         return sym->value.type_info;
     }
     char buf[256];
     snprintf(buf, sizeof(buf), "undeclared identifier: '%s'", node->text ? node->text : "?");
     sem_error_list_add(&ctx->errors, NULL, node, buf);
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -1596,13 +1575,12 @@ sem_evaluate_unary_expr(SemContext * ctx, odin_grammar_node_t * node)
         if (op_md->kind == OP_UNARY_ADDR)
         {
             TypeDescriptor const * ptr_type = get_or_create_pointer_type(ctx->type_registry, operand_type);
-            node->resolved_type = (TypeDescriptor *)ptr_type;
+            node->resolved_type = ptr_type;
             return ptr_type;
         }
     }
-    node->resolved_type = (TypeDescriptor *)operand_type;
+    node->resolved_type = operand_type;
     return operand_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1616,7 +1594,7 @@ sem_evaluate_range_expr(SemContext * ctx, odin_grammar_node_t * node)
     if (!is_integer_kind(left_type) || !is_integer_kind(right_type))
     {
         sem_error_list_add(&ctx->errors, NULL, node, "Range expression requires integer operands");
-        node->resolved_type = (TypeDescriptor *)left_type;
+        node->resolved_type = left_type;
         return left_type;
     }
     odin_grammar_node_t * op_node = node_find_child(node, AST_NODE_RANGE_OP);
@@ -1624,9 +1602,8 @@ sem_evaluate_range_expr(SemContext * ctx, odin_grammar_node_t * node)
     if (op_node && op_node->text)
         is_inclusive = (strcmp(op_node->text, "..") == 0);
     TypeDescriptor const * range_type = get_or_create_range_type(ctx->type_registry, is_inclusive);
-    node->resolved_type = (TypeDescriptor *)range_type;
+    node->resolved_type = range_type;
     return range_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1642,31 +1619,36 @@ sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
         AstOpMetadata * op_md = (AstOpMetadata *)op_node->metadata;
         if (op_md == NULL)
         {
-            node->resolved_type = (TypeDescriptor *)left_type;
+            node->resolved_type = left_type;
             return left_type;
         }
 
         // Matrix × Matrix (standard matrix multiplication)
-        if (op_md->kind == OP_MUL
-            && left_type && left_type->kind == TD_KIND_MATRIX
-            && right_type && right_type->kind == TD_KIND_MATRIX)
+        if (op_md->kind == OP_MUL && left_type && left_type->kind == TD_KIND_MATRIX && right_type
+            && right_type->kind == TD_KIND_MATRIX)
         {
             if (left_type->as.matrix.columns != right_type->as.matrix.rows)
             {
                 char buf[256];
-                snprintf(buf, sizeof(buf),
+                snprintf(
+                    buf,
+                    sizeof(buf),
                     "matrix multiplication dimension mismatch: cannot multiply matrix[%lld,%lld] by matrix[%lld,%lld]",
-                    (long long)left_type->as.matrix.rows, (long long)left_type->as.matrix.columns,
-                    (long long)right_type->as.matrix.rows, (long long)right_type->as.matrix.columns);
+                    (long long)left_type->as.matrix.rows,
+                    (long long)left_type->as.matrix.columns,
+                    (long long)right_type->as.matrix.rows,
+                    (long long)right_type->as.matrix.columns
+                );
                 sem_error_list_add(&ctx->errors, ctx->source_file_path, op_node, buf);
-                node->resolved_type = (TypeDescriptor *)left_type;
+                node->resolved_type = left_type;
                 return left_type;
             }
             if (left_type->as.matrix.element_type != right_type->as.matrix.element_type)
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
-                    "matrix multiplication element type mismatch");
-                node->resolved_type = (TypeDescriptor *)left_type;
+                sem_error_list_add(
+                    &ctx->errors, ctx->source_file_path, node, "matrix multiplication element type mismatch"
+                );
+                node->resolved_type = left_type;
                 return left_type;
             }
             TypeDescriptor const * result_type = get_or_create_matrix_type(
@@ -1676,71 +1658,75 @@ sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
                 left_type->as.matrix.element_type,
                 left_type->as.matrix.is_row_major
             );
-            node->resolved_type = (TypeDescriptor *)result_type;
+            node->resolved_type = result_type;
             return result_type;
         }
 
         // Matrix × Vector (matrix-vector multiplication)
-        if (op_md->kind == OP_MUL
-            && left_type && left_type->kind == TD_KIND_MATRIX
-            && right_type && right_type->kind == TD_KIND_ARRAY)
+        if (op_md->kind == OP_MUL && left_type && left_type->kind == TD_KIND_MATRIX && right_type
+            && right_type->kind == TD_KIND_ARRAY)
         {
             if (left_type->as.matrix.columns != (int64_t)right_type->as.array.count)
             {
                 char buf[256];
-                snprintf(buf, sizeof(buf),
+                snprintf(
+                    buf,
+                    sizeof(buf),
                     "matrix-vector multiplication dimension mismatch: cannot multiply matrix[%lld,%lld] by vector[%zu]",
-                    (long long)left_type->as.matrix.rows, (long long)left_type->as.matrix.columns,
-                    right_type->as.array.count);
+                    (long long)left_type->as.matrix.rows,
+                    (long long)left_type->as.matrix.columns,
+                    right_type->as.array.count
+                );
                 sem_error_list_add(&ctx->errors, ctx->source_file_path, op_node, buf);
-                node->resolved_type = (TypeDescriptor *)left_type;
+                node->resolved_type = left_type;
                 return left_type;
             }
             if (left_type->as.matrix.element_type != right_type->element_type)
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
-                    "matrix-vector multiplication element type mismatch");
-                node->resolved_type = (TypeDescriptor *)left_type;
+                sem_error_list_add(
+                    &ctx->errors, ctx->source_file_path, node, "matrix-vector multiplication element type mismatch"
+                );
+                node->resolved_type = left_type;
                 return left_type;
             }
             TypeDescriptor const * result_type = get_or_create_array_type(
-                ctx->type_registry,
-                left_type->as.matrix.element_type,
-                (size_t)left_type->as.matrix.rows
+                ctx->type_registry, left_type->as.matrix.element_type, (size_t)left_type->as.matrix.rows
             );
-            node->resolved_type = (TypeDescriptor *)result_type;
+            node->resolved_type = result_type;
             return result_type;
         }
 
         // Vector × Matrix (vector-matrix multiplication)
-        if (op_md->kind == OP_MUL
-            && left_type && left_type->kind == TD_KIND_ARRAY
-            && right_type && right_type->kind == TD_KIND_MATRIX)
+        if (op_md->kind == OP_MUL && left_type && left_type->kind == TD_KIND_ARRAY && right_type
+            && right_type->kind == TD_KIND_MATRIX)
         {
             if ((int64_t)left_type->as.array.count != right_type->as.matrix.rows)
             {
                 char buf[256];
-                snprintf(buf, sizeof(buf),
+                snprintf(
+                    buf,
+                    sizeof(buf),
                     "vector-matrix multiplication dimension mismatch: cannot multiply vector[%zu] by matrix[%lld,%lld]",
                     left_type->as.array.count,
-                    (long long)right_type->as.matrix.rows, (long long)right_type->as.matrix.columns);
+                    (long long)right_type->as.matrix.rows,
+                    (long long)right_type->as.matrix.columns
+                );
                 sem_error_list_add(&ctx->errors, ctx->source_file_path, op_node, buf);
-                node->resolved_type = (TypeDescriptor *)right_type;
+                node->resolved_type = right_type;
                 return right_type;
             }
             if (left_type->element_type != right_type->as.matrix.element_type)
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
-                    "vector-matrix multiplication element type mismatch");
-                node->resolved_type = (TypeDescriptor *)right_type;
+                sem_error_list_add(
+                    &ctx->errors, ctx->source_file_path, node, "vector-matrix multiplication element type mismatch"
+                );
+                node->resolved_type = right_type;
                 return right_type;
             }
             TypeDescriptor const * result_type = get_or_create_array_type(
-                ctx->type_registry,
-                right_type->as.matrix.element_type,
-                (size_t)right_type->as.matrix.columns
+                ctx->type_registry, right_type->as.matrix.element_type, (size_t)right_type->as.matrix.columns
             );
-            node->resolved_type = (TypeDescriptor *)result_type;
+            node->resolved_type = result_type;
             return result_type;
         }
 
@@ -1751,56 +1737,61 @@ sem_evaluate_binary_arith_expr(SemContext * ctx, odin_grammar_node_t * node)
             bool right_scalar = right_type && (is_integer_kind(right_type) || is_floating_kind(right_type));
             if (left_type && left_type->kind == TD_KIND_MATRIX && right_scalar)
             {
-                node->resolved_type = (TypeDescriptor *)left_type;
+                node->resolved_type = left_type;
                 return left_type;
             }
             if (right_type && right_type->kind == TD_KIND_MATRIX && left_scalar)
             {
-                node->resolved_type = (TypeDescriptor *)right_type;
+                node->resolved_type = right_type;
                 return right_type;
             }
         }
 
         // Matrix + Matrix, Matrix - Matrix (element-wise)
-        if ((op_md->kind == OP_ADD || op_md->kind == OP_SUB)
-            && left_type && left_type->kind == TD_KIND_MATRIX
+        if ((op_md->kind == OP_ADD || op_md->kind == OP_SUB) && left_type && left_type->kind == TD_KIND_MATRIX
             && right_type && right_type->kind == TD_KIND_MATRIX)
         {
             if (left_type->as.matrix.rows != right_type->as.matrix.rows
                 || left_type->as.matrix.columns != right_type->as.matrix.columns)
             {
                 char buf[256];
-                snprintf(buf, sizeof(buf),
+                snprintf(
+                    buf,
+                    sizeof(buf),
                     "matrix %s dimension mismatch: cannot operate on matrix[%lld,%lld] and matrix[%lld,%lld]",
                     op_md->kind == OP_ADD ? "addition" : "subtraction",
-                    (long long)left_type->as.matrix.rows, (long long)left_type->as.matrix.columns,
-                    (long long)right_type->as.matrix.rows, (long long)right_type->as.matrix.columns);
+                    (long long)left_type->as.matrix.rows,
+                    (long long)left_type->as.matrix.columns,
+                    (long long)right_type->as.matrix.rows,
+                    (long long)right_type->as.matrix.columns
+                );
                 sem_error_list_add(&ctx->errors, ctx->source_file_path, op_node, buf);
-                node->resolved_type = (TypeDescriptor *)left_type;
+                node->resolved_type = left_type;
                 return left_type;
             }
             if (left_type->as.matrix.element_type != right_type->as.matrix.element_type)
             {
-                sem_error_list_add(&ctx->errors, ctx->source_file_path, node,
-                    "matrix element type mismatch for element-wise operation");
-                node->resolved_type = (TypeDescriptor *)left_type;
+                sem_error_list_add(
+                    &ctx->errors, ctx->source_file_path, node, "matrix element type mismatch for element-wise operation"
+                );
+                node->resolved_type = left_type;
                 return left_type;
             }
-            node->resolved_type = (TypeDescriptor *)left_type;
+            node->resolved_type = left_type;
             return left_type;
         }
 
         // Matrix / Scalar (broadcast)
-        if (op_md->kind == OP_DIV && left_type && left_type->kind == TD_KIND_MATRIX
-            && right_type && (is_integer_kind(right_type) || is_floating_kind(right_type)))
+        if (op_md->kind == OP_DIV && left_type && left_type->kind == TD_KIND_MATRIX && right_type
+            && (is_integer_kind(right_type) || is_floating_kind(right_type)))
         {
-            node->resolved_type = (TypeDescriptor *)left_type;
+            node->resolved_type = left_type;
             return left_type;
         }
     }
 
     // Default: propagate left type for scalar arithmetic
-    node->resolved_type = (TypeDescriptor *)left_type;
+    node->resolved_type = left_type;
     return left_type;
 }
 
@@ -1813,9 +1804,8 @@ sem_evaluate_comp_log_expr(SemContext * ctx, odin_grammar_node_t * node)
     (void)right_type;
     (void)left_type;
     TypeDescriptor const * bool_type = get_basic_type_by_name(ctx->type_registry, "bool");
-    node->resolved_type = (TypeDescriptor *)bool_type;
+    node->resolved_type = bool_type;
     return bool_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1827,15 +1817,14 @@ sem_evaluate_postfix_call(SemContext * ctx, odin_grammar_node_t * node)
     {
         if (callee_type->proc_metadata.return_count > 1)
         {
-            node->resolved_type = (TypeDescriptor *)callee_type;
+            node->resolved_type = callee_type;
             return callee_type;
         }
         TypeDescriptor const * ret_type = callee_type->proc_metadata.return_type;
-        node->resolved_type = (TypeDescriptor *)ret_type;
+        node->resolved_type = ret_type;
         return ret_type;
     }
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -1851,7 +1840,7 @@ sem_evaluate_postfix_member(SemContext * ctx, odin_grammar_node_t * node)
     symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), field_name);
     if (sym && sym->value.type_info)
     {
-        node->resolved_type = (TypeDescriptor *)sym->value.type_info;
+        node->resolved_type = sym->value.type_info;
         return sym->value.type_info;
     }
 
@@ -1871,7 +1860,7 @@ sem_evaluate_or_else(SemContext * ctx, odin_grammar_node_t * node)
         {
             TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
             if (inner_type)
-                node->resolved_type = (TypeDescriptor *)inner_type;
+                node->resolved_type = inner_type;
             return inner_type;
         }
         return NULL;
@@ -1881,14 +1870,13 @@ sem_evaluate_or_else(SemContext * ctx, odin_grammar_node_t * node)
     if (lhs_type && lhs_type->kind == TD_KIND_MAYBE)
     {
         TypeDescriptor const * inner_type = lhs_type->as.maybe.inner_type;
-        node->resolved_type = (TypeDescriptor *)inner_type;
+        node->resolved_type = inner_type;
         return inner_type;
     }
     TypeDescriptor const * result_type = lhs_type ? lhs_type : rhs_type;
     if (result_type)
-        node->resolved_type = (TypeDescriptor *)result_type;
+        node->resolved_type = result_type;
     return result_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1899,11 +1887,10 @@ sem_evaluate_or_return(SemContext * ctx, odin_grammar_node_t * node)
     {
         TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
         if (inner_type)
-            node->resolved_type = (TypeDescriptor *)inner_type;
+            node->resolved_type = inner_type;
         return inner_type;
     }
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -1916,7 +1903,7 @@ sem_evaluate_ternary_expr(SemContext * ctx, odin_grammar_node_t * node)
         {
             TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
             if (inner_type)
-                node->resolved_type = (TypeDescriptor *)inner_type;
+                node->resolved_type = inner_type;
             return inner_type;
         }
         return NULL;
@@ -1926,11 +1913,10 @@ sem_evaluate_ternary_expr(SemContext * ctx, odin_grammar_node_t * node)
     TypeDescriptor const * false_type = sem_evaluate_expr(ctx, node->list.children[2]);
     TypeDescriptor const * result_type = true_type ? true_type : false_type;
     if (result_type)
-        node->resolved_type = (TypeDescriptor *)result_type;
+        node->resolved_type = result_type;
     (void)cond_type;
     (void)false_type;
     return result_type;
-    
 }
 
 static TypeDescriptor const *
@@ -1949,11 +1935,10 @@ sem_evaluate_expression_wrapper(SemContext * ctx, odin_grammar_node_t * node)
                     type = child_type;
             }
         }
-        node->resolved_type = (TypeDescriptor *)type;
+        node->resolved_type = type;
         return type;
     }
     return NULL;
-    
 }
 
 static TypeDescriptor const *
@@ -1966,7 +1951,7 @@ sem_evaluate_assign_expr(SemContext * ctx, odin_grammar_node_t * node)
     {
         TypeDescriptor const * inner_type = sem_evaluate_expr(ctx, node->list.children[0]);
         if (inner_type)
-            node->resolved_type = (TypeDescriptor *)inner_type;
+            node->resolved_type = inner_type;
         return inner_type;
     }
     for (size_t i = 0; i < node->list.count; i++)
@@ -1987,9 +1972,8 @@ sem_evaluate_assign_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
     TypeDescriptor const * lhs_type = node->list.children[0] ? node->list.children[0]->resolved_type : NULL;
     if (lhs_type)
-        node->resolved_type = (TypeDescriptor *)lhs_type;
+        node->resolved_type = lhs_type;
     return lhs_type;
-    
 }
 
 // Compute the return type of a matrix intrinsic (transpose, outer_product,
@@ -1999,41 +1983,40 @@ sem_evaluate_assign_expr(SemContext * ctx, odin_grammar_node_t * node)
 // by name. They are only reachable via the linalg package alias. Returns NULL
 // when the intrinsic/args don't match.
 static TypeDescriptor const *
-sem_matrix_intrinsic_result_type(SemContext * ctx, char const * name,
-                                 odin_grammar_node_t ** args, int nargs)
+sem_matrix_intrinsic_result_type(SemContext * ctx, char const * name, odin_grammar_node_t ** args, int nargs)
 {
     if (name == NULL)
         return NULL;
 
-    if (strcmp(name, "transpose") == 0 && nargs == 1
-        && args[0] && args[0]->resolved_type)
+    if (strcmp(name, "transpose") == 0 && nargs == 1 && args[0] && args[0]->resolved_type)
     {
         TypeDescriptor const * arg_type = args[0]->resolved_type;
         if (arg_type->kind == TD_KIND_MATRIX)
         {
-            return get_or_create_matrix_type(ctx->type_registry,
-                arg_type->as.matrix.columns, arg_type->as.matrix.rows,
-                arg_type->as.matrix.element_type, arg_type->as.matrix.is_row_major);
+            return get_or_create_matrix_type(
+                ctx->type_registry,
+                arg_type->as.matrix.columns,
+                arg_type->as.matrix.rows,
+                arg_type->as.matrix.element_type,
+                arg_type->as.matrix.is_row_major
+            );
         }
     }
-    else if (strcmp(name, "outer_product") == 0 && nargs == 2
-             && args[0] && args[0]->resolved_type
-             && args[1] && args[1]->resolved_type)
+    else if (strcmp(name, "outer_product") == 0 && nargs == 2 && args[0] && args[0]->resolved_type && args[1]
+             && args[1]->resolved_type)
     {
         TypeDescriptor const * a = args[0]->resolved_type;
         TypeDescriptor const * b = args[1]->resolved_type;
-        if (a->kind == TD_KIND_ARRAY && b->kind == TD_KIND_ARRAY
-            && a->element_type && b->element_type
+        if (a->kind == TD_KIND_ARRAY && b->kind == TD_KIND_ARRAY && a->element_type && b->element_type
             && a->element_type->llvm_type == b->element_type->llvm_type)
         {
-            return get_or_create_matrix_type(ctx->type_registry,
-                (int64_t)a->as.array.count, (int64_t)b->as.array.count,
-                a->element_type, false);
+            return get_or_create_matrix_type(
+                ctx->type_registry, (int64_t)a->as.array.count, (int64_t)b->as.array.count, a->element_type, false
+            );
         }
     }
-    else if (strcmp(name, "hadamard_product") == 0 && nargs == 2
-             && args[0] && args[0]->resolved_type
-             && args[1] && args[1]->resolved_type)
+    else if (strcmp(name, "hadamard_product") == 0 && nargs == 2 && args[0] && args[0]->resolved_type && args[1]
+             && args[1]->resolved_type)
     {
         TypeDescriptor const * a = args[0]->resolved_type;
         TypeDescriptor const * b = args[1]->resolved_type;
@@ -2041,15 +2024,13 @@ sem_matrix_intrinsic_result_type(SemContext * ctx, char const * name,
             && (a->kind == TD_KIND_MATRIX || a->kind == TD_KIND_ARRAY))
             return a;
     }
-    else if (strcmp(name, "matrix_flatten") == 0 && nargs == 1
-             && args[0] && args[0]->resolved_type)
+    else if (strcmp(name, "matrix_flatten") == 0 && nargs == 1 && args[0] && args[0]->resolved_type)
     {
         TypeDescriptor const * arg_type = args[0]->resolved_type;
         if (arg_type->kind == TD_KIND_MATRIX && arg_type->as.matrix.element_type)
         {
             int64_t count = arg_type->as.matrix.rows * arg_type->as.matrix.columns;
-            return get_or_create_array_type(ctx->type_registry,
-                arg_type->as.matrix.element_type, (size_t)count);
+            return get_or_create_array_type(ctx->type_registry, arg_type->as.matrix.element_type, (size_t)count);
         }
     }
     return NULL;
@@ -2128,20 +2109,31 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 if (sym->is_private)
                                 {
                                     char buf[256];
-                                    snprintf(buf, sizeof(buf), "symbol '%s' is private in package '%s'", member_name, access_pkg->package_name ? access_pkg->package_name : "unknown");
+                                    snprintf(
+                                        buf,
+                                        sizeof(buf),
+                                        "symbol '%s' is private in package '%s'",
+                                        member_name,
+                                        access_pkg->package_name ? access_pkg->package_name : "unknown"
+                                    );
                                     sem_error_list_add(&ctx->errors, NULL, op, buf);
                                 }
                                 else
                                 {
                                     op->resolved_symbol = sym;
                                     type = sym->value.type_info;
-                                    op->resolved_type = (TypeDescriptor *)type;
+                                    op->resolved_type = type;
                                 }
                             }
                             else
                             {
                                 char buf[256];
-                                snprintf(buf, sizeof(buf), "undeclared name in package: '%s'", member_name ? member_name : "?");
+                                snprintf(
+                                    buf,
+                                    sizeof(buf),
+                                    "undeclared name in package: '%s'",
+                                    member_name ? member_name : "?"
+                                );
                                 sem_error_list_add(&ctx->errors, NULL, op, buf);
                             }
                         }
@@ -2154,7 +2146,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                         symbol_t * pkg_callee_sym = NULL;
                         if (i > 0)
                         {
-                            odin_grammar_node_t * prev_op = postfix_ops->list.children[i-1];
+                            odin_grammar_node_t * prev_op = postfix_ops->list.children[i - 1];
                             if (prev_op && prev_op->resolved_symbol)
                                 pkg_callee_sym = prev_op->resolved_symbol;
                         }
@@ -2172,7 +2164,8 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                     odin_grammar_node_t * inner_ops = inner->list.children[1];
                                     if (inner_ops && inner_ops->list.count > 0)
                                     {
-                                        odin_grammar_node_t * last_member = inner_ops->list.children[inner_ops->list.count - 1];
+                                        odin_grammar_node_t * last_member
+                                            = inner_ops->list.children[inner_ops->list.count - 1];
                                         if (last_member && last_member->resolved_symbol)
                                             pkg_callee_sym = last_member->resolved_symbol;
                                     }
@@ -2203,7 +2196,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             if (result_type)
                             {
                                 op->resolved_symbol = pkg_callee_sym;
-                                op->resolved_type = (TypeDescriptor *)result_type;
+                                op->resolved_type = result_type;
                                 type = result_type;
                                 break;
                             }
@@ -2243,20 +2236,21 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 {
                                     if (proc_type->proc_metadata.return_count > 1)
                                     {
-                                        op->resolved_type = (TypeDescriptor *)proc_type;
+                                        op->resolved_type = proc_type;
                                         type = proc_type;
                                     }
                                     else
                                     {
                                         type = proc_type->proc_metadata.return_type;
-                                        op->resolved_type = (TypeDescriptor *)type;
+                                        op->resolved_type = type;
                                     }
                                 }
                             }
                             else
                             {
-                                sem_error_list_add(&ctx->errors, NULL, op,
-                                                   "polymorphic procedure call could not be specialized");
+                                sem_error_list_add(
+                                    &ctx->errors, NULL, op, "polymorphic procedure call could not be specialized"
+                                );
                             }
                             break;
                         }
@@ -2272,24 +2266,24 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             {
                                 odin_grammar_node_t * arg_list = op->list.children[0];
                                 if (arg_list->type == AST_NODE_ARGUMENT_LIST)
-                    {
-                        for (size_t ai = 0; ai < arg_list->list.count; ai++)
-                        {
-                            if (arg_list->list.children[ai])
-                            {
-                                odin_grammar_node_t * argn = arg_list->list.children[ai];
-                                sem_evaluate_expr(ctx, argn);
-                            }
-                        }
-                    }
+                                {
+                                    for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                                    {
+                                        if (arg_list->list.children[ai])
+                                        {
+                                            odin_grammar_node_t * argn = arg_list->list.children[ai];
+                                            sem_evaluate_expr(ctx, argn);
+                                        }
+                                    }
+                                }
                             }
                             if (type->proc_metadata.return_count > 1)
                             {
-                                op->resolved_type = (TypeDescriptor *)type;
+                                op->resolved_type = type;
                                 break;
                             }
                             type = type->proc_metadata.return_type;
-                            op->resolved_type = (TypeDescriptor *)type;
+                            op->resolved_type = type;
                         }
                         else if (type && type->kind == TD_KIND_OVERLOAD_BUNDLE)
                         {
@@ -2297,9 +2291,8 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             if (op->list.count > 0 && op->list.children[0] != NULL)
                                 arg_list = op->list.children[0];
 
-                            symbol_t * winner = sem_resolve_overload_bundle_call(
-                                ctx, type, arg_list, op, last_member_name
-                            );
+                            symbol_t * winner
+                                = sem_resolve_overload_bundle_call(ctx, type, arg_list, op, last_member_name);
                             if (winner && winner->value.type_info)
                             {
                                 op->resolved_symbol = winner;
@@ -2313,12 +2306,12 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                             && proc_type->proc_metadata.return_count > 0)
                                         {
                                             type = proc_type->proc_metadata.returns[0];
-                                            op->resolved_type = (TypeDescriptor *)type;
+                                            op->resolved_type = type;
                                         }
                                         else if (proc_type->proc_metadata.return_type != NULL)
                                         {
                                             type = proc_type->proc_metadata.return_type;
-                                            op->resolved_type = (TypeDescriptor *)type;
+                                            op->resolved_type = type;
                                         }
                                     }
                                 }
@@ -2331,12 +2324,12 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     {
                         odin_grammar_node_t * index_node = op->list.children[0];
                         int index_count = 1;
-                        
+
                         if (index_node && index_node->type == AST_NODE_EXPRESSION && index_node->list.count >= 2)
                         {
                             index_count = (int)index_node->list.count;
                         }
-                        
+
                         for (int idx = 0; idx < index_count; idx++)
                         {
                             odin_grammar_node_t * single_index_node = index_node;
@@ -2344,7 +2337,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             {
                                 single_index_node = index_node->list.children[idx];
                             }
-                            
+
                             if (type
                                 && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
                                     || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
@@ -2356,8 +2349,12 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 // Matrix indexing requires both row and column indices: m[row, col]
                                 if (index_count == 1)
                                 {
-                                    sem_error_list_add(&ctx->errors, ctx->source_file_path, op,
-                                        "matrix index requires both a row and column index: use m[row, col]");
+                                    sem_error_list_add(
+                                        &ctx->errors,
+                                        ctx->source_file_path,
+                                        op,
+                                        "matrix index requires both a row and column index: use m[row, col]"
+                                    );
                                     type = NULL;
                                     break;
                                 }
@@ -2373,8 +2370,8 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 type = get_basic_type_by_name(ctx->type_registry, "u8");
                             }
                         }
-                        
-                        op->resolved_type = (TypeDescriptor *)type;
+
+                        op->resolved_type = type;
                     }
                     break;
 
@@ -2382,7 +2379,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                         if (type && type->kind == TD_KIND_POINTER)
                         {
                             type = type->pointee;
-                            op->resolved_type = (TypeDescriptor *)type;
+                            op->resolved_type = type;
                         }
                         break;
 
@@ -2393,7 +2390,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
             }
         }
 
-        node->resolved_type = (TypeDescriptor *)type;
+        node->resolved_type = type;
         return type;
     }
 
@@ -2401,13 +2398,13 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
 
     if (node->list.count < 2)
     {
-        node->resolved_type = (TypeDescriptor *)type;
+        node->resolved_type = type;
         return type;
     }
     odin_grammar_node_t * postfix_ops = node->list.children[1];
     if (postfix_ops == NULL)
     {
-        node->resolved_type = (TypeDescriptor *)type;
+        node->resolved_type = type;
         return type;
     }
 
@@ -2440,10 +2437,8 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
             // the argument types. These are declared with `---` bodies and are
             // intercepted here + in ir_gen_postfix_call by name.
             if (callee_sym && inner && inner->text
-                && (strcmp(inner->text, "transpose") == 0
-                    || strcmp(inner->text, "outer_product") == 0
-                    || strcmp(inner->text, "hadamard_product") == 0
-                    || strcmp(inner->text, "matrix_flatten") == 0))
+                && (strcmp(inner->text, "transpose") == 0 || strcmp(inner->text, "outer_product") == 0
+                    || strcmp(inner->text, "hadamard_product") == 0 || strcmp(inner->text, "matrix_flatten") == 0))
             {
                 odin_grammar_node_t * mat_args[16];
                 int mat_arg_count = sem_collect_call_args_nodes(op, mat_args, 16);
@@ -2458,9 +2453,9 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (result_type)
                 {
                     op->resolved_symbol = callee_sym;
-                    op->resolved_type = (TypeDescriptor *)result_type;
-                    type = result_type;  // Update type for POSTFIX_EXPRESSION
-                    node->resolved_type = (TypeDescriptor *)type;  // Also set on the node
+                    op->resolved_type = result_type;
+                    type = result_type;                           // Update type for POSTFIX_EXPRESSION
+                    node->resolved_type = type; // Also set on the node
                     break;
                 }
             }
@@ -2500,20 +2495,19 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     {
                         if (proc_type->proc_metadata.return_count > 1)
                         {
-                            op->resolved_type = (TypeDescriptor *)proc_type;
+                            op->resolved_type = proc_type;
                             type = proc_type;
                         }
                         else
                         {
                             type = proc_type->proc_metadata.return_type;
-                            op->resolved_type = (TypeDescriptor *)type;
+                            op->resolved_type = type;
                         }
                     }
                 }
                 else
                 {
-                    sem_error_list_add(&ctx->errors, NULL, op,
-                                       "polymorphic procedure call could not be specialized");
+                    sem_error_list_add(&ctx->errors, NULL, op, "polymorphic procedure call could not be specialized");
                 }
                 break;
             }
@@ -2534,11 +2528,11 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 }
                 if (type->proc_metadata.return_count > 1)
                 {
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                     break;
                 }
                 type = type->proc_metadata.return_type;
-                op->resolved_type = (TypeDescriptor *)type;
+                op->resolved_type = type;
             }
             else if (type && type->kind == TD_KIND_OVERLOAD_BUNDLE)
             {
@@ -2557,9 +2551,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (op->list.count > 0 && op->list.children[0] != NULL)
                     arg_list = op->list.children[0];
 
-                symbol_t * winner = sem_resolve_overload_bundle_call(
-                    ctx, type, arg_list, op, callee_name
-                );
+                symbol_t * winner = sem_resolve_overload_bundle_call(ctx, type, arg_list, op, callee_name);
                 if (winner && winner->value.type_info)
                 {
                     op->resolved_symbol = winner;
@@ -2568,12 +2560,12 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     {
                         if (proc_type->proc_metadata.return_count > 1)
                         {
-                            op->resolved_type = (TypeDescriptor *)proc_type;
+                            op->resolved_type = proc_type;
                         }
                         else
                         {
                             type = proc_type->proc_metadata.return_type;
-                            op->resolved_type = (TypeDescriptor *)type;
+                            op->resolved_type = type;
                         }
                     }
                 }
@@ -2600,7 +2592,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                         else
                             cur_type = f->type_desc;
                     }
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
             }
             else if (type && type->kind == TD_KIND_UNION && op->list.count >= 1 && op->list.children[0])
@@ -2613,7 +2605,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     if (field)
                     {
                         type = field->type_desc;
-                        op->resolved_type = (TypeDescriptor *)type;
+                        op->resolved_type = type;
                     }
                 }
             }
@@ -2624,7 +2616,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (bf)
                 {
                     type = bf->type;
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
             }
             else if (type && type->kind == TD_KIND_MAYBE && op->list.count >= 1 && op->list.children[0])
@@ -2633,7 +2625,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (field_name && strcmp(field_name, "value") == 0)
                 {
                     type = type->as.maybe.inner_type;
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
             }
             else if (type && type->kind == TD_KIND_VECTOR && op->list.count >= 1 && op->list.children[0])
@@ -2645,15 +2637,12 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     if (swizzle_len == 1)
                         type = type->element_type;
                     else
-                        type = get_or_create_vector_type(
-                            ctx->type_registry, type->element_type, swizzle_len
-                        );
-                    op->resolved_type = (TypeDescriptor *)type;
+                        type = get_or_create_vector_type(ctx->type_registry, type->element_type, swizzle_len);
+                    op->resolved_type = type;
                 }
                 else
                 {
-                    sem_error_list_add(&ctx->errors, NULL, op,
-                        "invalid swizzle or vector has no field named");
+                    sem_error_list_add(&ctx->errors, NULL, op, "invalid swizzle or vector has no field named");
                 }
             }
             else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
@@ -2663,13 +2652,14 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (field_name && strcmp(field_name, "len") == 0)
                 {
                     type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
                 else if (field_name && strcmp(field_name, "data") == 0)
                 {
-                    type = get_or_create_pointer_type(ctx->type_registry,
-                        get_basic_type_by_name(ctx->type_registry, "u8"));
-                    op->resolved_type = (TypeDescriptor *)type;
+                    type = get_or_create_pointer_type(
+                        ctx->type_registry, get_basic_type_by_name(ctx->type_registry, "u8")
+                    );
+                    op->resolved_type = type;
                 }
                 else
                 {
@@ -2682,12 +2672,12 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (field_name && strcmp(field_name, "len") == 0)
                 {
                     type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
                 else if (field_name && strcmp(field_name, "data") == 0)
                 {
                     type = get_or_create_pointer_type(ctx->type_registry, type->element_type);
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
                 else
                 {
@@ -2700,17 +2690,17 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (field_name && strcmp(field_name, "len") == 0)
                 {
                     type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
                 else if (field_name && strcmp(field_name, "cap") == 0)
                 {
                     type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
                 else if (field_name && strcmp(field_name, "data") == 0)
                 {
                     type = get_or_create_pointer_type(ctx->type_registry, type->element_type);
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
                 else
                 {
@@ -2723,7 +2713,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 if (field_name && strcmp(field_name, "len") == 0)
                 {
                     type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
                 else
                 {
@@ -2758,7 +2748,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                                 else
                                     cur_type = f->type_desc;
                             }
-                            op->resolved_type = (TypeDescriptor *)type;
+                            op->resolved_type = type;
                         }
                         else
                         {
@@ -2774,7 +2764,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                             if (field)
                             {
                                 type = field->type_desc;
-                                op->resolved_type = (TypeDescriptor *)type;
+                                op->resolved_type = type;
                             }
                         }
                         else
@@ -2785,7 +2775,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     else if (pointee->kind == TD_KIND_MAYBE && strcmp(field_name, "value") == 0)
                     {
                         type = pointee->as.maybe.inner_type;
-                        op->resolved_type = (TypeDescriptor *)type;
+                        op->resolved_type = type;
                     }
                     else if (pointee->kind == TD_KIND_BASIC && pointee->as.basic.name != NULL
                              && strcmp(pointee->as.basic.name, "string") == 0)
@@ -2793,13 +2783,14 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                         if (strcmp(field_name, "len") == 0)
                         {
                             type = get_basic_type_by_name(ctx->type_registry, "int");
-                            op->resolved_type = (TypeDescriptor *)type;
+                            op->resolved_type = type;
                         }
                         else if (strcmp(field_name, "data") == 0)
                         {
-                            type = get_or_create_pointer_type(ctx->type_registry,
-                                get_basic_type_by_name(ctx->type_registry, "u8"));
-                            op->resolved_type = (TypeDescriptor *)type;
+                            type = get_or_create_pointer_type(
+                                ctx->type_registry, get_basic_type_by_name(ctx->type_registry, "u8")
+                            );
+                            op->resolved_type = type;
                         }
                         else
                         {
@@ -2811,12 +2802,12 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                         if (strcmp(field_name, "len") == 0)
                         {
                             type = get_basic_type_by_name(ctx->type_registry, "int");
-                            op->resolved_type = (TypeDescriptor *)type;
+                            op->resolved_type = type;
                         }
                         else if (strcmp(field_name, "data") == 0)
                         {
                             type = get_or_create_pointer_type(ctx->type_registry, pointee->element_type);
-                            op->resolved_type = (TypeDescriptor *)type;
+                            op->resolved_type = type;
                         }
                         else
                         {
@@ -2849,7 +2840,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                 }
                 if (found)
                 {
-                    op->resolved_type = (TypeDescriptor *)type;
+                    op->resolved_type = type;
                 }
                 else
                 {
@@ -2860,72 +2851,75 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
             break;
 
         case AST_NODE_POSTFIX_SUBSCRIPT:
+        {
+            odin_grammar_node_t * index_node = op->list.children[0];
+            int index_count = 1;
+
+            // Check if this is a multi-index subscript (comma-separated indices)
+            // e.g., m[0, 1] should be treated as m[0][1]
+            if (index_node && index_node->type == AST_NODE_EXPRESSION && index_node->list.count >= 2)
             {
-                odin_grammar_node_t * index_node = op->list.children[0];
-                int index_count = 1;
-                
-                // Check if this is a multi-index subscript (comma-separated indices)
-                // e.g., m[0, 1] should be treated as m[0][1]
-                if (index_node && index_node->type == AST_NODE_EXPRESSION && index_node->list.count >= 2)
-                {
-                    index_count = (int)index_node->list.count;
-                }
-                
-                for (int idx = 0; idx < index_count; idx++)
-                {
-                    odin_grammar_node_t * single_index_node = index_node;
-                    if (index_count > 1 && index_node->type == AST_NODE_EXPRESSION)
-                    {
-                        single_index_node = index_node->list.children[idx];
-                    }
-                    
-                    if (type
-                        && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
-                            || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
-                    {
-                        type = type->element_type;
-                    }
-                    else if (type && type->kind == TD_KIND_MATRIX)
-                    {
-                        // Matrix indexing requires both row and column indices: m[row, col]
-                        if (index_count == 1)
-                        {
-                            sem_error_list_add(&ctx->errors, ctx->source_file_path, op,
-                                "matrix index requires both a row and column index: use m[row, col]");
-                            type = NULL;
-                            break;
-                        }
-                        // First index selects the element position (row in math terms);
-                        // the multi-index subscript consumes both indices → element type
-                        type = type->as.matrix.element_type;
-                    }
-                    else if (type && type->kind == TD_KIND_MAP)
-                    {
-                        type = type->as.map.value_type;
-                    }
-                    else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
-                             && strcmp(type->as.basic.name, "string") == 0)
-                    {
-                        type = get_basic_type_by_name(ctx->type_registry, "u8");
-                    }
-                }
-                
-                op->resolved_type = (TypeDescriptor *)type;
+                index_count = (int)index_node->list.count;
             }
-            break;
+
+            for (int idx = 0; idx < index_count; idx++)
+            {
+                odin_grammar_node_t * single_index_node = index_node;
+                if (index_count > 1 && index_node->type == AST_NODE_EXPRESSION)
+                {
+                    single_index_node = index_node->list.children[idx];
+                }
+
+                if (type
+                    && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
+                        || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
+                {
+                    type = type->element_type;
+                }
+                else if (type && type->kind == TD_KIND_MATRIX)
+                {
+                    // Matrix indexing requires both row and column indices: m[row, col]
+                    if (index_count == 1)
+                    {
+                        sem_error_list_add(
+                            &ctx->errors,
+                            ctx->source_file_path,
+                            op,
+                            "matrix index requires both a row and column index: use m[row, col]"
+                        );
+                        type = NULL;
+                        break;
+                    }
+                    // First index selects the element position (row in math terms);
+                    // the multi-index subscript consumes both indices → element type
+                    type = type->as.matrix.element_type;
+                }
+                else if (type && type->kind == TD_KIND_MAP)
+                {
+                    type = type->as.map.value_type;
+                }
+                else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
+                         && strcmp(type->as.basic.name, "string") == 0)
+                {
+                    type = get_basic_type_by_name(ctx->type_registry, "u8");
+                }
+            }
+
+            op->resolved_type = type;
+        }
+        break;
 
         case AST_NODE_POSTFIX_DEREF:
             if (type && (type->kind == TD_KIND_POINTER || type->kind == TD_KIND_MULTI_POINTER))
             {
                 type = type->pointee;
-                op->resolved_type = (TypeDescriptor *)type;
+                op->resolved_type = type;
             }
             break;
 
         case AST_NODE_POSTFIX_ASSERTION:
         {
-            if (type && type->kind == TD_KIND_BASIC && type->as.basic.name
-                && strcmp(type->as.basic.name, "any") == 0)
+            if (type && type->kind == TD_KIND_BASIC && type->as.basic.name && strcmp(type->as.basic.name, "any") == 0)
             {
                 if (op->list.count > 0)
                 {
@@ -2933,7 +2927,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     if (target_type)
                     {
                         type = target_type;
-                        op->resolved_type = (TypeDescriptor *)type;
+                        op->resolved_type = type;
                     }
                 }
             }
@@ -2956,7 +2950,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                         if (field_idx >= 0)
                         {
                             type = target_type;
-                            op->resolved_type = (TypeDescriptor *)type;
+                            op->resolved_type = type;
                             op->resolved_symbol = (symbol_t *)(intptr_t)field_idx;
                         }
                     }
@@ -2970,7 +2964,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
                     if (target_type && target_type->type_id == type->as.maybe.inner_type->type_id)
                     {
                         type = target_type;
-                        op->resolved_type = (TypeDescriptor *)type;
+                        op->resolved_type = type;
                     }
                 }
             }
@@ -2981,14 +2975,13 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
         case AST_NODE_POSTFIX_SLICE_LT:
             if (type && type->kind == TD_KIND_SLICE)
             {
-                op->resolved_type = (TypeDescriptor *)type;
+                op->resolved_type = type;
             }
             else if (type && type->kind == TD_KIND_ARRAY)
             {
-                TypeDescriptor const * slice_type
-                    = get_or_create_slice_type(ctx->type_registry, type->element_type);
+                TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, type->element_type);
                 type = slice_type;
-                op->resolved_type = (TypeDescriptor *)type;
+                op->resolved_type = type;
             }
             break;
 
@@ -2997,9 +2990,8 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
         }
     }
 
-    node->resolved_type = (TypeDescriptor *)type;
+    node->resolved_type = type;
     return type;
-    
 }
 
 static TypeDescriptor const *
@@ -3017,9 +3009,9 @@ sem_evaluate_directive_with_args(SemContext * ctx, odin_grammar_node_t * node)
             if (child->type == AST_NODE_IDENTIFIER)
                 continue;
 
-            if (expr != NULL) {
-                sem_error_list_add(&ctx->errors, NULL, node,
-                    "#assert requires exactly one expression");
+            if (expr != NULL)
+            {
+                sem_error_list_add(&ctx->errors, NULL, node, "#assert requires exactly one expression");
                 return NULL;
             }
             expr = child;
@@ -3027,8 +3019,7 @@ sem_evaluate_directive_with_args(SemContext * ctx, odin_grammar_node_t * node)
 
         if (expr == NULL)
         {
-            sem_error_list_add(&ctx->errors, NULL, node,
-                "#assert requires an expression");
+            sem_error_list_add(&ctx->errors, NULL, node, "#assert requires an expression");
             return NULL;
         }
 
@@ -3041,7 +3032,6 @@ sem_evaluate_directive_with_args(SemContext * ctx, odin_grammar_node_t * node)
             sem_error_list_add(&ctx->errors, NULL, node, "#assert failed");
     }
     return NULL;
-    
 }
 
 // --- Overload bundle call resolution ---
@@ -3138,7 +3128,13 @@ sem_resolve_overload_bundle_call(
     if (match_count > 1)
     {
         char buf[256];
-        snprintf(buf, sizeof(buf), "ambiguous call to '%s' — %d overloads match", callee_name ? callee_name : "?", match_count);
+        snprintf(
+            buf,
+            sizeof(buf),
+            "ambiguous call to '%s' — %d overloads match",
+            callee_name ? callee_name : "?",
+            match_count
+        );
         sem_error_list_add(&ctx->errors, NULL, call_op, buf);
         return NULL;
     }
@@ -3174,7 +3170,13 @@ sem_resolve_overload_bundle_call(
         if (poly_match_count > 1)
         {
             char buf[256];
-            snprintf(buf, sizeof(buf), "ambiguous call to '%s' — %d polymorphic overloads match", callee_name ? callee_name : "?", poly_match_count);
+            snprintf(
+                buf,
+                sizeof(buf),
+                "ambiguous call to '%s' — %d polymorphic overloads match",
+                callee_name ? callee_name : "?",
+                poly_match_count
+            );
             sem_error_list_add(&ctx->errors, NULL, call_op, buf);
             return NULL;
         }
@@ -3186,7 +3188,13 @@ sem_resolve_overload_bundle_call(
 
         // No match at all — fall through to "no matching overload" error
         char buf[256];
-        snprintf(buf, sizeof(buf), "no matching overload for '%s' with %d argument(s)", callee_name ? callee_name : "?", arg_count);
+        snprintf(
+            buf,
+            sizeof(buf),
+            "no matching overload for '%s' with %d argument(s)",
+            callee_name ? callee_name : "?",
+            arg_count
+        );
         sem_error_list_add(&ctx->errors, NULL, call_op, buf);
         return NULL;
     }
@@ -3199,7 +3207,13 @@ sem_resolve_overload_bundle_call(
     // match_count == 0 but no poly candidates were tried (candidate_count == 0)
     {
         char buf[256];
-        snprintf(buf, sizeof(buf), "no matching overload for '%s' with %d argument(s)", callee_name ? callee_name : "?", arg_count);
+        snprintf(
+            buf,
+            sizeof(buf),
+            "no matching overload for '%s' with %d argument(s)",
+            callee_name ? callee_name : "?",
+            arg_count
+        );
         sem_error_list_add(&ctx->errors, NULL, call_op, buf);
         return NULL;
     }

@@ -212,7 +212,7 @@ typedef struct odin_grammar_node_t
     char * file_path;
 
     // Semantic analysis annotations
-    TypeDescriptor * resolved_type;
+    TypeDescriptor const * resolved_type;
     symbol_t * resolved_symbol;
 
     void * metadata;

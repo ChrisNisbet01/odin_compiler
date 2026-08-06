@@ -1658,7 +1658,7 @@ get_or_create_arena_type(
     arena_members.fields[5].type_desc = registry->i64_type;
     arena_members.fields[5].is_using = false;
 
-    TypeDescriptor * td = (TypeDescriptor *)register_struct_type(registry, arena_llvm, true, &arena_members);
+    TypeDescriptor const * td = register_struct_type(registry, arena_llvm, true, &arena_members);
     free(arena_members.fields);
 
     return td;
