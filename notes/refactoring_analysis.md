@@ -161,6 +161,19 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       (585), `sem_evaluate_constant_int` (343),
       `sem_resolve_procedure_signature` (339), `ir_generate` (300).
       **246/246 tests pass.**
+- [x] E. `sem_pass2_node` (`semantic_analyser.c`, was 907 lines at 2203-3109):
+      extracted the two largest case bodies into `sem_pass2_analyse_variable_decl`
+      (214 lines) and `sem_pass2_analyse_constant_decl` (217 lines); case-level
+      `break` → `return` conversion done for all case-level breaks while
+      preserving the single loop-level `break` in each (VARIABLE_DECL's
+      init-node search at 2312, CONSTANT_DECL's value-node search at 2511).
+      Both helpers placed before `sem_pass2_node`; the switch cases now call
+      them. Remaining case bloat: WHEN (52), IF (37), FOR (92), SWITCH (160),
+      plus the small-statement cluster. Remaining large
+      targets: `sem_pass1_register_top_level_ex` (585),
+      `sem_evaluate_constant_int` (343),
+      `sem_resolve_procedure_signature` (339), `ir_generate` (300).
+      **246/246 tests pass.**
 - [ ] F. Predicate extraction
 
 ## Verification
