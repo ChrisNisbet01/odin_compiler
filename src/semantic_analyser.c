@@ -62,6 +62,277 @@ sem_find_intrinsic_from_value(odin_grammar_node_t * value_node)
 // --- Compile-time constant integer evaluation ---
 // Evaluates a constant expression to an integer at compile time.
 // Returns the value and sets *ok = 1 on success, or sets *ok = 0 on failure.
+
+static long long
+sem_eval_const_identifier(SemContext * ctx, odin_grammar_node_t * node, int * ok)
+{
+    char const * name = node->text;
+    if (name == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    // For poly_idents, look up in poly environment
+    if (node->type == AST_NODE_POLY_IDENT && name[0] == '$')
+    {
+        name++; // Skip the $ prefix
+    }
+    else if (node->type == AST_NODE_IDENTIFIER)
+    {
+        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name);
+        if (sym != NULL && sym->has_const_int_val)
+        {
+            *ok = 1;
+            return sym->const_int_val;
+        }
+        *ok = 0;
+        return 0;
+    }
+
+    long long val = 0;
+    if (poly_env_lookup_int(ctx, name, &val))
+    {
+        *ok = 1;
+        return val;
+    }
+    *ok = 0;
+    return 0;
+}
+
+static long long
+sem_eval_const_postfix(SemContext * ctx, odin_grammar_node_t * node, int * ok)
+{
+    // Package-qualified constant: e.g. os.O_WRONLY
+    if (node->list.count < 2 || node->list.children[0] == NULL || node->list.children[1] == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    odin_grammar_node_t * inner = node->list.children[0];
+    // Unwrap to identifier
+    while (inner != NULL && inner->type != AST_NODE_IDENTIFIER && inner->list.count >= 1)
+        inner = inner->list.children[0];
+    if (inner == NULL || inner->type != AST_NODE_IDENTIFIER)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    ImportedPackage * pkg = find_imported_package_by_name(ctx, inner->text);
+    if (pkg == NULL || pkg->package_scope == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    odin_grammar_node_t * postfix_ops = node->list.children[1];
+    if (postfix_ops == NULL || postfix_ops->list.count == 0)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    odin_grammar_node_t * member_op = postfix_ops->list.children[0];
+    if (member_op == NULL || member_op->type != AST_NODE_POSTFIX_MEMBER)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    if (member_op->list.count < 1 || member_op->list.children[0] == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    char const * member_name = member_op->list.children[0]->text;
+    symbol_t * sym = scope_find_symbol_entry(pkg->package_scope, member_name);
+    if (sym != NULL && sym->has_const_int_val)
+    {
+        *ok = 1;
+        return sym->const_int_val;
+    }
+    *ok = 0;
+    return 0;
+}
+
+static long long
+sem_eval_const_integer(odin_grammar_node_t * node, int * ok)
+{
+    if (node->text == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+    char * end = NULL;
+    long long val = parse_odin_signed(node->text, &end, 0);
+    if (end == node->text)
+    {
+        *ok = 0;
+        return 0;
+    }
+    *ok = 1;
+    return val;
+}
+
+static long long
+sem_eval_const_unary(SemContext * ctx, odin_grammar_node_t * node, int * ok)
+{
+    odin_grammar_node_t * op_node = node_find_op(node);
+    if (op_node == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+    AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
+    if (md == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    odin_grammar_node_t * operand = NULL;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child != NULL && child != op_node)
+        {
+            operand = child;
+            break;
+        }
+    }
+    if (operand == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    int inner_ok = 0;
+    long long inner_val = sem_evaluate_constant_int(ctx, operand, &inner_ok);
+    if (!inner_ok)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    switch (md->kind)
+    {
+    case OP_UNARY_NEG:
+        *ok = 1;
+        return -inner_val;
+    case OP_UNARY_POS:
+        *ok = 1;
+        return inner_val;
+    case OP_UNARY_XOR:
+        *ok = 1;
+        return ~inner_val;
+    case OP_UNARY_NOT:
+        *ok = 1;
+        return inner_val ? 0 : 1;
+    default:
+        *ok = 0;
+        return 0;
+    }
+}
+
+static long long
+sem_eval_const_binary(SemContext * ctx, odin_grammar_node_t * node, int * ok)
+{
+    odin_grammar_node_t * op_node = node_find_op(node);
+    if (op_node == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+    AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
+    if (md == NULL)
+    {
+        *ok = 0;
+        return 0;
+    }
+    if (node->list.count < 3)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    int lhs_ok = 0, rhs_ok = 0;
+    long long lhs_val = sem_evaluate_constant_int(ctx, node->list.children[0], &lhs_ok);
+    long long rhs_val = sem_evaluate_constant_int(ctx, node->list.children[node->list.count - 1], &rhs_ok);
+    if (!lhs_ok || !rhs_ok)
+    {
+        *ok = 0;
+        return 0;
+    }
+
+    switch (md->kind)
+    {
+    case OP_ADD:
+        *ok = 1;
+        return lhs_val + rhs_val;
+    case OP_SUB:
+        *ok = 1;
+        return lhs_val - rhs_val;
+    case OP_MUL:
+        *ok = 1;
+        return lhs_val * rhs_val;
+    case OP_DIV:
+        if (rhs_val == 0)
+        {
+            *ok = 0;
+            return 0;
+        }
+        *ok = 1;
+        return lhs_val / rhs_val;
+    case OP_MOD:
+        if (rhs_val == 0)
+        {
+            *ok = 0;
+            return 0;
+        }
+        *ok = 1;
+        return lhs_val % rhs_val;
+    case OP_SHL:
+        *ok = 1;
+        return lhs_val << rhs_val;
+    case OP_SHR:
+        *ok = 1;
+        return lhs_val >> rhs_val;
+    case OP_BIT_AND:
+        *ok = 1;
+        return lhs_val & rhs_val;
+    case OP_BIT_OR:
+        *ok = 1;
+        return lhs_val | rhs_val;
+    case OP_BIT_XOR:
+        *ok = 1;
+        return lhs_val ^ rhs_val;
+    case OP_EQ:
+        *ok = 1;
+        return (lhs_val == rhs_val) ? 1 : 0;
+    case OP_NE:
+        *ok = 1;
+        return (lhs_val != rhs_val) ? 1 : 0;
+    case OP_LT:
+        *ok = 1;
+        return (lhs_val < rhs_val) ? 1 : 0;
+    case OP_GT:
+        *ok = 1;
+        return (lhs_val > rhs_val) ? 1 : 0;
+    case OP_LE:
+        *ok = 1;
+        return (lhs_val <= rhs_val) ? 1 : 0;
+    case OP_GE:
+        *ok = 1;
+        return (lhs_val >= rhs_val) ? 1 : 0;
+    default:
+        *ok = 0;
+        return 0;
+    }
+}
+
 long long
 sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok)
 {
@@ -129,175 +400,13 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
 
     case AST_NODE_IDENTIFIER:
     case AST_NODE_POLY_IDENT:
-    {
-        char const * name = node->text;
-        if (name == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        // For poly_idents, look up in poly environment
-        if (node->type == AST_NODE_POLY_IDENT && name[0] == '$')
-        {
-            name++; // Skip the $ prefix
-        }
-        else if (node->type == AST_NODE_IDENTIFIER)
-        {
-            symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), name);
-            if (sym != NULL && sym->has_const_int_val)
-            {
-                *ok = 1;
-                return sym->const_int_val;
-            }
-            *ok = 0;
-            return 0;
-        }
-
-        long long val = 0;
-        if (poly_env_lookup_int(ctx, name, &val))
-        {
-            *ok = 1;
-            return val;
-        }
-        *ok = 0;
-        return 0;
-    }
-
+        return sem_eval_const_identifier(ctx, node, ok);
     case AST_NODE_POSTFIX_EXPRESSION:
-    {
-        // Package-qualified constant: e.g. os.O_WRONLY
-        if (node->list.count < 2 || node->list.children[0] == NULL || node->list.children[1] == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        odin_grammar_node_t * inner = node->list.children[0];
-        // Unwrap to identifier
-        while (inner != NULL && inner->type != AST_NODE_IDENTIFIER && inner->list.count >= 1)
-            inner = inner->list.children[0];
-        if (inner == NULL || inner->type != AST_NODE_IDENTIFIER)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        ImportedPackage * pkg = find_imported_package_by_name(ctx, inner->text);
-        if (pkg == NULL || pkg->package_scope == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        odin_grammar_node_t * postfix_ops = node->list.children[1];
-        if (postfix_ops == NULL || postfix_ops->list.count == 0)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        odin_grammar_node_t * member_op = postfix_ops->list.children[0];
-        if (member_op == NULL || member_op->type != AST_NODE_POSTFIX_MEMBER)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        if (member_op->list.count < 1 || member_op->list.children[0] == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        char const * member_name = member_op->list.children[0]->text;
-        symbol_t * sym = scope_find_symbol_entry(pkg->package_scope, member_name);
-        if (sym != NULL && sym->has_const_int_val)
-        {
-            *ok = 1;
-            return sym->const_int_val;
-        }
-        *ok = 0;
-        return 0;
-    }
-
+        return sem_eval_const_postfix(ctx, node, ok);
     case AST_NODE_INTEGER_VALUE:
-    {
-        if (node->text == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-        char * end = NULL;
-        long long val = parse_odin_signed(node->text, &end, 0);
-        if (end == node->text)
-        {
-            *ok = 0;
-            return 0;
-        }
-        *ok = 1;
-        return val;
-    }
-
+        return sem_eval_const_integer(node, ok);
     case AST_NODE_UNARY_EXPRESSION:
-    {
-        odin_grammar_node_t * op_node = node_find_op(node);
-        if (op_node == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
-        if (md == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        odin_grammar_node_t * operand = NULL;
-        for (size_t i = 0; i < node->list.count; i++)
-        {
-            odin_grammar_node_t * child = node->list.children[i];
-            if (child != NULL && child != op_node)
-            {
-                operand = child;
-                break;
-            }
-        }
-        if (operand == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        int inner_ok = 0;
-        long long inner_val = sem_evaluate_constant_int(ctx, operand, &inner_ok);
-        if (!inner_ok)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        switch (md->kind)
-        {
-        case OP_UNARY_NEG:
-            *ok = 1;
-            return -inner_val;
-        case OP_UNARY_POS:
-            *ok = 1;
-            return inner_val;
-        case OP_UNARY_XOR:
-            *ok = 1;
-            return ~inner_val;
-        case OP_UNARY_NOT:
-            *ok = 1;
-            return inner_val ? 0 : 1;
-        default:
-            *ok = 0;
-            return 0;
-        }
-    }
-
+        return sem_eval_const_unary(ctx, node, ok);
     case AST_NODE_ADD_EXPRESSION:
     case AST_NODE_MUL_EXPRESSION:
     case AST_NODE_BIT_AND_EXPRESSION:
@@ -307,100 +416,7 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
     case AST_NODE_COMP_EXPRESSION:
     case AST_NODE_LOG_AND_EXPRESSION:
     case AST_NODE_LOG_OR_EXPRESSION:
-    {
-        odin_grammar_node_t * op_node = node_find_op(node);
-        if (op_node == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-        AstOpMetadata * md = (AstOpMetadata *)op_node->metadata;
-        if (md == NULL)
-        {
-            *ok = 0;
-            return 0;
-        }
-        if (node->list.count < 3)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        int lhs_ok = 0, rhs_ok = 0;
-        long long lhs_val = sem_evaluate_constant_int(ctx, node->list.children[0], &lhs_ok);
-        long long rhs_val = sem_evaluate_constant_int(ctx, node->list.children[node->list.count - 1], &rhs_ok);
-        if (!lhs_ok || !rhs_ok)
-        {
-            *ok = 0;
-            return 0;
-        }
-
-        switch (md->kind)
-        {
-        case OP_ADD:
-            *ok = 1;
-            return lhs_val + rhs_val;
-        case OP_SUB:
-            *ok = 1;
-            return lhs_val - rhs_val;
-        case OP_MUL:
-            *ok = 1;
-            return lhs_val * rhs_val;
-        case OP_DIV:
-            if (rhs_val == 0)
-            {
-                *ok = 0;
-                return 0;
-            }
-            *ok = 1;
-            return lhs_val / rhs_val;
-        case OP_MOD:
-            if (rhs_val == 0)
-            {
-                *ok = 0;
-                return 0;
-            }
-            *ok = 1;
-            return lhs_val % rhs_val;
-        case OP_SHL:
-            *ok = 1;
-            return lhs_val << rhs_val;
-        case OP_SHR:
-            *ok = 1;
-            return lhs_val >> rhs_val;
-        case OP_BIT_AND:
-            *ok = 1;
-            return lhs_val & rhs_val;
-        case OP_BIT_OR:
-            *ok = 1;
-            return lhs_val | rhs_val;
-        case OP_BIT_XOR:
-            *ok = 1;
-            return lhs_val ^ rhs_val;
-        case OP_EQ:
-            *ok = 1;
-            return (lhs_val == rhs_val) ? 1 : 0;
-        case OP_NE:
-            *ok = 1;
-            return (lhs_val != rhs_val) ? 1 : 0;
-        case OP_LT:
-            *ok = 1;
-            return (lhs_val < rhs_val) ? 1 : 0;
-        case OP_GT:
-            *ok = 1;
-            return (lhs_val > rhs_val) ? 1 : 0;
-        case OP_LE:
-            *ok = 1;
-            return (lhs_val <= rhs_val) ? 1 : 0;
-        case OP_GE:
-            *ok = 1;
-            return (lhs_val >= rhs_val) ? 1 : 0;
-        default:
-            *ok = 0;
-            return 0;
-        }
-    }
-
+        return sem_eval_const_binary(ctx, node, ok);
     default:
         *ok = 0;
         return 0;

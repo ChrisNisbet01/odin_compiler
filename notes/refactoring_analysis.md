@@ -203,6 +203,20 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       targets: `sem_evaluate_constant_int` (343),
       `sem_resolve_procedure_signature` (339), `ir_generate` (300).
       **246/246 tests pass.**
+- [x] E. `sem_evaluate_constant_int` (`semantic_analyser.c`, was 343 lines at
+      66-408): extracted the five braced switch cases into named helpers
+      `sem_eval_const_identifier` (scope/poly-env lookup),
+      `sem_eval_const_postfix` (package-qualified const e.g. `os.O_WRONLY`),
+      `sem_eval_const_integer` (`parse_odin_signed`), `sem_eval_const_unary`
+      (neg/pos/xor/not), `sem_eval_const_binary` (the 9-operator arithmetic/
+      comparison/bitwise group). All return-based, so no `break`/`continue`
+      conversion needed; helper bodies diff-audited byte-identical to the
+      original case bodies. `sem_eval_const_integer` drops the unused `ctx`
+      parameter (its case never referenced `ctx`; the extracted helper would
+      otherwise warn unused-parameter). Main function reduced 343 → ~110
+      lines. Remaining large
+      targets: `sem_resolve_procedure_signature` (339),
+      `ir_generate` (300). **246/246 tests pass.**
 - [ ] F. Predicate extraction
 
 ## Verification
