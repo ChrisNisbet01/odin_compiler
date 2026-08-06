@@ -584,128 +584,90 @@ sem_analyse_compound_statement(
     }
 }
 
-static TypeDescriptor const *
-sem_resolve_procedure_signature(
-    SemContext * ctx,
-    odin_grammar_node_t * node,
-    TypeDescriptor const *** out_param_types,
-    int * out_param_count,
+
+static void
+sem_resolve_proc_returns_clause(SemContext * ctx,
+    odin_grammar_node_t * ret_child,
     TypeDescriptor const ** out_return_type,
+    TypeDescriptor const *** out_return_types,
     int * out_return_count,
-    calling_convention_t * out_cc,
-    bool * out_is_variadic
-)
+    char const *** out_named_return_names,
+    bool * out_have_named_return_names)
 {
-    TypeDescriptor const * return_type = NULL;
-    TypeDescriptor const ** return_types = NULL;
-    int return_count = 0;
-    int param_count = 0;
-    TypeDescriptor const ** param_types = NULL;
-    size_t param_cap = 0;
-    calling_convention_t cc = CALLING_CONV_ODIN;
-    bool is_variadic = false;
-
-    odin_grammar_node_t * param_list_node = NULL;
-
-    // Variables for named return handling
-    odin_grammar_node_t ** default_value_nodes = NULL;
-    size_t default_val_cap = 0;
-    char const ** named_return_names_array = NULL;
-    bool have_named_return_names = false;
-
-    for (size_t i = 0; i < node->list.count; i++)
+    if (ret_child->type == AST_NODE_RETURN_TYPE_LIST)
     {
-        odin_grammar_node_t * child = node->list.children[i];
-        if (child == NULL)
-            continue;
-        if (child->type == AST_NODE_PROCEDURE_SIGNATURE)
+        (*out_return_type) = NULL;
+        (*out_return_count) = 0;
+        (*out_return_types) = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+        for (size_t ri = 0; ri < ret_child->list.count; ri++)
         {
-            for (size_t j = 0; j < child->list.count; j++)
+            odin_grammar_node_t * tn = ret_child->list.children[ri];
+            if (tn == NULL)
+                continue;
+            TypeDescriptor const * td = sem_resolve_type_expr(ctx, tn);
+            tn->resolved_type = td;
+            if (td)
+                (*out_return_types)[(*out_return_count)++] = td;
+        }
+    }
+    else if (ret_child->type == AST_NODE_RETURN_LIST)
+    {
+        (*out_return_type) = NULL;
+        (*out_return_count) = 0;
+        (*out_return_types) = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
+        (*out_named_return_names) = calloc(ret_child->list.count, sizeof(char const *));
+        (*out_have_named_return_names) = true;
+        for (size_t ri = 0; ri < ret_child->list.count; ri++)
+        {
+            odin_grammar_node_t * named = ret_child->list.children[ri];
+            if (named == NULL || named->type != AST_NODE_NAMED_RETURN)
+                continue;
+            odin_grammar_node_t * name_node = NULL;
+            odin_grammar_node_t * type_node = NULL;
+            for (size_t ci = 0; ci < named->list.count; ci++)
             {
-                odin_grammar_node_t * sig_child = child->list.children[j];
-                if (sig_child == NULL)
+                odin_grammar_node_t * ch = named->list.children[ci];
+                if (ch == NULL)
                     continue;
-                if (sig_child->type == AST_NODE_CALLING_CONVENTION && sig_child->list.count > 0)
-                {
-                    odin_grammar_node_t * str_child = sig_child->list.children[0];
-                    if (str_child && str_child->text)
-                        cc = parse_calling_convention(str_child->text);
-                }
-                else if (sig_child->type == AST_NODE_RETURNS && sig_child->list.count > 0)
-                {
-                    odin_grammar_node_t * ret_child = sig_child->list.children[0];
-                    if (ret_child->type == AST_NODE_RETURN_TYPE_LIST)
-                    {
-                        return_type = NULL;
-                        return_count = 0;
-                        return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
-                        for (size_t ri = 0; ri < ret_child->list.count; ri++)
-                        {
-                            odin_grammar_node_t * tn = ret_child->list.children[ri];
-                            if (tn == NULL)
-                                continue;
-                            TypeDescriptor const * td = sem_resolve_type_expr(ctx, tn);
-                            tn->resolved_type = td;
-                            if (td)
-                                return_types[return_count++] = td;
-                        }
-                    }
-                    else if (ret_child->type == AST_NODE_RETURN_LIST)
-                    {
-                        return_type = NULL;
-                        return_count = 0;
-                        return_types = calloc(ret_child->list.count, sizeof(TypeDescriptor const *));
-                        named_return_names_array = calloc(ret_child->list.count, sizeof(char const *));
-                        have_named_return_names = true;
-                        for (size_t ri = 0; ri < ret_child->list.count; ri++)
-                        {
-                            odin_grammar_node_t * named = ret_child->list.children[ri];
-                            if (named == NULL || named->type != AST_NODE_NAMED_RETURN)
-                                continue;
-                            odin_grammar_node_t * name_node = NULL;
-                            odin_grammar_node_t * type_node = NULL;
-                            for (size_t ci = 0; ci < named->list.count; ci++)
-                            {
-                                odin_grammar_node_t * ch = named->list.children[ci];
-                                if (ch == NULL)
-                                    continue;
-                                if (ch->type == AST_NODE_IDENTIFIER && name_node == NULL)
-                                    name_node = ch;
-                                else if (ch->type != AST_NODE_DIRECTIVE && ch->type != AST_NODE_DIRECTIVE_WITH_ARGS)
-                                    type_node = ch;
-                            }
-                            if (type_node == NULL)
-                                continue;
-                            TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
-                            type_node->resolved_type = td;
-                            if (td)
-                            {
-                                return_types[return_count] = td;
-                                named_return_names_array[return_count] = name_node ? name_node->text : NULL;
-                                return_count++;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        return_type = sem_resolve_type_expr(ctx, ret_child);
-                        if (return_type)
-                        {
-                            return_types = malloc(sizeof(TypeDescriptor const *));
-                            return_types[0] = return_type;
-                            return_count = 1;
-                        }
-                    }
-                }
-                else if (sig_child->type == AST_NODE_PARAMETER_LIST)
-                {
-                    param_list_node = sig_child;
-                }
+                if (ch->type == AST_NODE_IDENTIFIER && name_node == NULL)
+                    name_node = ch;
+                else if (ch->type != AST_NODE_DIRECTIVE && ch->type != AST_NODE_DIRECTIVE_WITH_ARGS)
+                    type_node = ch;
+            }
+            if (type_node == NULL)
+                continue;
+            TypeDescriptor const * td = sem_resolve_type_expr(ctx, type_node);
+            type_node->resolved_type = td;
+            if (td)
+            {
+                (*out_return_types)[(*out_return_count)] = td;
+                (*out_named_return_names)[(*out_return_count)] = name_node ? name_node->text : NULL;
+                (*out_return_count)++;
             }
         }
     }
+    else
+    {
+        (*out_return_type) = sem_resolve_type_expr(ctx, ret_child);
+        if ((*out_return_type))
+        {
+            (*out_return_types) = malloc(sizeof(TypeDescriptor const *));
+            (*out_return_types)[0] = (*out_return_type);
+            (*out_return_count) = 1;
+        }
+    }
+}
 
-    // Extract param type descriptors and default values from the parameter list
+static bool
+sem_resolve_proc_params_from_list(SemContext * ctx,
+    odin_grammar_node_t * param_list_node,
+    TypeDescriptor const *** out_param_types,
+    int * out_param_count,
+    size_t * inout_param_cap,
+    odin_grammar_node_t *** inout_default_nodes,
+    size_t * inout_default_cap,
+    bool * inout_is_variadic)
+{
     if (param_list_node != NULL && param_list_node->list.count > 0)
     {
         odin_grammar_node_t * params = param_list_node->list.children[0];
@@ -774,7 +736,7 @@ sem_resolve_procedure_signature(
                     if (pt == NULL)
                         continue;
                     param_type_node->resolved_type = pt;
-                    is_variadic = true;
+                    (*inout_is_variadic) = true;
                 }
 
                 // Skip poly type parameters ($T: typeid) — they don't consume
@@ -789,46 +751,46 @@ sem_resolve_procedure_signature(
                 // (a, b: int = 10 -> b defaults to 10, a does not).
                 for (int ni = 0; ni < name_count; ni++)
                 {
-                    if (param_count >= (int)param_cap)
+                    if ((*out_param_count) >= (int)(*inout_param_cap))
                     {
-                        size_t new_cap = param_cap == 0 ? 4 : param_cap * 2;
-                        TypeDescriptor const ** tmp = realloc(param_types, new_cap * sizeof(TypeDescriptor const *));
+                        size_t new_cap = (*inout_param_cap) == 0 ? 4 : (*inout_param_cap) * 2;
+                        TypeDescriptor const ** tmp = realloc((*out_param_types), new_cap * sizeof(TypeDescriptor const *));
                         if (tmp == NULL)
                         {
-                            free(param_types);
-                            free(default_value_nodes);
-                            return NULL;
+                            free((*out_param_types));
+                            free((*inout_default_nodes));
+                            return false;
                         }
-                        param_types = tmp;
-                        param_cap = new_cap;
+                        (*out_param_types) = tmp;
+                        (*inout_param_cap) = new_cap;
                     }
                     // Store default value node (NULL if no default)
-                    if (param_count >= (int)default_val_cap)
+                    if ((*out_param_count) >= (int)(*inout_default_cap))
                     {
-                        size_t new_cap = default_val_cap == 0 ? 4 : default_val_cap * 2;
+                        size_t new_cap = (*inout_default_cap) == 0 ? 4 : (*inout_default_cap) * 2;
                         odin_grammar_node_t ** tmp2
-                            = realloc(default_value_nodes, new_cap * sizeof(odin_grammar_node_t *));
+                            = realloc((*inout_default_nodes), new_cap * sizeof(odin_grammar_node_t *));
                         if (tmp2 == NULL)
                         {
-                            free(param_types);
-                            free(default_value_nodes);
-                            return NULL;
+                            free((*out_param_types));
+                            free((*inout_default_nodes));
+                            return false;
                         }
                         // Zero-initialize newly allocated slots
-                        for (size_t zi = default_val_cap; zi < new_cap; zi++)
+                        for (size_t zi = (*inout_default_cap); zi < new_cap; zi++)
                             tmp2[zi] = NULL;
-                        default_value_nodes = tmp2;
-                        default_val_cap = new_cap;
+                        (*inout_default_nodes) = tmp2;
+                        (*inout_default_cap) = new_cap;
                     }
-                    default_value_nodes[param_count] = (ni == name_count - 1) ? default_value_node : NULL;
-                    param_types[param_count++] = pt;
+                    (*inout_default_nodes)[(*out_param_count)] = (ni == name_count - 1) ? default_value_node : NULL;
+                    (*out_param_types)[(*out_param_count)++] = pt;
                 }
             }
         }
     }
 
     // Also detect bare ... variadic
-    if (!is_variadic && param_list_node != NULL && param_list_node->list.count > 0)
+    if (!(*inout_is_variadic) && param_list_node != NULL && param_list_node->list.count > 0)
     {
         odin_grammar_node_t * params = param_list_node->list.children[0];
         if (params != NULL && params->type == AST_NODE_PARAMETERS)
@@ -840,13 +802,83 @@ sem_resolve_procedure_signature(
                     continue;
                 if (p->type == AST_NODE_ELLIPSIS)
                 {
-                    is_variadic = true;
+                    (*inout_is_variadic) = true;
                     break;
                 }
             }
         }
     }
 
+    return true;
+}
+
+static TypeDescriptor const *
+sem_resolve_procedure_signature(
+    SemContext * ctx,
+    odin_grammar_node_t * node,
+    TypeDescriptor const *** out_param_types,
+    int * out_param_count,
+    TypeDescriptor const ** out_return_type,
+    int * out_return_count,
+    calling_convention_t * out_cc,
+    bool * out_is_variadic
+)
+{
+    TypeDescriptor const * return_type = NULL;
+    TypeDescriptor const ** return_types = NULL;
+    int return_count = 0;
+    int param_count = 0;
+    TypeDescriptor const ** param_types = NULL;
+    size_t param_cap = 0;
+    calling_convention_t cc = CALLING_CONV_ODIN;
+    bool is_variadic = false;
+
+    odin_grammar_node_t * param_list_node = NULL;
+
+    // Variables for named return handling
+    odin_grammar_node_t ** default_value_nodes = NULL;
+    size_t default_val_cap = 0;
+    char const ** named_return_names_array = NULL;
+    bool have_named_return_names = false;
+
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child == NULL)
+            continue;
+        if (child->type == AST_NODE_PROCEDURE_SIGNATURE)
+        {
+            for (size_t j = 0; j < child->list.count; j++)
+            {
+                odin_grammar_node_t * sig_child = child->list.children[j];
+                if (sig_child == NULL)
+                    continue;
+                if (sig_child->type == AST_NODE_CALLING_CONVENTION && sig_child->list.count > 0)
+                {
+                    odin_grammar_node_t * str_child = sig_child->list.children[0];
+                    if (str_child && str_child->text)
+                        cc = parse_calling_convention(str_child->text);
+                }
+                else if (sig_child->type == AST_NODE_RETURNS && sig_child->list.count > 0)
+                {
+                    sem_resolve_proc_returns_clause(ctx, sig_child->list.children[0], &return_type,
+                        &return_types, &return_count, &named_return_names_array, &have_named_return_names);
+                }
+                else if (sig_child->type == AST_NODE_PARAMETER_LIST)
+                {
+                    param_list_node = sig_child;
+                }
+            }
+        }
+    }
+
+    // Extract param type descriptors and default values from the parameter list
+    // (also detects bare ... variadic)
+    if (!sem_resolve_proc_params_from_list(ctx, param_list_node, &param_types, &param_count,
+        &param_cap, &default_value_nodes, &default_val_cap, &is_variadic))
+    {
+        return NULL;
+    }
     // Create the procedure type descriptor
     if (return_count == 0)
         return_types = NULL;
