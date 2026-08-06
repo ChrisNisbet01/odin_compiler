@@ -141,7 +141,11 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       outer_product, hadamard_product, matrix_flatten) in
       `ir_gen_postfix_call` into `ir_gen_postfix_matrix_intrinsic()`
       (returns bool consumed; sets *val/*cur_type). **246/246 tests pass.**
-- [ ] D. Named-boolean conditions
+- [x] D. Named-boolean conditions: `poly_is_known_intrinsic_name`
+      (`polymorphism.c`) 34-entry `strcmp` OR-chain → the 3 type-returning
+      names (direct) + scan of the shared `intrinsic_predicates[]` table
+      (now the single source of truth for `type_is_*` names). **246/246 tests
+      pass.**
 - [ ] E. Large-function extraction
 - [ ] F. Predicate extraction
 

@@ -1064,40 +1064,15 @@ poly_is_known_intrinsic_name(char const * name)
 {
     if (name == NULL)
         return false;
-    return strcmp(name, "type_base_type") == 0
-        || strcmp(name, "type_core_type") == 0
-        || strcmp(name, "type_elem_type") == 0
-        || strcmp(name, "type_is_boolean") == 0
-        || strcmp(name, "type_is_integer") == 0
-        || strcmp(name, "type_is_rune") == 0
-        || strcmp(name, "type_is_float") == 0
-        || strcmp(name, "type_is_complex") == 0
-        || strcmp(name, "type_is_quaternion") == 0
-        || strcmp(name, "type_is_typeid") == 0
-        || strcmp(name, "type_is_any") == 0
-        || strcmp(name, "type_is_string") == 0
-        || strcmp(name, "type_is_unsigned") == 0
-        || strcmp(name, "type_is_numeric") == 0
-        || strcmp(name, "type_is_ordered") == 0
-        || strcmp(name, "type_is_ordered_numeric") == 0
-        || strcmp(name, "type_is_indexable") == 0
-        || strcmp(name, "type_is_sliceable") == 0
-        || strcmp(name, "type_is_comparable") == 0
-        || strcmp(name, "type_is_pointer") == 0
-        || strcmp(name, "type_is_multi_pointer") == 0
-        || strcmp(name, "type_is_array") == 0
-        || strcmp(name, "type_is_slice") == 0
-        || strcmp(name, "type_is_dynamic_array") == 0
-        || strcmp(name, "type_is_map") == 0
-        || strcmp(name, "type_is_struct") == 0
-        || strcmp(name, "type_is_union") == 0
-        || strcmp(name, "type_is_enum") == 0
-        || strcmp(name, "type_is_proc") == 0
-        || strcmp(name, "type_is_bit_set") == 0
-        || strcmp(name, "type_is_bit_field") == 0
-        || strcmp(name, "type_is_simd_vector") == 0
-        || strcmp(name, "type_is_matrix") == 0
-        || strcmp(name, "type_is_has_nil") == 0;
+    if (strcmp(name, "type_base_type") == 0 || strcmp(name, "type_core_type") == 0
+        || strcmp(name, "type_elem_type") == 0)
+        return true;
+    for (size_t i = 0; i < sizeof(intrinsic_predicates) / sizeof(intrinsic_predicates[0]); i++)
+    {
+        if (strcmp(name, intrinsic_predicates[i].name) == 0)
+            return true;
+    }
+    return false;
 }
 
 // =========================================================================
