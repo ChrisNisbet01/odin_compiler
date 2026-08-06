@@ -151,11 +151,16 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       `ir_gen_type_query_expr` (type_of/typeid_of/type_info_of/size_of/
       align_of — merged 5 inline cases into one switch),
       `ir_gen_min_max_expr`, `ir_gen_new_expr`, `ir_gen_expand_values_expr`,
-      `ir_gen_bare_postfix_member`, `ir_gen_context_expr`. Remaining large
-      targets: `sem_evaluate_postfix_expr` (938),
-      `sem_pass2_node` (907), `sem_pass1_register_top_level_ex` (585),
-      `sem_evaluate_constant_int` (343), `sem_resolve_procedure_signature`
-      (339), `ir_generate` (300). **246/246 tests pass.**
+      `ir_gen_bare_postfix_member`, `ir_gen_context_expr`. **246/246 tests
+      pass.**
+- [x] E. `sem_evaluate_postfix_expr` (`sem_evaluate_expr.c`): extracted the
+      package-qualified branch (pkg.member/pkg.call, was ~310 inline lines)
+      into `sem_evaluate_postfix_pkg_access(ctx, node, access_pkg)` (313
+      lines). Main function reduced 938 → 626 lines. Remaining large
+      targets: `sem_pass2_node` (907), `sem_pass1_register_top_level_ex`
+      (585), `sem_evaluate_constant_int` (343),
+      `sem_resolve_procedure_signature` (339), `ir_generate` (300).
+      **246/246 tests pass.**
 - [ ] F. Predicate extraction
 
 ## Verification

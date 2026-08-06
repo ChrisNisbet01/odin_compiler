@@ -2054,10 +2054,326 @@ sem_collect_call_args_nodes(odin_grammar_node_t * op, odin_grammar_node_t ** out
     return count;
 }
 
+// Package-qualified postfix chain (pkg.member / pkg.call). Sets
+// op->resolved_symbol/resolved_type on each op and returns the final type.
+static TypeDescriptor const *
+sem_evaluate_postfix_pkg_access(SemContext * ctx, odin_grammar_node_t * node, ImportedPackage * access_pkg)
+{
+    TypeDescriptor const * type = NULL;
+    char const * last_member_name = NULL;
+
+    if (node->list.count >= 2)
+    {
+        odin_grammar_node_t * postfix_ops = node->list.children[1];
+        if (postfix_ops != NULL)
+        {
+            for (size_t i = 0; i < postfix_ops->list.count; i++)
+            {
+                odin_grammar_node_t * op = postfix_ops->list.children[i];
+                if (op == NULL)
+                    continue;
+
+                switch (op->type)
+                {
+                case AST_NODE_POSTFIX_MEMBER:
+                    if (op->list.count >= 1 && op->list.children[0] && type == NULL)
+                    {
+                        char const * member_name = op->list.children[0]->text;
+                        last_member_name = member_name;
+                        symbol_t * sym = scope_find_symbol_entry(access_pkg->package_scope, member_name);
+                        if (sym)
+                        {
+                            if (sym->is_private)
+                            {
+                                char buf[256];
+                                snprintf(
+                                    buf,
+                                    sizeof(buf),
+                                    "symbol '%s' is private in package '%s'",
+                                    member_name,
+                                    access_pkg->package_name ? access_pkg->package_name : "unknown"
+                                );
+                                sem_error_list_add(&ctx->errors, NULL, op, buf);
+                            }
+                            else
+                            {
+                                op->resolved_symbol = sym;
+                                type = sym->value.type_info;
+                                op->resolved_type = type;
+                            }
+                        }
+                        else
+                        {
+                            char buf[256];
+                            snprintf(
+                                buf,
+                                sizeof(buf),
+                                "undeclared name in package: '%s'",
+                                member_name ? member_name : "?"
+                            );
+                            sem_error_list_add(&ctx->errors, NULL, op, buf);
+                        }
+                    }
+                    break;
+
+                case AST_NODE_POSTFIX_CALL:
+                {
+                    // Check if the package member is polymorphic; if so,
+                    // instantiate a specialization via poly_resolve_call.
+                    symbol_t * pkg_callee_sym = NULL;
+                    if (i > 0)
+                    {
+                        odin_grammar_node_t * prev_op = postfix_ops->list.children[i - 1];
+                        if (prev_op && prev_op->resolved_symbol)
+                            pkg_callee_sym = prev_op->resolved_symbol;
+                    }
+                    else
+                    {
+                        // First postfix op (i == 0): get callee from base expression
+                        odin_grammar_node_t * base = node->list.children[0];
+                        if (base != NULL)
+                        {
+                            odin_grammar_node_t * inner = base;
+                            while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
+                                inner = inner->list.children[0];
+                            if (inner->type == AST_NODE_POSTFIX_EXPRESSION && inner->list.count >= 2)
+                            {
+                                odin_grammar_node_t * inner_ops = inner->list.children[1];
+                                if (inner_ops && inner_ops->list.count > 0)
+                                {
+                                    odin_grammar_node_t * last_member
+                                        = inner_ops->list.children[inner_ops->list.count - 1];
+                                    if (last_member && last_member->resolved_symbol)
+                                        pkg_callee_sym = last_member->resolved_symbol;
+                                }
+                            }
+                        }
+                    }
+
+                    // Matrix intrinsics (transpose, outer_product,
+                    // hadamard_product, matrix_flatten): compute the return
+                    // type from the argument types, mirroring the local path.
+                    // Handles package-qualified calls like `linalg.hadamard_product`.
+                    if (last_member_name
+                        && (strcmp(last_member_name, "transpose") == 0
+                            || strcmp(last_member_name, "outer_product") == 0
+                            || strcmp(last_member_name, "hadamard_product") == 0
+                            || strcmp(last_member_name, "matrix_flatten") == 0))
+                    {
+                        odin_grammar_node_t * mat_args[16];
+                        int mat_arg_count = sem_collect_call_args_nodes(op, mat_args, 16);
+                        for (int ai = 0; ai < mat_arg_count; ai++)
+                        {
+                            if (mat_args[ai])
+                                sem_evaluate_expr(ctx, mat_args[ai]);
+                        }
+
+                        TypeDescriptor const * result_type
+                            = sem_matrix_intrinsic_result_type(ctx, last_member_name, mat_args, mat_arg_count);
+                        if (result_type)
+                        {
+                            op->resolved_symbol = pkg_callee_sym;
+                            op->resolved_type = result_type;
+                            type = result_type;
+                            break;
+                        }
+                    }
+
+                    if (pkg_callee_sym && pkg_callee_sym->is_polymorphic)
+                    {
+                        odin_grammar_node_t * arg_list = NULL;
+                        if (op->list.count > 0 && op->list.children[0] != NULL)
+                            arg_list = op->list.children[0];
+
+                        // Evaluate args first (poly_resolve_call reads resolved_type)
+                        if (arg_list && arg_list->type == AST_NODE_ARGUMENT_LIST)
+                        {
+                            for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                            {
+                                odin_grammar_node_t * raw = arg_list->list.children[ai];
+                                if (raw == NULL)
+                                    continue;
+                                odin_grammar_node_t * chain_args[128];
+                                int chain_count = 0;
+                                sem_collect_comma_chain_args(raw, chain_args, 128, &chain_count);
+                                for (int ci = 0; ci < chain_count; ci++)
+                                {
+                                    if (chain_args[ci])
+                                        sem_evaluate_expr(ctx, chain_args[ci]);
+                                }
+                            }
+                        }
+
+                        PolySpecialization * spec = poly_resolve_call(ctx, pkg_callee_sym, op, arg_list);
+                        if (spec && spec->symbol)
+                        {
+                            op->resolved_symbol = spec->symbol;
+                            TypeDescriptor const * proc_type = spec->symbol->value.type_info;
+                            if (proc_type && proc_type->kind == TD_KIND_PROC)
+                            {
+                                if (proc_type->proc_metadata.return_count > 1)
+                                {
+                                    op->resolved_type = proc_type;
+                                    type = proc_type;
+                                }
+                                else
+                                {
+                                    type = proc_type->proc_metadata.return_type;
+                                    op->resolved_type = type;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            sem_error_list_add(
+                                &ctx->errors, NULL, op, "polymorphic procedure call could not be specialized"
+                            );
+                        }
+                        break;
+                    }
+
+                    // Propagate resolved_symbol to the CALL node so IR gen
+                    // can create forward declarations for cross-package calls.
+                    if (pkg_callee_sym)
+                        op->resolved_symbol = pkg_callee_sym;
+
+                    if (type && type->kind == TD_KIND_PROC)
+                    {
+                        if (op->list.count > 0 && op->list.children[0] != NULL)
+                        {
+                            odin_grammar_node_t * arg_list = op->list.children[0];
+                            if (arg_list->type == AST_NODE_ARGUMENT_LIST)
+                            {
+                                for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                                {
+                                    if (arg_list->list.children[ai])
+                                    {
+                                        odin_grammar_node_t * argn = arg_list->list.children[ai];
+                                        sem_evaluate_expr(ctx, argn);
+                                    }
+                                }
+                            }
+                        }
+                        if (type->proc_metadata.return_count > 1)
+                        {
+                            op->resolved_type = type;
+                            break;
+                        }
+                        type = type->proc_metadata.return_type;
+                        op->resolved_type = type;
+                    }
+                    else if (type && type->kind == TD_KIND_OVERLOAD_BUNDLE)
+                    {
+                        odin_grammar_node_t * arg_list = NULL;
+                        if (op->list.count > 0 && op->list.children[0] != NULL)
+                            arg_list = op->list.children[0];
+
+                        symbol_t * winner
+                            = sem_resolve_overload_bundle_call(ctx, type, arg_list, op, last_member_name);
+                        if (winner && winner->value.type_info)
+                        {
+                            op->resolved_symbol = winner;
+                            TypeDescriptor const * proc_type = winner->value.type_info;
+                            if (proc_type && proc_type->kind == TD_KIND_PROC)
+                            {
+                                if (proc_type->proc_metadata.return_count > 0)
+                                {
+                                    // Named returns have the type in returns[0], implicit returns in return_type
+                                    if (proc_type->proc_metadata.returns != NULL
+                                        && proc_type->proc_metadata.return_count > 0)
+                                    {
+                                        type = proc_type->proc_metadata.returns[0];
+                                        op->resolved_type = type;
+                                    }
+                                    else if (proc_type->proc_metadata.return_type != NULL)
+                                    {
+                                        type = proc_type->proc_metadata.return_type;
+                                        op->resolved_type = type;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+
+                case AST_NODE_POSTFIX_SUBSCRIPT:
+                {
+                    odin_grammar_node_t * index_node = op->list.children[0];
+                    int index_count = 1;
+
+                    if (index_node && index_node->type == AST_NODE_EXPRESSION && index_node->list.count >= 2)
+                    {
+                        index_count = (int)index_node->list.count;
+                    }
+
+                    for (int idx = 0; idx < index_count; idx++)
+                    {
+                        odin_grammar_node_t * single_index_node = index_node;
+                        if (index_count > 1 && index_node->type == AST_NODE_EXPRESSION)
+                        {
+                            single_index_node = index_node->list.children[idx];
+                        }
+
+                        if (type
+                            && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
+                                || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
+                        {
+                            type = type->element_type;
+                        }
+                        else if (type && type->kind == TD_KIND_MATRIX)
+                        {
+                            // Matrix indexing requires both row and column indices: m[row, col]
+                            if (index_count == 1)
+                            {
+                                sem_error_list_add(
+                                    &ctx->errors,
+                                    ctx->source_file_path,
+                                    op,
+                                    "matrix index requires both a row and column index: use m[row, col]"
+                                );
+                                type = NULL;
+                                break;
+                            }
+                            type = type->as.matrix.element_type;
+                        }
+                        else if (type && type->kind == TD_KIND_MAP)
+                        {
+                            type = type->as.map.value_type;
+                        }
+                        else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
+                                 && strcmp(type->as.basic.name, "string") == 0)
+                        {
+                            type = get_basic_type_by_name(ctx->type_registry, "u8");
+                        }
+                    }
+
+                    op->resolved_type = type;
+                }
+                break;
+
+                case AST_NODE_POSTFIX_DEREF:
+                    if (type && type->kind == TD_KIND_POINTER)
+                    {
+                        type = type->pointee;
+                        op->resolved_type = type;
+                    }
+                    break;
+
+                default:
+                    break;
+                }
+            }
+        }
+    }
+
+    node->resolved_type = type;
+    return type;
+}
+
 static TypeDescriptor const *
 sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
 {
-
     if (node->list.count < 1)
         return NULL;
 
@@ -2081,318 +2397,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
     }
 
     if (access_pkg != NULL)
-    {
-        TypeDescriptor const * type = NULL;
-        char const * last_member_name = NULL;
-
-        if (node->list.count >= 2)
-        {
-            odin_grammar_node_t * postfix_ops = node->list.children[1];
-            if (postfix_ops != NULL)
-            {
-                for (size_t i = 0; i < postfix_ops->list.count; i++)
-                {
-                    odin_grammar_node_t * op = postfix_ops->list.children[i];
-                    if (op == NULL)
-                        continue;
-
-                    switch (op->type)
-                    {
-                    case AST_NODE_POSTFIX_MEMBER:
-                        if (op->list.count >= 1 && op->list.children[0] && type == NULL)
-                        {
-                            char const * member_name = op->list.children[0]->text;
-                            last_member_name = member_name;
-                            symbol_t * sym = scope_find_symbol_entry(access_pkg->package_scope, member_name);
-                            if (sym)
-                            {
-                                if (sym->is_private)
-                                {
-                                    char buf[256];
-                                    snprintf(
-                                        buf,
-                                        sizeof(buf),
-                                        "symbol '%s' is private in package '%s'",
-                                        member_name,
-                                        access_pkg->package_name ? access_pkg->package_name : "unknown"
-                                    );
-                                    sem_error_list_add(&ctx->errors, NULL, op, buf);
-                                }
-                                else
-                                {
-                                    op->resolved_symbol = sym;
-                                    type = sym->value.type_info;
-                                    op->resolved_type = type;
-                                }
-                            }
-                            else
-                            {
-                                char buf[256];
-                                snprintf(
-                                    buf,
-                                    sizeof(buf),
-                                    "undeclared name in package: '%s'",
-                                    member_name ? member_name : "?"
-                                );
-                                sem_error_list_add(&ctx->errors, NULL, op, buf);
-                            }
-                        }
-                        break;
-
-                    case AST_NODE_POSTFIX_CALL:
-                    {
-                        // Check if the package member is polymorphic; if so,
-                        // instantiate a specialization via poly_resolve_call.
-                        symbol_t * pkg_callee_sym = NULL;
-                        if (i > 0)
-                        {
-                            odin_grammar_node_t * prev_op = postfix_ops->list.children[i - 1];
-                            if (prev_op && prev_op->resolved_symbol)
-                                pkg_callee_sym = prev_op->resolved_symbol;
-                        }
-                        else
-                        {
-                            // First postfix op (i == 0): get callee from base expression
-                            odin_grammar_node_t * base = node->list.children[0];
-                            if (base != NULL)
-                            {
-                                odin_grammar_node_t * inner = base;
-                                while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
-                                    inner = inner->list.children[0];
-                                if (inner->type == AST_NODE_POSTFIX_EXPRESSION && inner->list.count >= 2)
-                                {
-                                    odin_grammar_node_t * inner_ops = inner->list.children[1];
-                                    if (inner_ops && inner_ops->list.count > 0)
-                                    {
-                                        odin_grammar_node_t * last_member
-                                            = inner_ops->list.children[inner_ops->list.count - 1];
-                                        if (last_member && last_member->resolved_symbol)
-                                            pkg_callee_sym = last_member->resolved_symbol;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Matrix intrinsics (transpose, outer_product,
-                        // hadamard_product, matrix_flatten): compute the return
-                        // type from the argument types, mirroring the local path.
-                        // Handles package-qualified calls like `linalg.hadamard_product`.
-                        if (last_member_name
-                            && (strcmp(last_member_name, "transpose") == 0
-                                || strcmp(last_member_name, "outer_product") == 0
-                                || strcmp(last_member_name, "hadamard_product") == 0
-                                || strcmp(last_member_name, "matrix_flatten") == 0))
-                        {
-                            odin_grammar_node_t * mat_args[16];
-                            int mat_arg_count = sem_collect_call_args_nodes(op, mat_args, 16);
-                            for (int ai = 0; ai < mat_arg_count; ai++)
-                            {
-                                if (mat_args[ai])
-                                    sem_evaluate_expr(ctx, mat_args[ai]);
-                            }
-
-                            TypeDescriptor const * result_type
-                                = sem_matrix_intrinsic_result_type(ctx, last_member_name, mat_args, mat_arg_count);
-                            if (result_type)
-                            {
-                                op->resolved_symbol = pkg_callee_sym;
-                                op->resolved_type = result_type;
-                                type = result_type;
-                                break;
-                            }
-                        }
-
-                        if (pkg_callee_sym && pkg_callee_sym->is_polymorphic)
-                        {
-                            odin_grammar_node_t * arg_list = NULL;
-                            if (op->list.count > 0 && op->list.children[0] != NULL)
-                                arg_list = op->list.children[0];
-
-                            // Evaluate args first (poly_resolve_call reads resolved_type)
-                            if (arg_list && arg_list->type == AST_NODE_ARGUMENT_LIST)
-                            {
-                                for (size_t ai = 0; ai < arg_list->list.count; ai++)
-                                {
-                                    odin_grammar_node_t * raw = arg_list->list.children[ai];
-                                    if (raw == NULL)
-                                        continue;
-                                    odin_grammar_node_t * chain_args[128];
-                                    int chain_count = 0;
-                                    sem_collect_comma_chain_args(raw, chain_args, 128, &chain_count);
-                                    for (int ci = 0; ci < chain_count; ci++)
-                                    {
-                                        if (chain_args[ci])
-                                            sem_evaluate_expr(ctx, chain_args[ci]);
-                                    }
-                                }
-                            }
-
-                            PolySpecialization * spec = poly_resolve_call(ctx, pkg_callee_sym, op, arg_list);
-                            if (spec && spec->symbol)
-                            {
-                                op->resolved_symbol = spec->symbol;
-                                TypeDescriptor const * proc_type = spec->symbol->value.type_info;
-                                if (proc_type && proc_type->kind == TD_KIND_PROC)
-                                {
-                                    if (proc_type->proc_metadata.return_count > 1)
-                                    {
-                                        op->resolved_type = proc_type;
-                                        type = proc_type;
-                                    }
-                                    else
-                                    {
-                                        type = proc_type->proc_metadata.return_type;
-                                        op->resolved_type = type;
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                sem_error_list_add(
-                                    &ctx->errors, NULL, op, "polymorphic procedure call could not be specialized"
-                                );
-                            }
-                            break;
-                        }
-
-                        // Propagate resolved_symbol to the CALL node so IR gen
-                        // can create forward declarations for cross-package calls.
-                        if (pkg_callee_sym)
-                            op->resolved_symbol = pkg_callee_sym;
-
-                        if (type && type->kind == TD_KIND_PROC)
-                        {
-                            if (op->list.count > 0 && op->list.children[0] != NULL)
-                            {
-                                odin_grammar_node_t * arg_list = op->list.children[0];
-                                if (arg_list->type == AST_NODE_ARGUMENT_LIST)
-                                {
-                                    for (size_t ai = 0; ai < arg_list->list.count; ai++)
-                                    {
-                                        if (arg_list->list.children[ai])
-                                        {
-                                            odin_grammar_node_t * argn = arg_list->list.children[ai];
-                                            sem_evaluate_expr(ctx, argn);
-                                        }
-                                    }
-                                }
-                            }
-                            if (type->proc_metadata.return_count > 1)
-                            {
-                                op->resolved_type = type;
-                                break;
-                            }
-                            type = type->proc_metadata.return_type;
-                            op->resolved_type = type;
-                        }
-                        else if (type && type->kind == TD_KIND_OVERLOAD_BUNDLE)
-                        {
-                            odin_grammar_node_t * arg_list = NULL;
-                            if (op->list.count > 0 && op->list.children[0] != NULL)
-                                arg_list = op->list.children[0];
-
-                            symbol_t * winner
-                                = sem_resolve_overload_bundle_call(ctx, type, arg_list, op, last_member_name);
-                            if (winner && winner->value.type_info)
-                            {
-                                op->resolved_symbol = winner;
-                                TypeDescriptor const * proc_type = winner->value.type_info;
-                                if (proc_type && proc_type->kind == TD_KIND_PROC)
-                                {
-                                    if (proc_type->proc_metadata.return_count > 0)
-                                    {
-                                        // Named returns have the type in returns[0], implicit returns in return_type
-                                        if (proc_type->proc_metadata.returns != NULL
-                                            && proc_type->proc_metadata.return_count > 0)
-                                        {
-                                            type = proc_type->proc_metadata.returns[0];
-                                            op->resolved_type = type;
-                                        }
-                                        else if (proc_type->proc_metadata.return_type != NULL)
-                                        {
-                                            type = proc_type->proc_metadata.return_type;
-                                            op->resolved_type = type;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    }
-
-                    case AST_NODE_POSTFIX_SUBSCRIPT:
-                    {
-                        odin_grammar_node_t * index_node = op->list.children[0];
-                        int index_count = 1;
-
-                        if (index_node && index_node->type == AST_NODE_EXPRESSION && index_node->list.count >= 2)
-                        {
-                            index_count = (int)index_node->list.count;
-                        }
-
-                        for (int idx = 0; idx < index_count; idx++)
-                        {
-                            odin_grammar_node_t * single_index_node = index_node;
-                            if (index_count > 1 && index_node->type == AST_NODE_EXPRESSION)
-                            {
-                                single_index_node = index_node->list.children[idx];
-                            }
-
-                            if (type
-                                && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
-                                    || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
-                            {
-                                type = type->element_type;
-                            }
-                            else if (type && type->kind == TD_KIND_MATRIX)
-                            {
-                                // Matrix indexing requires both row and column indices: m[row, col]
-                                if (index_count == 1)
-                                {
-                                    sem_error_list_add(
-                                        &ctx->errors,
-                                        ctx->source_file_path,
-                                        op,
-                                        "matrix index requires both a row and column index: use m[row, col]"
-                                    );
-                                    type = NULL;
-                                    break;
-                                }
-                                type = type->as.matrix.element_type;
-                            }
-                            else if (type && type->kind == TD_KIND_MAP)
-                            {
-                                type = type->as.map.value_type;
-                            }
-                            else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
-                                     && strcmp(type->as.basic.name, "string") == 0)
-                            {
-                                type = get_basic_type_by_name(ctx->type_registry, "u8");
-                            }
-                        }
-
-                        op->resolved_type = type;
-                    }
-                    break;
-
-                    case AST_NODE_POSTFIX_DEREF:
-                        if (type && type->kind == TD_KIND_POINTER)
-                        {
-                            type = type->pointee;
-                            op->resolved_type = type;
-                        }
-                        break;
-
-                    default:
-                        break;
-                    }
-                }
-            }
-        }
-
-        node->resolved_type = type;
-        return type;
-    }
+        return sem_evaluate_postfix_pkg_access(ctx, node, access_pkg);
 
     TypeDescriptor const * type = sem_evaluate_expr(ctx, node->list.children[0]);
 
