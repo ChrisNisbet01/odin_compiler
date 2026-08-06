@@ -136,7 +136,7 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
             *ok = 0;
             return 0;
         }
-        
+
         // For poly_idents, look up in poly environment
         if (node->type == AST_NODE_POLY_IDENT && name[0] == '$')
         {
@@ -153,7 +153,7 @@ sem_evaluate_constant_int(SemContext * ctx, odin_grammar_node_t * node, int * ok
             *ok = 0;
             return 0;
         }
-        
+
         long long val = 0;
         if (poly_env_lookup_int(ctx, name, &val))
         {
@@ -2643,6 +2643,361 @@ sem_pass2_analyse_constant_decl(SemContext * ctx, odin_grammar_node_t * node)
 }
 
 static void
+sem_pass2_analyse_when_statement(
+    SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type
+)
+{
+    {
+        // Flat structure: [cond1, body1, cond2, body2, ..., elseBody?]
+        // Conditions are evaluated at compile time via the poly evaluator
+        // (handles $N poly ints, $T poly types, intrinsics predicates, etc.).
+        // Only the first matching branch is analysed; the selection is stored
+        // in node->metadata for the IR generator.
+        odin_grammar_node_t * selected = NULL;
+        size_t n = node->list.count;
+        size_t i = 0;
+        while (i + 1 < n)
+        {
+            odin_grammar_node_t * cond = node->list.children[i];
+            odin_grammar_node_t * body = node->list.children[i + 1];
+            if (cond == NULL || body == NULL || body->type != AST_NODE_COMPOUND_STATEMENT)
+                break;
+            long long val = poly_eval_where_expr(ctx, cond);
+            if (val == -1)
+            {
+                sem_error_list_add(
+                    &ctx->errors, ctx->source_file_path, cond, "when condition must evaluate to a compile-time constant"
+                );
+                break;
+            }
+            if (val != 0)
+            {
+                selected = body;
+                break;
+            }
+            i += 2;
+        }
+
+        // Trailing `else` body (odd remaining child)
+        if (selected == NULL && i + 1 == n && node->list.children[i] != NULL
+            && node->list.children[i]->type == AST_NODE_COMPOUND_STATEMENT)
+        {
+            selected = node->list.children[i];
+        }
+
+        // No matching branch and no else: the statement generates nothing.
+        if (selected == NULL)
+        {
+            poly_register_when_selection(node, NULL);
+            return;
+        }
+
+        poly_register_when_selection(node, selected);
+        generator_push_scope(ctx->gen_ctx);
+        sem_analyse_compound_statement(ctx, selected, expected_return_type);
+        generator_pop_scope(ctx->gen_ctx);
+        return;
+    }
+}
+
+static void
+sem_pass2_analyse_if_statement(
+    SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type
+)
+{
+    {
+        // children[0] = condition, children[1] = then-body, children[2] = else-body (optional)
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_COMPOUND_STATEMENT)
+            {
+                generator_push_scope(ctx->gen_ctx);
+                sem_analyse_compound_statement(ctx, child, expected_return_type);
+                generator_pop_scope(ctx->gen_ctx);
+            }
+            else if (child->type == AST_NODE_IF_STATEMENT)
+            {
+                sem_pass2_node(ctx, child, expected_return_type);
+            }
+            else if (child->type == AST_NODE_EXPRESSION_STATEMENT || child->type == AST_NODE_ASSIGN_STATEMENT
+                     || child->type == AST_NODE_VARIABLE_DECL || child->type == AST_NODE_CONSTANT_DECL
+                     || child->type == AST_NODE_RETURN_STATEMENT || child->type == AST_NODE_BREAK_STATEMENT
+                     || child->type == AST_NODE_CONTINUE_STATEMENT || child->type == AST_NODE_DEFER_STATEMENT
+                     || child->type == AST_NODE_FALLTHROUGH_STATEMENT || child->type == AST_NODE_FOR_STATEMENT
+                     || child->type == AST_NODE_SWITCH_STATEMENT || child->type == AST_NODE_WHEN_STATEMENT)
+            {
+                // `if cond do stmt` form — analyse the statement directly
+                generator_push_scope(ctx->gen_ctx);
+                sem_pass2_node(ctx, child, expected_return_type);
+                generator_pop_scope(ctx->gen_ctx);
+            }
+            else
+            {
+                sem_evaluate_expr(ctx, child);
+            }
+        }
+        return;
+    }
+}
+
+static void
+sem_pass2_analyse_for_statement(
+    SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type
+)
+{
+    odin_grammar_node_t * body = node_find_child(node, AST_NODE_COMPOUND_STATEMENT);
+
+    // Skip a leading `#unroll` directive child (Directive? in ForStatement)
+    size_t start_idx = 0;
+    if (node->list.count > 0 && node->list.children[0] != NULL && node->list.children[0]->type == AST_NODE_DIRECTIVE)
+    {
+        start_idx = 1;
+    }
+
+    // Detect for-range: first child is a raw Identifier
+    bool is_for_range = false;
+    if (node->list.count >= 2 && node->list.children[start_idx] != NULL
+        && node->list.children[start_idx]->type == AST_NODE_IDENTIFIER)
+    {
+        for (size_t i = start_idx + 1; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_COMPOUND_STATEMENT)
+                break;
+            if (child->type == AST_NODE_IDENTIFIER)
+                continue;
+            sem_evaluate_expr(ctx, child);
+            if (child->resolved_type
+                && (child->resolved_type->kind == TD_KIND_RANGE || child->resolved_type->kind == TD_KIND_VECTOR
+                    || child->resolved_type->kind == TD_KIND_ARRAY))
+            {
+                is_for_range = true;
+            }
+            break;
+        }
+    }
+
+    // For non-range for loops, evaluate condition expressions before pushing scope
+    if (!is_for_range && node->list.count >= 1 && node->list.children[start_idx] != NULL
+        && node->list.children[start_idx]->type != AST_NODE_COMPOUND_STATEMENT)
+    {
+        sem_evaluate_expr(ctx, node->list.children[start_idx]);
+    }
+
+    generator_push_scope(ctx->gen_ctx);
+
+    if (is_for_range)
+    {
+        TypeDescriptor const * i64_type = type_descriptor_get_int64_type(ctx->type_registry);
+        for (size_t i = 0; i < node->list.count; i++)
+        {
+            odin_grammar_node_t * child = node->list.children[i];
+            if (child == NULL)
+                continue;
+            if (child->type == AST_NODE_COMPOUND_STATEMENT)
+                break;
+            if (child->type == AST_NODE_IDENTIFIER)
+            {
+                TypedValue tv = create_typed_value(NULL, i64_type, true);
+                generator_add_symbol(ctx->gen_ctx, child->text, tv);
+            }
+        }
+    }
+
+    if (body)
+    {
+        sem_analyse_compound_statement(ctx, body, expected_return_type);
+    }
+    else
+    {
+        // For the `do`-form (for v in arr do stmt), find the body statement
+        // as the last non-range, non-identifier child.
+        odin_grammar_node_t * body_stmt = NULL;
+        for (size_t i = node->list.count; i > 0; i--)
+        {
+            odin_grammar_node_t * child = node->list.children[i - 1];
+            if (child == NULL)
+                continue;
+            if (is_for_range && child->type == AST_NODE_IDENTIFIER)
+                continue;
+            if (child->type == AST_NODE_COMPOUND_STATEMENT)
+                continue;
+            body_stmt = child;
+            break;
+        }
+        if (body_stmt)
+            sem_pass2_node(ctx, body_stmt, expected_return_type);
+    }
+
+    generator_pop_scope(ctx->gen_ctx);
+}
+
+static void
+sem_pass2_analyse_switch_statement(
+    SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type
+)
+{
+    // Detect #partial directive among switch children
+    bool is_partial = false;
+    bool has_default = false;
+    odin_grammar_node_t * switch_expr_node = NULL;
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child == NULL)
+            continue;
+        if (child->type == AST_NODE_DIRECTIVE || child->type == AST_NODE_DIRECTIVE_WITH_ARGS)
+        {
+            if (child->text != NULL && strstr(child->text, "#partial") != NULL)
+                is_partial = true;
+        }
+        else if (child->type == AST_NODE_SWITCH_DEFAULT)
+        {
+            has_default = true;
+        }
+        else if (child->type != AST_NODE_SWITCH_CASE && child->type != AST_NODE_COMPOUND_STATEMENT)
+        {
+            // First non-directive, non-case, non-default, non-compound child is the switch expression
+            if (switch_expr_node == NULL)
+                switch_expr_node = child;
+        }
+    }
+
+    // Evaluate switch expression to determine its type
+    TypeDescriptor const * switch_type = NULL;
+    if (switch_expr_node != NULL)
+    {
+        sem_evaluate_expr(ctx, switch_expr_node);
+        switch_type = switch_expr_node->resolved_type;
+    }
+
+    // Collect case values (enumerator values covered by the switch)
+    // Only relevant if the switch type is an enum
+    long long covered_values[64];
+    int covered_count = 0;
+    bool can_check_exhaustiveness
+        = (switch_type != NULL && switch_type->kind == TD_KIND_ENUM && !has_default && !is_partial
+           && switch_type->as.enum_type.enumerator_count > 0 && switch_type->as.enum_type.enumerator_values != NULL);
+
+    for (size_t i = 0; i < node->list.count; i++)
+    {
+        odin_grammar_node_t * child = node->list.children[i];
+        if (child == NULL)
+            continue;
+        if (child->type == AST_NODE_SWITCH_CASE)
+        {
+            generator_push_scope(ctx->gen_ctx);
+            // Children: case value expression(s), then body statement(s)
+            for (size_t j = 0; j < child->list.count; j++)
+            {
+                odin_grammar_node_t * case_child = child->list.children[j];
+                if (case_child == NULL)
+                    continue;
+                if (case_child->type == AST_NODE_COMPOUND_STATEMENT || case_child->type == AST_NODE_RETURN_STATEMENT
+                    || case_child->type == AST_NODE_BREAK_STATEMENT || case_child->type == AST_NODE_CONTINUE_STATEMENT
+                    || case_child->type == AST_NODE_FALLTHROUGH_STATEMENT
+                    || case_child->type == AST_NODE_EXPRESSION_STATEMENT
+                    || case_child->type == AST_NODE_ASSIGN_STATEMENT || case_child->type == AST_NODE_VARIABLE_DECL
+                    || case_child->type == AST_NODE_IF_STATEMENT || case_child->type == AST_NODE_FOR_STATEMENT
+                    || case_child->type == AST_NODE_SWITCH_STATEMENT || case_child->type == AST_NODE_DEFER_STATEMENT)
+                {
+                    sem_pass2_node(ctx, case_child, expected_return_type);
+                }
+                else
+                {
+                    sem_evaluate_expr(ctx, case_child);
+
+                    // If we're tracking exhaustiveness, record the case value
+                    if (can_check_exhaustiveness && covered_count < 64)
+                    {
+                        symbol_t * case_sym = NULL;
+                        odin_grammar_node_t * ident = case_child;
+                        // Unwrap expression wrappers to find identifier
+                        while (ident != NULL && ident->type != AST_NODE_IDENTIFIER && ident->list.count > 0)
+                        {
+                            ident = ident->list.children[0];
+                        }
+                        // Try to get the constant int value of the case expression
+                        if (ident != NULL && ident->type == AST_NODE_IDENTIFIER && ident->text != NULL)
+                        {
+                            symbol_t * sym
+                                = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
+                            if (sym && sym->has_const_int_val)
+                                covered_values[covered_count++] = sym->const_int_val;
+                        }
+                        else if (case_child->type == AST_NODE_INTEGER_VALUE)
+                        {
+                            // Direct integer case value
+                            if (case_child->text != NULL)
+                                covered_values[covered_count++] = strtoll(case_child->text, NULL, 10);
+                        }
+                    }
+                }
+            }
+            generator_pop_scope(ctx->gen_ctx);
+        }
+        else if (child->type == AST_NODE_SWITCH_DEFAULT)
+        {
+            generator_push_scope(ctx->gen_ctx);
+            for (size_t j = 0; j < child->list.count; j++)
+            {
+                odin_grammar_node_t * def_child = child->list.children[j];
+                if (def_child == NULL)
+                    continue;
+                sem_pass2_node(ctx, def_child, expected_return_type);
+            }
+            generator_pop_scope(ctx->gen_ctx);
+        }
+        else if (child->type == AST_NODE_COMPOUND_STATEMENT)
+        {
+            sem_analyse_compound_statement(ctx, child, expected_return_type);
+        }
+        else if (child->type != AST_NODE_DIRECTIVE && child->type != AST_NODE_DIRECTIVE_WITH_ARGS)
+        {
+            sem_evaluate_expr(ctx, child);
+        }
+    }
+
+    // Exhaustiveness check: verify all enum values are covered
+    if (can_check_exhaustiveness)
+    {
+        int num_enumerators = switch_type->as.enum_type.enumerator_count;
+        char const ** enum_names = switch_type->as.enum_type.enumerator_names;
+        long long * enum_values = switch_type->as.enum_type.enumerator_values;
+
+        // Check each enumerator
+        for (int ei = 0; ei < num_enumerators; ei++)
+        {
+            bool found = false;
+            for (int ci = 0; ci < covered_count; ci++)
+            {
+                if (covered_values[ci] == enum_values[ei])
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                char buf[256];
+                snprintf(
+                    buf,
+                    sizeof(buf),
+                    "switch is not exhaustive: missing case for enum value '%s'",
+                    enum_names[ei] ? enum_names[ei] : "<unknown>"
+                );
+                sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
+            }
+        }
+    }
+}
+
+static void
 sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor const * expected_return_type)
 {
     if (node == NULL)
@@ -2728,349 +3083,20 @@ sem_pass2_node(SemContext * ctx, odin_grammar_node_t * node, TypeDescriptor cons
         break;
 
     case AST_NODE_WHEN_STATEMENT:
-    {
-        // Flat structure: [cond1, body1, cond2, body2, ..., elseBody?]
-        // Conditions are evaluated at compile time via the poly evaluator
-        // (handles $N poly ints, $T poly types, intrinsics predicates, etc.).
-        // Only the first matching branch is analysed; the selection is stored
-        // in node->metadata for the IR generator.
-        odin_grammar_node_t * selected = NULL;
-        size_t n = node->list.count;
-        size_t i = 0;
-        while (i + 1 < n)
-        {
-            odin_grammar_node_t * cond = node->list.children[i];
-            odin_grammar_node_t * body = node->list.children[i + 1];
-            if (cond == NULL || body == NULL || body->type != AST_NODE_COMPOUND_STATEMENT)
-                break;
-            long long val = poly_eval_where_expr(ctx, cond);
-            if (val == -1)
-            {
-                sem_error_list_add(
-                    &ctx->errors, ctx->source_file_path, cond, "when condition must evaluate to a compile-time constant"
-                );
-                break;
-            }
-            if (val != 0)
-            {
-                selected = body;
-                break;
-            }
-            i += 2;
-        }
-
-        // Trailing `else` body (odd remaining child)
-        if (selected == NULL && i + 1 == n && node->list.children[i] != NULL
-            && node->list.children[i]->type == AST_NODE_COMPOUND_STATEMENT)
-        {
-            selected = node->list.children[i];
-        }
-
-        // No matching branch and no else: the statement generates nothing.
-        if (selected == NULL)
-        {
-            poly_register_when_selection(node, NULL);
-            break;
-        }
-
-        poly_register_when_selection(node, selected);
-        generator_push_scope(ctx->gen_ctx);
-        sem_analyse_compound_statement(ctx, selected, expected_return_type);
-        generator_pop_scope(ctx->gen_ctx);
+        sem_pass2_analyse_when_statement(ctx, node, expected_return_type);
         break;
-    }
 
     case AST_NODE_IF_STATEMENT:
-    {
-        // children[0] = condition, children[1] = then-body, children[2] = else-body (optional)
-        for (size_t i = 0; i < node->list.count; i++)
-        {
-            odin_grammar_node_t * child = node->list.children[i];
-            if (child == NULL)
-                continue;
-            if (child->type == AST_NODE_COMPOUND_STATEMENT)
-            {
-                generator_push_scope(ctx->gen_ctx);
-                sem_analyse_compound_statement(ctx, child, expected_return_type);
-                generator_pop_scope(ctx->gen_ctx);
-            }
-            else if (child->type == AST_NODE_IF_STATEMENT)
-            {
-                sem_pass2_node(ctx, child, expected_return_type);
-            }
-            else if (child->type == AST_NODE_EXPRESSION_STATEMENT || child->type == AST_NODE_ASSIGN_STATEMENT
-                     || child->type == AST_NODE_VARIABLE_DECL || child->type == AST_NODE_CONSTANT_DECL
-                     || child->type == AST_NODE_RETURN_STATEMENT || child->type == AST_NODE_BREAK_STATEMENT
-                     || child->type == AST_NODE_CONTINUE_STATEMENT || child->type == AST_NODE_DEFER_STATEMENT
-                     || child->type == AST_NODE_FALLTHROUGH_STATEMENT || child->type == AST_NODE_FOR_STATEMENT
-                     || child->type == AST_NODE_SWITCH_STATEMENT || child->type == AST_NODE_WHEN_STATEMENT)
-            {
-                // `if cond do stmt` form — analyse the statement directly
-                generator_push_scope(ctx->gen_ctx);
-                sem_pass2_node(ctx, child, expected_return_type);
-                generator_pop_scope(ctx->gen_ctx);
-            }
-            else
-            {
-                sem_evaluate_expr(ctx, child);
-            }
-        }
+        sem_pass2_analyse_if_statement(ctx, node, expected_return_type);
         break;
-    }
 
     case AST_NODE_FOR_STATEMENT:
-    {
-        odin_grammar_node_t * body = node_find_child(node, AST_NODE_COMPOUND_STATEMENT);
-
-        // Skip a leading `#unroll` directive child (Directive? in ForStatement)
-        size_t start_idx = 0;
-        if (node->list.count > 0 && node->list.children[0] != NULL
-            && node->list.children[0]->type == AST_NODE_DIRECTIVE)
-        {
-            start_idx = 1;
-        }
-
-        // Detect for-range: first child is a raw Identifier
-        bool is_for_range = false;
-        if (node->list.count >= 2 && node->list.children[start_idx] != NULL
-            && node->list.children[start_idx]->type == AST_NODE_IDENTIFIER)
-        {
-            for (size_t i = start_idx + 1; i < node->list.count; i++)
-            {
-                odin_grammar_node_t * child = node->list.children[i];
-                if (child == NULL)
-                    continue;
-                if (child->type == AST_NODE_COMPOUND_STATEMENT)
-                    break;
-                if (child->type == AST_NODE_IDENTIFIER)
-                    continue;
-                sem_evaluate_expr(ctx, child);
-                if (child->resolved_type
-                    && (child->resolved_type->kind == TD_KIND_RANGE || child->resolved_type->kind == TD_KIND_VECTOR
-                        || child->resolved_type->kind == TD_KIND_ARRAY))
-                {
-                    is_for_range = true;
-                }
-                break;
-            }
-        }
-
-        // For non-range for loops, evaluate condition expressions before pushing scope
-        if (!is_for_range && node->list.count >= 1 && node->list.children[start_idx] != NULL
-            && node->list.children[start_idx]->type != AST_NODE_COMPOUND_STATEMENT)
-        {
-            sem_evaluate_expr(ctx, node->list.children[start_idx]);
-        }
-
-        generator_push_scope(ctx->gen_ctx);
-
-        if (is_for_range)
-        {
-            TypeDescriptor const * i64_type = type_descriptor_get_int64_type(ctx->type_registry);
-            for (size_t i = 0; i < node->list.count; i++)
-            {
-                odin_grammar_node_t * child = node->list.children[i];
-                if (child == NULL)
-                    continue;
-                if (child->type == AST_NODE_COMPOUND_STATEMENT)
-                    break;
-                if (child->type == AST_NODE_IDENTIFIER)
-                {
-                    TypedValue tv = create_typed_value(NULL, i64_type, true);
-                    generator_add_symbol(ctx->gen_ctx, child->text, tv);
-                }
-            }
-        }
-
-        if (body)
-        {
-            sem_analyse_compound_statement(ctx, body, expected_return_type);
-        }
-        else
-        {
-            // For the `do`-form (for v in arr do stmt), find the body statement
-            // as the last non-range, non-identifier child.
-            odin_grammar_node_t * body_stmt = NULL;
-            for (size_t i = node->list.count; i > 0; i--)
-            {
-                odin_grammar_node_t * child = node->list.children[i - 1];
-                if (child == NULL)
-                    continue;
-                if (is_for_range && child->type == AST_NODE_IDENTIFIER)
-                    continue;
-                if (child->type == AST_NODE_COMPOUND_STATEMENT)
-                    continue;
-                body_stmt = child;
-                break;
-            }
-            if (body_stmt)
-                sem_pass2_node(ctx, body_stmt, expected_return_type);
-        }
-
-        generator_pop_scope(ctx->gen_ctx);
+        sem_pass2_analyse_for_statement(ctx, node, expected_return_type);
         break;
-    }
 
     case AST_NODE_SWITCH_STATEMENT:
-    {
-        // Detect #partial directive among switch children
-        bool is_partial = false;
-        bool has_default = false;
-        odin_grammar_node_t * switch_expr_node = NULL;
-        for (size_t i = 0; i < node->list.count; i++)
-        {
-            odin_grammar_node_t * child = node->list.children[i];
-            if (child == NULL)
-                continue;
-            if (child->type == AST_NODE_DIRECTIVE || child->type == AST_NODE_DIRECTIVE_WITH_ARGS)
-            {
-                if (child->text != NULL && strstr(child->text, "#partial") != NULL)
-                    is_partial = true;
-            }
-            else if (child->type == AST_NODE_SWITCH_DEFAULT)
-            {
-                has_default = true;
-            }
-            else if (child->type != AST_NODE_SWITCH_CASE && child->type != AST_NODE_COMPOUND_STATEMENT)
-            {
-                // First non-directive, non-case, non-default, non-compound child is the switch expression
-                if (switch_expr_node == NULL)
-                    switch_expr_node = child;
-            }
-        }
-
-        // Evaluate switch expression to determine its type
-        TypeDescriptor const * switch_type = NULL;
-        if (switch_expr_node != NULL)
-        {
-            sem_evaluate_expr(ctx, switch_expr_node);
-            switch_type = switch_expr_node->resolved_type;
-        }
-
-        // Collect case values (enumerator values covered by the switch)
-        // Only relevant if the switch type is an enum
-        long long covered_values[64];
-        int covered_count = 0;
-        bool can_check_exhaustiveness
-            = (switch_type != NULL && switch_type->kind == TD_KIND_ENUM && !has_default && !is_partial
-               && switch_type->as.enum_type.enumerator_count > 0
-               && switch_type->as.enum_type.enumerator_values != NULL);
-
-        for (size_t i = 0; i < node->list.count; i++)
-        {
-            odin_grammar_node_t * child = node->list.children[i];
-            if (child == NULL)
-                continue;
-            if (child->type == AST_NODE_SWITCH_CASE)
-            {
-                generator_push_scope(ctx->gen_ctx);
-                // Children: case value expression(s), then body statement(s)
-                for (size_t j = 0; j < child->list.count; j++)
-                {
-                    odin_grammar_node_t * case_child = child->list.children[j];
-                    if (case_child == NULL)
-                        continue;
-                    if (case_child->type == AST_NODE_COMPOUND_STATEMENT || case_child->type == AST_NODE_RETURN_STATEMENT
-                        || case_child->type == AST_NODE_BREAK_STATEMENT
-                        || case_child->type == AST_NODE_CONTINUE_STATEMENT
-                        || case_child->type == AST_NODE_FALLTHROUGH_STATEMENT
-                        || case_child->type == AST_NODE_EXPRESSION_STATEMENT
-                        || case_child->type == AST_NODE_ASSIGN_STATEMENT || case_child->type == AST_NODE_VARIABLE_DECL
-                        || case_child->type == AST_NODE_IF_STATEMENT || case_child->type == AST_NODE_FOR_STATEMENT
-                        || case_child->type == AST_NODE_SWITCH_STATEMENT
-                        || case_child->type == AST_NODE_DEFER_STATEMENT)
-                    {
-                        sem_pass2_node(ctx, case_child, expected_return_type);
-                    }
-                    else
-                    {
-                        sem_evaluate_expr(ctx, case_child);
-
-                        // If we're tracking exhaustiveness, record the case value
-                        if (can_check_exhaustiveness && covered_count < 64)
-                        {
-                            symbol_t * case_sym = NULL;
-                            odin_grammar_node_t * ident = case_child;
-                            // Unwrap expression wrappers to find identifier
-                            while (ident != NULL && ident->type != AST_NODE_IDENTIFIER && ident->list.count > 0)
-                            {
-                                ident = ident->list.children[0];
-                            }
-                            // Try to get the constant int value of the case expression
-                            if (ident != NULL && ident->type == AST_NODE_IDENTIFIER && ident->text != NULL)
-                            {
-                                symbol_t * sym
-                                    = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), ident->text);
-                                if (sym && sym->has_const_int_val)
-                                    covered_values[covered_count++] = sym->const_int_val;
-                            }
-                            else if (case_child->type == AST_NODE_INTEGER_VALUE)
-                            {
-                                // Direct integer case value
-                                if (case_child->text != NULL)
-                                    covered_values[covered_count++] = strtoll(case_child->text, NULL, 10);
-                            }
-                        }
-                    }
-                }
-                generator_pop_scope(ctx->gen_ctx);
-            }
-            else if (child->type == AST_NODE_SWITCH_DEFAULT)
-            {
-                generator_push_scope(ctx->gen_ctx);
-                for (size_t j = 0; j < child->list.count; j++)
-                {
-                    odin_grammar_node_t * def_child = child->list.children[j];
-                    if (def_child == NULL)
-                        continue;
-                    sem_pass2_node(ctx, def_child, expected_return_type);
-                }
-                generator_pop_scope(ctx->gen_ctx);
-            }
-            else if (child->type == AST_NODE_COMPOUND_STATEMENT)
-            {
-                sem_analyse_compound_statement(ctx, child, expected_return_type);
-            }
-            else if (child->type != AST_NODE_DIRECTIVE && child->type != AST_NODE_DIRECTIVE_WITH_ARGS)
-            {
-                sem_evaluate_expr(ctx, child);
-            }
-        }
-
-        // Exhaustiveness check: verify all enum values are covered
-        if (can_check_exhaustiveness)
-        {
-            int num_enumerators = switch_type->as.enum_type.enumerator_count;
-            char const ** enum_names = switch_type->as.enum_type.enumerator_names;
-            long long * enum_values = switch_type->as.enum_type.enumerator_values;
-
-            // Check each enumerator
-            for (int ei = 0; ei < num_enumerators; ei++)
-            {
-                bool found = false;
-                for (int ci = 0; ci < covered_count; ci++)
-                {
-                    if (covered_values[ci] == enum_values[ei])
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found)
-                {
-                    char buf[256];
-                    snprintf(
-                        buf,
-                        sizeof(buf),
-                        "switch is not exhaustive: missing case for enum value '%s'",
-                        enum_names[ei] ? enum_names[ei] : "<unknown>"
-                    );
-                    sem_error_list_add(&ctx->errors, ctx->source_file_path, node, buf);
-                }
-            }
-        }
+        sem_pass2_analyse_switch_statement(ctx, node, expected_return_type);
         break;
-    }
 
     case AST_NODE_BREAK_STATEMENT:
     case AST_NODE_CONTINUE_STATEMENT:

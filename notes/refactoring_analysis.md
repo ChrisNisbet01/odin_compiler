@@ -174,6 +174,21 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       `sem_evaluate_constant_int` (343),
       `sem_resolve_procedure_signature` (339), `ir_generate` (300).
       **246/246 tests pass.**
+- [x] E. `sem_pass2_node` remaining case bloat → four more named helpers:
+      `sem_pass2_analyse_when_statement`, `sem_pass2_analyse_if_statement`,
+      `sem_pass2_analyse_for_statement`, `sem_pass2_analyse_switch_statement`
+      (all thread `expected_return_type`). Case-level `break` → `return`
+      conversion was loop-aware: preserved loop-level `break`s (WHEN's
+      while-condition loop ×3, IF none, FOR's for-range detection + variable
+      registration + do-form body search ×4, SWITCH's exhaustiveness loop).
+      An initial script pass wrongly converted two of FOR's loop-level
+      `break`s (range-detection and registration loops) to `return`; caught by
+      a diff-audit against the baseline and fixed before commit.
+      `sem_pass2_node` reduced 907 → ~340 lines. Remaining large
+      targets: `sem_pass1_register_top_level_ex` (585),
+      `sem_evaluate_constant_int` (343),
+      `sem_resolve_procedure_signature` (339), `ir_generate` (300).
+      **246/246 tests pass.**
 - [ ] F. Predicate extraction
 
 ## Verification
