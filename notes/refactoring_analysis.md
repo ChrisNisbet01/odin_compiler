@@ -136,7 +136,11 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       with `POLY_PRED`-generated predicate functions and a single linear scan.
       `type_base_type`/`type_elem_type` kept as direct string checks (different
       return shape: type_id). **246/246 tests pass.**
-- [ ] C. Matrix intrinsic extraction in `ir_gen_postfix.c`
+- [x] C. Matrix intrinsic extraction in `ir_gen_postfix.c`: extracted the
+      inline 4-branch matrix-intrinsic dispatch block (transpose,
+      outer_product, hadamard_product, matrix_flatten) in
+      `ir_gen_postfix_call` into `ir_gen_postfix_matrix_intrinsic()`
+      (returns bool consumed; sets *val/*cur_type). **246/246 tests pass.**
 - [ ] D. Named-boolean conditions
 - [ ] E. Large-function extraction
 - [ ] F. Predicate extraction

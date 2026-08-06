@@ -421,6 +421,92 @@ ir_gen_collect_call_args(
 
 // Phase 3.3 helpers
 
+// Handle the matrix-intrinsic built-ins (transpose, outer_product,
+// hadamard_product, matrix_flatten) before 'any' packing. Returns true if the
+// call was consumed and *val/*cur_type hold the result.
+static bool
+ir_gen_postfix_matrix_intrinsic(
+    IrGenContext * ctx,
+    odin_grammar_node_t * node,
+    odin_grammar_node_t * op,
+    char const * func_name,
+    LLVMValueRef const * args,
+    TypeDescriptor const * const * arg_types,
+    int arg_count,
+    LLVMValueRef * val,
+    TypeDescriptor const ** cur_type
+)
+{
+    if (func_name == NULL || arg_count <= 0)
+        return false;
+
+    if (ir_gen_name_matches(func_name, "transpose"))
+    {
+        LLVMValueRef m_param = args[0];
+        TypeDescriptor const * m_type = arg_types[0];
+        TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
+
+        if (m_param != NULL && m_type != NULL && result_type != NULL && m_type->kind == TD_KIND_MATRIX
+            && result_type->kind == TD_KIND_MATRIX)
+        {
+            LLVMValueRef transposed = ir_gen_postfix_transpose(ctx, m_param, m_type, result_type);
+            if (transposed != NULL)
+            {
+                *val = transposed;
+                *cur_type = result_type;
+                return true;
+            }
+        }
+    }
+    else if (ir_gen_name_matches(func_name, "outer_product") && arg_count == 2)
+    {
+        TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
+        LLVMValueRef r
+            = ir_gen_postfix_outer_product(ctx, args[0], args[1], arg_types[0], arg_types[1], result_type);
+        if (r != NULL)
+        {
+            *val = r;
+            *cur_type = result_type;
+            return true;
+        }
+    }
+    else if (ir_gen_name_matches(func_name, "hadamard_product") && arg_count == 2)
+    {
+        TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
+        LLVMValueRef r = ir_gen_postfix_hadamard_product(ctx, args[0], args[1], arg_types[0], result_type);
+        if (r != NULL)
+        {
+            *val = r;
+            *cur_type = result_type;
+            return true;
+        }
+    }
+    else if (ir_gen_name_matches(func_name, "matrix_flatten") && arg_count == 1)
+    {
+        // Declared as proc "contextless" ($T: typeid, m: T) -> [R*C]E ---
+        // in stubs/base/intrinsics/intrinsics.odin. Compute the actual
+        // result type: [rows*cols x element_type].
+        TypeDescriptor const * arg_type = arg_types[0];
+        TypeDescriptor const * flatten_result = NULL;
+        if (arg_type && arg_type->kind == TD_KIND_MATRIX)
+        {
+            flatten_result = get_or_create_array_type(
+                ctx->type_registry,
+                arg_type->as.matrix.element_type,
+                (size_t)(arg_type->as.matrix.rows * arg_type->as.matrix.columns));
+        }
+        LLVMValueRef r = ir_gen_postfix_matrix_flatten(ctx, args[0], arg_type, flatten_result);
+        if (r != NULL)
+        {
+            *val = r;
+            *cur_type = flatten_result;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static bool
 ir_gen_postfix_call(
     IrGenContext * ctx,
@@ -457,74 +543,8 @@ ir_gen_postfix_call(
     }
 
     // Special handling for matrix intrinsics - must happen before 'any' packing
-    {
-        if (func_name != NULL && arg_count > 0)
-        {
-            if (ir_gen_name_matches(func_name, "transpose"))
-            {
-                LLVMValueRef m_param = args[0];
-                TypeDescriptor const * m_type = arg_types[0];
-                TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
-
-                if (m_param != NULL && m_type != NULL && result_type != NULL && m_type->kind == TD_KIND_MATRIX
-                    && result_type->kind == TD_KIND_MATRIX)
-                {
-                    LLVMValueRef transposed = ir_gen_postfix_transpose(ctx, m_param, m_type, result_type);
-                    if (transposed != NULL)
-                    {
-                        *val = transposed;
-                        *cur_type = result_type;
-                        return false;
-                    }
-                }
-            }
-            else if (ir_gen_name_matches(func_name, "outer_product") && arg_count == 2)
-            {
-                TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
-                LLVMValueRef r
-                    = ir_gen_postfix_outer_product(ctx, args[0], args[1], arg_types[0], arg_types[1], result_type);
-                if (r != NULL)
-                {
-                    *val = r;
-                    *cur_type = result_type;
-                    return false;
-                }
-            }
-            else if (ir_gen_name_matches(func_name, "hadamard_product") && arg_count == 2)
-            {
-                TypeDescriptor const * result_type = op->resolved_type ? op->resolved_type : node->resolved_type;
-                LLVMValueRef r = ir_gen_postfix_hadamard_product(ctx, args[0], args[1], arg_types[0], result_type);
-                if (r != NULL)
-                {
-                    *val = r;
-                    *cur_type = result_type;
-                    return false;
-                }
-            }
-            else if (ir_gen_name_matches(func_name, "matrix_flatten") && arg_count == 1)
-            {
-                // Declared as proc "contextless" ($T: typeid, m: T) -> [R*C]E ---
-                // in stubs/base/intrinsics/intrinsics.odin. Compute the actual
-                // result type: [rows*cols x element_type].
-                TypeDescriptor const * arg_type = arg_types[0];
-                TypeDescriptor const * flatten_result = NULL;
-                if (arg_type && arg_type->kind == TD_KIND_MATRIX)
-                {
-                    flatten_result = get_or_create_array_type(
-                        ctx->type_registry,
-                        arg_type->as.matrix.element_type,
-                        (size_t)(arg_type->as.matrix.rows * arg_type->as.matrix.columns));
-                }
-                LLVMValueRef r = ir_gen_postfix_matrix_flatten(ctx, args[0], arg_type, flatten_result);
-                if (r != NULL)
-                {
-                    *val = r;
-                    *cur_type = flatten_result;
-                    return false;
-                }
-            }
-        }
-    }
+    if (ir_gen_postfix_matrix_intrinsic(ctx, node, op, func_name, args, arg_types, arg_count, val, cur_type))
+        return false;
 
     // Priority 1: semantic analyser resolved this to a concrete symbol
     // (e.g., polymorphic specialization or overload resolution).
