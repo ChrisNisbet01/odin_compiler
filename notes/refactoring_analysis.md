@@ -130,7 +130,12 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       `ir_gen_assign.c:717/1070/1243` loops were left as-is (different semantics:
       single-step recursion / stop-at-postfix).
       **246/246 tests pass.**
-- [ ] C. `type_is_*` dispatch table in `polymorphism.c`
+- [x] C. `type_is_*` dispatch table in `polymorphism.c`: converted the 40-entry
+      `strcmp` chain in `poly_eval_intrinsic` into a static
+      `{name, bool(*)(TypeDescriptor const *)}` table (`intrinsic_predicates[]`),
+      with `POLY_PRED`-generated predicate functions and a single linear scan.
+      `type_base_type`/`type_elem_type` kept as direct string checks (different
+      return shape: type_id). **246/246 tests pass.**
 - [ ] C. Matrix intrinsic extraction in `ir_gen_postfix.c`
 - [ ] D. Named-boolean conditions
 - [ ] E. Large-function extraction

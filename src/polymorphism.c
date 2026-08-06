@@ -329,6 +329,123 @@ poly_td_is_has_nil(TypeDescriptor const * td)
     }
 }
 
+typedef bool (*poly_intrinsic_pred_fn)(TypeDescriptor const * arg_type);
+
+// Boilerplate predicate functions for `intrinsics.type_is_*`. Each returns
+// whether the given type satisfies the named property.
+#define POLY_PRED(name, expr) \
+    static bool poly_pred_##name(TypeDescriptor const * arg_type) \
+    { \
+        return (expr); \
+    }
+
+POLY_PRED(boolean, poly_td_is_bool(arg_type))
+POLY_PRED(integer, poly_td_is_integer(arg_type))
+POLY_PRED(rune, poly_td_is_rune(arg_type))
+POLY_PRED(float, poly_td_is_float(arg_type))
+POLY_PRED(complex, poly_td_is_complex(arg_type))
+POLY_PRED(quaternion, poly_td_is_quaternion(arg_type))
+POLY_PRED(unsigned, poly_td_is_unsigned(arg_type))
+POLY_PRED(numeric, poly_td_is_numeric(arg_type))
+POLY_PRED(ordered, poly_td_is_ordered(arg_type))
+POLY_PRED(indexable, poly_td_is_indexable(arg_type))
+POLY_PRED(sliceable, poly_td_is_sliceable(arg_type))
+POLY_PRED(comparable, poly_td_is_comparable(arg_type))
+POLY_PRED(has_nil, poly_td_is_has_nil(arg_type))
+POLY_PRED(is_typeid, poly_basic_type_is(arg_type, "typeid"))
+POLY_PRED(is_any, poly_basic_type_is(arg_type, "any"))
+POLY_PRED(is_string, poly_basic_type_is(arg_type, "string"))
+POLY_PRED(is_string16, poly_basic_type_is(arg_type, "string16"))
+POLY_PRED(is_cstring, poly_basic_type_is(arg_type, "cstring"))
+POLY_PRED(is_cstring16, poly_basic_type_is(arg_type, "cstring16"))
+POLY_PRED(is_pointer, arg_type->kind == TD_KIND_POINTER)
+POLY_PRED(is_multi_pointer, arg_type->kind == TD_KIND_MULTI_POINTER)
+POLY_PRED(is_array, arg_type->kind == TD_KIND_ARRAY)
+POLY_PRED(is_slice, arg_type->kind == TD_KIND_SLICE)
+POLY_PRED(is_dynamic_array, arg_type->kind == TD_KIND_DYNAMIC_ARRAY)
+POLY_PRED(is_map, arg_type->kind == TD_KIND_MAP)
+POLY_PRED(is_struct, arg_type->kind == TD_KIND_STRUCT || arg_type->kind == TD_KIND_SOA)
+POLY_PRED(is_union, arg_type->kind == TD_KIND_UNION)
+POLY_PRED(is_enum, arg_type->kind == TD_KIND_ENUM)
+POLY_PRED(is_proc, arg_type->kind == TD_KIND_PROC)
+POLY_PRED(is_bit_set, arg_type->kind == TD_KIND_BIT_SET)
+POLY_PRED(is_bit_field, arg_type->kind == TD_KIND_BIT_FIELD)
+POLY_PRED(is_vector, arg_type->kind == TD_KIND_VECTOR)
+POLY_PRED(is_matrix, arg_type->kind == TD_KIND_MATRIX)
+POLY_PRED(is_named, arg_type->kind == TD_KIND_BASIC && arg_type->as.basic.name != NULL)
+
+#undef POLY_PRED
+
+static bool
+poly_pred_endian_platform(TypeDescriptor const * arg_type)
+{
+    (void)arg_type;
+    return true;  // We're always on the platform's native endian
+}
+
+static bool
+poly_pred_endian_little(TypeDescriptor const * arg_type)
+{
+    (void)arg_type;
+    return true;  // x86_64 is little-endian
+}
+
+static bool
+poly_pred_endian_big(TypeDescriptor const * arg_type)
+{
+    (void)arg_type;
+    return false;  // x86_64 is little-endian
+}
+
+typedef struct
+{
+    char const * name;
+    poly_intrinsic_pred_fn eval;
+} poly_intrinsic_pred_entry_t;
+
+static poly_intrinsic_pred_entry_t const intrinsic_predicates[] = {
+    {"type_is_boolean", poly_pred_boolean},
+    {"type_is_integer", poly_pred_integer},
+    {"type_is_rune", poly_pred_rune},
+    {"type_is_float", poly_pred_float},
+    {"type_is_complex", poly_pred_complex},
+    {"type_is_quaternion", poly_pred_quaternion},
+    {"type_is_typeid", poly_pred_is_typeid},
+    {"type_is_any", poly_pred_is_any},
+    {"type_is_string", poly_pred_is_string},
+    {"type_is_unsigned", poly_pred_unsigned},
+    {"type_is_numeric", poly_pred_numeric},
+    {"type_is_ordered", poly_pred_ordered},
+    {"type_is_ordered_numeric", poly_pred_numeric},
+    {"type_is_indexable", poly_pred_indexable},
+    {"type_is_sliceable", poly_pred_sliceable},
+    {"type_is_comparable", poly_pred_comparable},
+    {"type_is_pointer", poly_pred_is_pointer},
+    {"type_is_multi_pointer", poly_pred_is_multi_pointer},
+    {"type_is_array", poly_pred_is_array},
+    {"type_is_slice", poly_pred_is_slice},
+    {"type_is_dynamic_array", poly_pred_is_dynamic_array},
+    {"type_is_map", poly_pred_is_map},
+    {"type_is_struct", poly_pred_is_struct},
+    {"type_is_union", poly_pred_is_union},
+    {"type_is_enum", poly_pred_is_enum},
+    {"type_is_proc", poly_pred_is_proc},
+    {"type_is_bit_set", poly_pred_is_bit_set},
+    {"type_is_bit_field", poly_pred_is_bit_field},
+    {"type_is_simd_vector", poly_pred_is_vector},
+    {"type_is_matrix", poly_pred_is_matrix},
+    {"type_is_has_nil", poly_pred_has_nil},
+    {"type_is_string16", poly_pred_is_string16},
+    {"type_is_cstring", poly_pred_is_cstring},
+    {"type_is_cstring16", poly_pred_is_cstring16},
+    {"type_is_endian_platform", poly_pred_endian_platform},
+    {"type_is_endian_little", poly_pred_endian_little},
+    {"type_is_endian_big", poly_pred_endian_big},
+    {"type_is_valid_map_key", poly_pred_comparable},
+    {"type_is_valid_matrix_elements", poly_pred_numeric},
+    {"type_is_named", poly_pred_is_named},
+};
+
 // Evaluate an `intrinsics.<name>(<type>)` predicate against a resolved type.
 // Returns 1 (true), 0 (false), or -1 if the intrinsic is not a recognized
 // boolean predicate or the argument could not be resolved.
@@ -338,46 +455,11 @@ poly_eval_intrinsic(char const * name, TypeDescriptor const * arg_type)
     if (name == NULL || arg_type == NULL)
         return -1;
 
-    if (strcmp(name, "type_is_boolean") == 0)          return poly_td_is_bool(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_integer") == 0)          return poly_td_is_integer(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_rune") == 0)             return poly_td_is_rune(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_float") == 0)            return poly_td_is_float(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_complex") == 0)          return poly_td_is_complex(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_quaternion") == 0)       return poly_td_is_quaternion(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_typeid") == 0)           return poly_basic_type_is(arg_type, "typeid") ? 1 : 0;
-    if (strcmp(name, "type_is_any") == 0)              return poly_basic_type_is(arg_type, "any") ? 1 : 0;
-    if (strcmp(name, "type_is_string") == 0)           return poly_basic_type_is(arg_type, "string") ? 1 : 0;
-    if (strcmp(name, "type_is_unsigned") == 0)         return poly_td_is_unsigned(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_numeric") == 0)          return poly_td_is_numeric(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_ordered") == 0)          return poly_td_is_ordered(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_ordered_numeric") == 0)  return poly_td_is_numeric(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_indexable") == 0)        return poly_td_is_indexable(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_sliceable") == 0)        return poly_td_is_sliceable(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_comparable") == 0)       return poly_td_is_comparable(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_pointer") == 0)          return (arg_type->kind == TD_KIND_POINTER) ? 1 : 0;
-    if (strcmp(name, "type_is_multi_pointer") == 0)    return (arg_type->kind == TD_KIND_MULTI_POINTER) ? 1 : 0;
-    if (strcmp(name, "type_is_array") == 0)            return (arg_type->kind == TD_KIND_ARRAY) ? 1 : 0;
-    if (strcmp(name, "type_is_slice") == 0)            return (arg_type->kind == TD_KIND_SLICE) ? 1 : 0;
-    if (strcmp(name, "type_is_dynamic_array") == 0)    return (arg_type->kind == TD_KIND_DYNAMIC_ARRAY) ? 1 : 0;
-    if (strcmp(name, "type_is_map") == 0)              return (arg_type->kind == TD_KIND_MAP) ? 1 : 0;
-    if (strcmp(name, "type_is_struct") == 0)           return (arg_type->kind == TD_KIND_STRUCT || arg_type->kind == TD_KIND_SOA) ? 1 : 0;
-    if (strcmp(name, "type_is_union") == 0)            return (arg_type->kind == TD_KIND_UNION) ? 1 : 0;
-    if (strcmp(name, "type_is_enum") == 0)             return (arg_type->kind == TD_KIND_ENUM) ? 1 : 0;
-    if (strcmp(name, "type_is_proc") == 0)             return (arg_type->kind == TD_KIND_PROC) ? 1 : 0;
-    if (strcmp(name, "type_is_bit_set") == 0)          return (arg_type->kind == TD_KIND_BIT_SET) ? 1 : 0;
-    if (strcmp(name, "type_is_bit_field") == 0)        return (arg_type->kind == TD_KIND_BIT_FIELD) ? 1 : 0;
-    if (strcmp(name, "type_is_simd_vector") == 0)      return (arg_type->kind == TD_KIND_VECTOR) ? 1 : 0;
-    if (strcmp(name, "type_is_matrix") == 0)           return (arg_type->kind == TD_KIND_MATRIX) ? 1 : 0;
-    if (strcmp(name, "type_is_has_nil") == 0)          return poly_td_is_has_nil(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_string16") == 0)         return poly_basic_type_is(arg_type, "string16") ? 1 : 0;
-    if (strcmp(name, "type_is_cstring") == 0)          return poly_basic_type_is(arg_type, "cstring") ? 1 : 0;
-    if (strcmp(name, "type_is_cstring16") == 0)       return poly_basic_type_is(arg_type, "cstring16") ? 1 : 0;
-    if (strcmp(name, "type_is_endian_platform") == 0)  return 1;  // We're always on the platform's native endian
-    if (strcmp(name, "type_is_endian_little") == 0)    return 1;  // x86_64 is little-endian
-    if (strcmp(name, "type_is_endian_big") == 0)       return 0;  // x86_64 is little-endian
-    if (strcmp(name, "type_is_valid_map_key") == 0)    return poly_td_is_comparable(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_valid_matrix_elements") == 0) return poly_td_is_numeric(arg_type) ? 1 : 0;
-    if (strcmp(name, "type_is_named") == 0)            return (arg_type->kind == TD_KIND_BASIC && arg_type->as.basic.name != NULL) ? 1 : 0;
+    for (size_t i = 0; i < sizeof(intrinsic_predicates) / sizeof(intrinsic_predicates[0]); i++)
+    {
+        if (strcmp(name, intrinsic_predicates[i].name) == 0)
+            return intrinsic_predicates[i].eval(arg_type) ? 1 : 0;
+    }
 
     // Type-returning intrinsics: return the resulting descriptor's type_id so
     // they compose with `typeid_of(...) == typeid_of(...)` in where clauses.
