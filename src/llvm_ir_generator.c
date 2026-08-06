@@ -2858,6 +2858,174 @@ ir_gen_directive_expr(IrGenContext * ctx, odin_grammar_node_t * node)
     return ir_gen_node(ctx, node->list.children[1]);
 }
 
+// Compile-time type-query expressions: type_of, typeid_of, type_info_of,
+// size_of, align_of. All operate on the operand's resolved type.
+static LLVMValueRef
+ir_gen_type_query_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1)
+        return NULL;
+    odin_grammar_node_t * operand_node = node->list.children[0];
+    TypeDescriptor const * operand_type = operand_node->resolved_type;
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->context);
+    LLVMValueRef zero_i64 = LLVMConstInt(i64, 0, false);
+
+    switch (node->type)
+    {
+    case AST_NODE_TYPE_OF_EXPR:
+        if (operand_type == NULL)
+            return zero_i64;
+        // Runtime path: for 'any' type, extract type_id from struct field 1
+        if (operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name
+            && strcmp(operand_type->as.basic.name, "any") == 0)
+        {
+            LLVMValueRef operand = ir_gen_node(ctx, operand_node);
+            if (operand == NULL)
+                return zero_i64;
+            LLVMTypeRef any_type = operand_type->llvm_type;
+            LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, any_type, "typeof.tmp");
+            LLVMBuildStore(ctx->builder, operand, tmp);
+            LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+            LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+            LLVMValueRef gep[2] = {idx0, idx1};
+            LLVMValueRef id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, tmp, gep, 2, "typeof.typeid");
+            return LLVMBuildLoad2(ctx->builder, i64, id_field, "typeof.tid");
+        }
+        // Compile-time path: emit the type_id hash directly
+        return LLVMConstInt(i64, (uint64_t)operand_type->type_id, false);
+
+    case AST_NODE_TYPEID_OF_EXPR:
+        if (operand_type == NULL)
+            return zero_i64;
+        return LLVMConstInt(i64, (uint64_t)operand_type->type_id, false);
+
+    case AST_NODE_TYPE_INFO_OF_EXPR:
+        if (operand_type == NULL)
+            return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+        // Return a pointer to the type_info global for this type
+        return ir_gen_get_or_create_type_info_global(ctx, operand_type);
+
+    case AST_NODE_SIZE_OF_EXPR:
+        if (operand_type == NULL || operand_type->llvm_type == NULL)
+            return zero_i64;
+        return LLVMConstInt(i64, LLVMABISizeOfType(ctx->data_layout, operand_type->llvm_type), false);
+
+    case AST_NODE_ALIGN_OF_EXPR:
+        if (operand_type == NULL || operand_type->llvm_type == NULL)
+            return LLVMConstInt(i64, 1, false);
+        return LLVMConstInt(i64, LLVMABIAlignmentOfType(ctx->data_layout, operand_type->llvm_type), false);
+
+    default:
+        return NULL;
+    }
+}
+
+// min/max builtin expressions: emit icmp/fcmp + select.
+static LLVMValueRef
+ir_gen_min_max_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 2)
+        return NULL;
+    bool is_min = (node->type == AST_NODE_MIN_EXPR);
+    LLVMValueRef lhs = ir_gen_node(ctx, node->list.children[0]);
+    LLVMValueRef rhs = ir_gen_node(ctx, node->list.children[1]);
+    if (lhs == NULL || rhs == NULL)
+        return lhs ? lhs : rhs;
+    LLVMTypeRef cmp_type = LLVMTypeOf(lhs);
+    LLVMTypeKind tk = LLVMGetTypeKind(cmp_type);
+    LLVMValueRef cmp;
+    if (tk == LLVMIntegerTypeKind)
+    {
+        cmp = LLVMBuildICmp(ctx->builder, is_min ? LLVMIntSLT : LLVMIntSGT, lhs, rhs, "mm.cmp");
+    }
+    else if (tk == LLVMFloatTypeKind || tk == LLVMDoubleTypeKind)
+    {
+        cmp = LLVMBuildFCmp(ctx->builder, is_min ? LLVMRealOLT : LLVMRealOGT, lhs, rhs, "mm.cmp");
+    }
+    else
+    {
+        return lhs;
+    }
+    return LLVMBuildSelect(ctx->builder, cmp, lhs, rhs, is_min ? "min" : "max");
+}
+
+// new(T): malloc the pointee size, bitcast to T pointer.
+static LLVMValueRef
+ir_gen_new_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1)
+        return NULL;
+
+    TypeDescriptor const * ptr_type = node->resolved_type;
+    if (ptr_type == NULL || ptr_type->kind != TD_KIND_POINTER)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "new: target type is not a pointer");
+        return NULL;
+    }
+    TypeDescriptor const * pointee_type = ptr_type->pointee;
+    if (pointee_type == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "new: pointer has no pointee type");
+        return NULL;
+    }
+
+    LLVMValueRef size = LLVMSizeOf(pointee_type->llvm_type);
+    LLVMValueRef raw_mem = ir_gen_call_malloc(ctx, size);
+    if (raw_mem == NULL)
+        return NULL;
+    return LLVMBuildPointerCast(ctx->builder, raw_mem, ptr_type->llvm_type, "new.result");
+}
+
+// expand_values(x) returns the aggregate value itself. The actual
+// field/array expansion happens in ir_gen_collect_call_args.
+static LLVMValueRef
+ir_gen_expand_values_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    if (node->list.count < 1)
+        return NULL;
+    return ir_gen_node(ctx, node->list.children[0]);
+}
+
+// Bare PostfixMember (e.g., .Write as an enum value reference).
+static LLVMValueRef
+ir_gen_bare_postfix_member(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    odin_grammar_node_t * field_name_node = node->list.children[0];
+    if (field_name_node == NULL || field_name_node->text == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "enum value reference: missing field name");
+        return NULL;
+    }
+    symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), field_name_node->text);
+    if (sym == NULL)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "undeclared identifier: '%s'", field_name_node->text);
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, buf);
+        return NULL;
+    }
+    TypeDescriptor const * td = sym->value.type_info;
+    if (td == NULL)
+    {
+        ir_gen_error_collection_add(&ctx->errors, NULL, node, "symbol has no type");
+        return NULL;
+    }
+    return sym->value.value;
+}
+
+// 'context' keyword: returns the current context pointer if in scope.
+static LLVMValueRef
+ir_gen_context_expr(IrGenContext * ctx, odin_grammar_node_t * node)
+{
+    symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+    if (ctx_sym && ctx_sym->value.value)
+    {
+        return ctx_sym->value.value;
+    }
+    ir_gen_error_collection_add(&ctx->errors, NULL, node, "'context' not available here");
+    return NULL;
+}
+
 // --- Main node dispatcher ---
 
 LLVMValueRef
@@ -2932,79 +3100,11 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return ir_gen_len_cap_expr(ctx, node);
 
     case AST_NODE_TYPE_OF_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * operand_node = node->list.children[0];
-        TypeDescriptor const * operand_type = operand_node->resolved_type;
-        if (operand_type == NULL)
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-        // Runtime path: for 'any' type, extract type_id from struct field 1
-        if (operand_type->kind == TD_KIND_BASIC && operand_type->as.basic.name
-            && strcmp(operand_type->as.basic.name, "any") == 0)
-        {
-            LLVMValueRef operand = ir_gen_node(ctx, operand_node);
-            if (operand == NULL)
-                return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-            LLVMTypeRef any_type = operand_type->llvm_type;
-            LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, any_type, "typeof.tmp");
-            LLVMBuildStore(ctx->builder, operand, tmp);
-            LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-            LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
-            LLVMValueRef gep[2] = {idx0, idx1};
-            LLVMValueRef id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, tmp, gep, 2, "typeof.typeid");
-            return LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->context), id_field, "typeof.tid");
-        }
-        // Compile-time path: emit the type_id hash directly
-        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)operand_type->type_id, false);
-    }
-
     case AST_NODE_TYPEID_OF_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * operand_node = node->list.children[0];
-        TypeDescriptor const * operand_type = operand_node->resolved_type;
-        if (operand_type == NULL)
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), (uint64_t)operand_type->type_id, false);
-    }
-
     case AST_NODE_TYPE_INFO_OF_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * operand_node = node->list.children[0];
-        TypeDescriptor const * operand_type = operand_node->resolved_type;
-        if (operand_type == NULL)
-            return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
-        // Return a pointer to the type_info global for this type
-        return ir_gen_get_or_create_type_info_global(ctx, operand_type);
-    }
-
     case AST_NODE_SIZE_OF_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * type_node = node->list.children[0];
-        TypeDescriptor const * td = type_node->resolved_type;
-        if (td == NULL || td->llvm_type == NULL)
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 0, false);
-        uint64_t size = LLVMABISizeOfType(ctx->data_layout, td->llvm_type);
-        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), size, false);
-    }
-
     case AST_NODE_ALIGN_OF_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-        odin_grammar_node_t * type_node = node->list.children[0];
-        TypeDescriptor const * td = type_node->resolved_type;
-        if (td == NULL || td->llvm_type == NULL)
-            return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), 1, false);
-        uint32_t align = LLVMABIAlignmentOfType(ctx->data_layout, td->llvm_type);
-        return LLVMConstInt(LLVMInt64TypeInContext(ctx->context), align, false);
-    }
+        return ir_gen_type_query_expr(ctx, node);
 
     case AST_NODE_OFFSET_OF_EXPR:
         return ir_gen_offset_of_expr(ctx, node);
@@ -3014,31 +3114,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     case AST_NODE_MIN_EXPR:
     case AST_NODE_MAX_EXPR:
-    {
-        if (node->list.count < 2)
-            return NULL;
-        bool is_min = (node->type == AST_NODE_MIN_EXPR);
-        LLVMValueRef lhs = ir_gen_node(ctx, node->list.children[0]);
-        LLVMValueRef rhs = ir_gen_node(ctx, node->list.children[1]);
-        if (lhs == NULL || rhs == NULL)
-            return lhs ? lhs : rhs;
-        LLVMTypeRef cmp_type = LLVMTypeOf(lhs);
-        LLVMTypeKind tk = LLVMGetTypeKind(cmp_type);
-        LLVMValueRef cmp;
-        if (tk == LLVMIntegerTypeKind)
-        {
-            cmp = LLVMBuildICmp(ctx->builder, is_min ? LLVMIntSLT : LLVMIntSGT, lhs, rhs, "mm.cmp");
-        }
-        else if (tk == LLVMFloatTypeKind || tk == LLVMDoubleTypeKind)
-        {
-            cmp = LLVMBuildFCmp(ctx->builder, is_min ? LLVMRealOLT : LLVMRealOGT, lhs, rhs, "mm.cmp");
-        }
-        else
-        {
-            return lhs;
-        }
-        return LLVMBuildSelect(ctx->builder, cmp, lhs, rhs, is_min ? "min" : "max");
-    }
+        return ir_gen_min_max_expr(ctx, node);
 
     case AST_NODE_MAKE_EXPR:
         return ir_gen_make_expr(ctx, node);
@@ -3047,29 +3123,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return ir_gen_append_expr(ctx, node);
 
     case AST_NODE_NEW_EXPR:
-    {
-        if (node->list.count < 1)
-            return NULL;
-
-        TypeDescriptor const * ptr_type = node->resolved_type;
-        if (ptr_type == NULL || ptr_type->kind != TD_KIND_POINTER)
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "new: target type is not a pointer");
-            return NULL;
-        }
-        TypeDescriptor const * pointee_type = ptr_type->pointee;
-        if (pointee_type == NULL)
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "new: pointer has no pointee type");
-            return NULL;
-        }
-
-        LLVMValueRef size = LLVMSizeOf(pointee_type->llvm_type);
-        LLVMValueRef raw_mem = ir_gen_call_malloc(ctx, size);
-        if (raw_mem == NULL)
-            return NULL;
-        return LLVMBuildPointerCast(ctx->builder, raw_mem, ptr_type->llvm_type, "new.result");
-    }
+        return ir_gen_new_expr(ctx, node);
 
     case AST_NODE_DELETE_EXPR:
         return ir_gen_delete_expr(ctx, node);
@@ -3083,13 +3137,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return ir_gen_complex_quaternion_expr(ctx, node);
 
     case AST_NODE_EXPAND_VALUES_EXPR:
-    {
-        // expand_values(x) returns the aggregate value itself.
-        // The actual field/array expansion happens in ir_gen_collect_call_args.
-        if (node->list.count < 1)
-            return NULL;
-        return ir_gen_node(ctx, node->list.children[0]);
-    }
+        return ir_gen_expand_values_expr(ctx, node);
 
     case AST_NODE_COMPRESS_VALUES_EXPR:
         return ir_gen_compress_values_expr(ctx, node);
@@ -3117,15 +3165,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
         return ir_gen_identifier(ctx, node);
 
     case AST_NODE_CONTEXT_EXPR:
-    {
-        symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
-        if (ctx_sym && ctx_sym->value.value)
-        {
-            return ctx_sym->value.value;
-        }
-        ir_gen_error_collection_add(&ctx->errors, NULL, node, "'context' not available here");
-        return NULL;
-    }
+        return ir_gen_context_expr(ctx, node);
 
     // Assignment expression — may contain an assignment operator
     case AST_NODE_ASSIGN_EXPRESSION:
@@ -3133,29 +3173,7 @@ ir_gen_node(IrGenContext * ctx, odin_grammar_node_t * node)
 
     // Bare PostfixMember (e.g., .Write as an enum value reference)
     case AST_NODE_POSTFIX_MEMBER:
-    {
-        odin_grammar_node_t * field_name_node = node->list.children[0];
-        if (field_name_node == NULL || field_name_node->text == NULL)
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "enum value reference: missing field name");
-            return NULL;
-        }
-        symbol_t * sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), field_name_node->text);
-        if (sym == NULL)
-        {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "undeclared identifier: '%s'", field_name_node->text);
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, buf);
-            return NULL;
-        }
-        TypeDescriptor const * td = sym->value.type_info;
-        if (td == NULL)
-        {
-            ir_gen_error_collection_add(&ctx->errors, NULL, node, "symbol has no type");
-            return NULL;
-        }
-        return sym->value.value;
-    }
+        return ir_gen_bare_postfix_member(ctx, node);
 
     // Postfix expression — handles calls through PostfixOps chain
     case AST_NODE_POSTFIX_EXPRESSION:

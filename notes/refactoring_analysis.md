@@ -146,7 +146,16 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       names (direct) + scan of the shared `intrinsic_predicates[]` table
       (now the single source of truth for `type_is_*` names). **246/246 tests
       pass.**
-- [ ] E. Large-function extraction
+- [x] E. Large-function extraction: `ir_gen_node` remaining inline cases
+      (`llvm_ir_generator.c`) → 7 named helpers:
+      `ir_gen_type_query_expr` (type_of/typeid_of/type_info_of/size_of/
+      align_of — merged 5 inline cases into one switch),
+      `ir_gen_min_max_expr`, `ir_gen_new_expr`, `ir_gen_expand_values_expr`,
+      `ir_gen_bare_postfix_member`, `ir_gen_context_expr`. Remaining large
+      targets: `sem_evaluate_postfix_expr` (938),
+      `sem_pass2_node` (907), `sem_pass1_register_top_level_ex` (585),
+      `sem_evaluate_constant_int` (343), `sem_resolve_procedure_signature`
+      (339), `ir_generate` (300). **246/246 tests pass.**
 - [ ] F. Predicate extraction
 
 ## Verification
