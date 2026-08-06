@@ -1606,35 +1606,10 @@ parse_imported_path(char const * path, epc_parser_t * parser, epc_ast_hook_regis
         return parse_imported_directory(path, parser, hooks);
 }
 
+// Auto-import base:runtime as an implicit using import (prelude)
 static void
-sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast)
+sem_pass1_auto_import_runtime(SemContext * ctx)
 {
-    if (program_ast == NULL)
-    {
-        return;
-    }
-
-    // Only the top-level (main) file may set build_ignored. A build-ignored
-    // *import* must not disable compilation of the main file, and nested
-    // import pass1 calls run with import_reg_depth >= 1.
-    if (ctx->import_reg_depth == 0)
-    {
-        ctx->build_ignored = ast_file_has_build_ignore(program_ast);
-    }
-    if (ctx->build_ignored)
-    {
-        return;
-    }
-
-    // Snapshot the pending-bundle list so only bundles deferred while processing
-    // THIS file/package are resolved when this call returns (nested import calls
-    // resolve their own bundles, but not bundles deferred by the outer file).
-    int saved_pending_count = ctx->pending_bundle_count;
-
-    // Phase 1: Track recursion depth so we can mark direct (depth==1) vs
-    // transitive imports when they are registered into ctx->imports[].
-    ctx->import_reg_depth++;
-
     // Auto-import base:runtime as an implicit using import (prelude)
     // Check if runtime is already imported by checking all existing imports
     bool runtime_already_imported = false;
@@ -1702,7 +1677,11 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
             free(runtime_path);
         }
     }
-
+}
+// Auto-import base:intrinsics as a named (non-using) import (prelude)
+static void
+sem_pass1_auto_import_intrinsics(SemContext * ctx)
+{
     // Auto-import base:intrinsics as a named (non-using) import (prelude)
     // so `intrinsics.type_is_float` etc. resolve without an explicit import.
     bool intrinsics_already_imported = false;
@@ -1767,6 +1746,358 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
             free(intrinsics_path);
         }
     }
+}
+// Handle a plain import statement (import "path").
+static void
+sem_pass1_handle_import(SemContext * ctx, odin_grammar_node_t * top_decl)
+{
+    // ImportSimple children: [StringLiteral("path")]
+    if (top_decl->list.count < 1 || top_decl->list.children[0] == NULL)
+        return;
+    odin_grammar_node_t * path_node = top_decl->list.children[0];
+    char * import_path = strip_quotes(path_node->text);
+    if (import_path == NULL)
+        return;
+
+    char * resolved = resolve_import_path(import_path, ctx->source_dir, ctx->odin_root);
+    free(import_path);
+    if (resolved == NULL)
+    {
+        sem_error_list_add(&ctx->errors, NULL, path_node, "cannot resolve import path");
+        return;
+    }
+
+    if (!import_push_path(ctx, resolved))
+    {
+        free(resolved);
+        return;
+    }
+
+    ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
+
+    // import_push_path strdup'd resolved; stack owns it now
+    if (pkg == NULL)
+    {
+        sem_error_list_add(&ctx->errors, NULL, path_node, "failed to parse imported file");
+        import_pop_path(ctx);
+        free(resolved);
+        return;
+    }
+
+    if (ctx->import_count >= ctx->import_capacity)
+    {
+        int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
+        ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
+        if (new_arr == NULL)
+        {
+            import_pop_path(ctx);
+            free(resolved);
+            imported_package_free(pkg);
+            return;
+        }
+        ctx->imports = new_arr;
+        ctx->import_capacity = new_cap;
+    }
+    ctx->imports[ctx->import_count++] = pkg;
+    pkg->is_direct_import = (ctx->import_reg_depth == 1);
+
+    if (!pkg->analysed)
+    {
+        scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
+        pkg->package_scope = pkg_scope;
+
+        int saved_count = ctx->gen_ctx->count;
+        ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
+
+        char * saved_pkg_name = ctx->package_name;
+        ctx->package_name = NULL;
+
+        char const * saved_file_path = ctx->source_file_path;
+        ctx->source_file_path = pkg->source_path;
+
+        pkg->analysed = true;
+        sem_pass1_register_top_level_ex(ctx, pkg->ast);
+
+        sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
+
+        if (pkg->package_name == NULL && ctx->package_name != NULL)
+            pkg->package_name = strdup(ctx->package_name);
+
+        ctx->package_name = saved_pkg_name;
+        ctx->source_file_path = saved_file_path;
+
+        ctx->gen_ctx->count = saved_count;
+    }
+
+    import_pop_path(ctx);
+    free(resolved);
+}
+// Handle a named import statement (import alias "path").
+static void
+sem_pass1_handle_import_named(SemContext * ctx, odin_grammar_node_t * top_decl)
+{
+    if (top_decl->list.count < 2 || top_decl->list.children[0] == NULL
+        || top_decl->list.children[0]->text == NULL || top_decl->list.children[1] == NULL)
+        return;
+    char const * alias_name = top_decl->list.children[0]->text;
+    odin_grammar_node_t * path_node = top_decl->list.children[1];
+    char * import_path = strip_quotes(path_node->text);
+    if (import_path == NULL)
+        return;
+
+    char * resolved = resolve_import_path(import_path, ctx->source_dir, ctx->odin_root);
+    free(import_path);
+    if (resolved == NULL)
+    {
+        sem_error_list_add(&ctx->errors, NULL, path_node, "cannot resolve import path");
+        return;
+    }
+
+    if (!import_push_path(ctx, resolved))
+    {
+        free(resolved);
+        return;
+    }
+
+    ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
+    if (pkg == NULL)
+    {
+        sem_error_list_add(&ctx->errors, NULL, path_node, "failed to parse imported file");
+        import_pop_path(ctx);
+        free(resolved);
+        return;
+    }
+
+    if (ctx->import_count >= ctx->import_capacity)
+    {
+        int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
+        ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
+        if (new_arr == NULL)
+        {
+            import_pop_path(ctx);
+            free(resolved);
+            imported_package_free(pkg);
+            return;
+        }
+        ctx->imports = new_arr;
+        ctx->import_capacity = new_cap;
+    }
+    ctx->imports[ctx->import_count++] = pkg;
+    pkg->is_direct_import = (ctx->import_reg_depth == 1);
+
+    if (!pkg->analysed)
+    {
+        scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
+        pkg->package_scope = pkg_scope;
+
+        int saved_count = ctx->gen_ctx->count;
+        ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
+
+        char * saved_pkg_name = ctx->package_name;
+        ctx->package_name = NULL;
+
+        char const * saved_file_path = ctx->source_file_path;
+        ctx->source_file_path = pkg->source_path;
+
+        pkg->analysed = true;
+
+        // Skip semantic analysis for build-ignored packages
+        if (!pkg->build_ignored)
+        {
+            sem_pass1_register_top_level_ex(ctx, pkg->ast);
+
+            sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
+        }
+
+        if (pkg->package_name == NULL && ctx->package_name != NULL)
+            pkg->package_name = strdup(ctx->package_name);
+
+        free(pkg->package_name);
+        pkg->package_name = strdup(alias_name);
+
+        ctx->package_name = saved_pkg_name;
+        ctx->source_file_path = saved_file_path;
+
+        ctx->gen_ctx->count = saved_count;
+    }
+
+    import_pop_path(ctx);
+    free(resolved);
+}
+// Handle a using import statement (import using "path").
+static void
+sem_pass1_handle_import_using(SemContext * ctx, odin_grammar_node_t * top_decl)
+{
+    if (top_decl->list.count < 1 || top_decl->list.children[0] == NULL)
+        return;
+    odin_grammar_node_t * path_node = top_decl->list.children[0];
+    char * import_path = strip_quotes(path_node->text);
+    if (import_path == NULL)
+        return;
+
+    char * resolved = resolve_import_path(import_path, ctx->source_dir, ctx->odin_root);
+    free(import_path);
+    if (resolved == NULL)
+    {
+        sem_error_list_add(&ctx->errors, NULL, path_node, "cannot resolve import path");
+        return;
+    }
+
+    if (!import_push_path(ctx, resolved))
+    {
+        free(resolved);
+        return;
+    }
+
+    ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
+    if (pkg == NULL)
+    {
+        sem_error_list_add(&ctx->errors, NULL, path_node, "failed to parse imported file");
+        import_pop_path(ctx);
+        free(resolved);
+        return;
+    }
+
+    if (ctx->import_count >= ctx->import_capacity)
+    {
+        int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
+        ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
+        if (new_arr == NULL)
+        {
+            import_pop_path(ctx);
+            free(resolved);
+            imported_package_free(pkg);
+            return;
+        }
+        ctx->imports = new_arr;
+        ctx->import_capacity = new_cap;
+    }
+    ctx->imports[ctx->import_count++] = pkg;
+    pkg->is_using = true;
+    pkg->is_direct_import = (ctx->import_reg_depth == 1);
+
+    if (!pkg->analysed)
+    {
+        scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
+        pkg->package_scope = pkg_scope;
+
+        int saved_count = ctx->gen_ctx->count;
+        ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
+
+        char * saved_pkg_name = ctx->package_name;
+        ctx->package_name = NULL;
+
+        char const * saved_file_path = ctx->source_file_path;
+        ctx->source_file_path = pkg->source_path;
+
+        pkg->analysed = true;
+        sem_pass1_register_top_level_ex(ctx, pkg->ast);
+        sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
+
+        if (pkg->package_name == NULL && ctx->package_name != NULL)
+            pkg->package_name = strdup(ctx->package_name);
+
+        ctx->package_name = saved_pkg_name;
+        ctx->source_file_path = saved_file_path;
+
+        ctx->gen_ctx->count = saved_count;
+
+        scope_t * current_scope = generator_current_scope(ctx->gen_ctx);
+        generic_hash_table_iterate(pkg_scope->symbols.by_name, import_using_copy_symbol, current_scope);
+    }
+
+    import_pop_path(ctx);
+    free(resolved);
+}
+// Register declarations inside a matching when/else branch at top level.
+static void
+sem_pass1_register_when_decl(SemContext * ctx, odin_grammar_node_t * top_decl)
+{
+    size_t k = 0;
+    bool matched = false;
+    while (k < top_decl->list.count)
+    {
+        odin_grammar_node_t * wc = top_decl->list.children[k];
+        if (wc == NULL)
+        {
+            k++;
+            continue;
+        }
+        if (wc->type == AST_NODE_WHEN_BODY)
+        {
+            if (!matched)
+            {
+                for (size_t m = 0; m < wc->list.count; m++)
+                {
+                    odin_grammar_node_t * inner = wc->list.children[m];
+                    if (inner == NULL)
+                        continue;
+                    if (inner->type == AST_NODE_CONSTANT_DECL)
+                        sem_register_top_level_declaration(ctx, inner);
+                    else if (inner->type == AST_NODE_VARIABLE_DECL)
+                        sem_register_top_level_variable(ctx, inner);
+                }
+            }
+            break;
+        }
+        int cond = sem_evaluate_constant_bool(ctx, wc);
+        k++;
+        if (cond == 1 && !matched)
+        {
+            matched = true;
+            if (k < top_decl->list.count)
+            {
+                odin_grammar_node_t * body = top_decl->list.children[k];
+                if (body && body->type == AST_NODE_WHEN_BODY)
+                {
+                    for (size_t m = 0; m < body->list.count; m++)
+                    {
+                        odin_grammar_node_t * inner = body->list.children[m];
+                        if (inner == NULL)
+                            continue;
+                        if (inner->type == AST_NODE_CONSTANT_DECL)
+                            sem_register_top_level_declaration(ctx, inner);
+                        else if (inner->type == AST_NODE_VARIABLE_DECL)
+                            sem_register_top_level_variable(ctx, inner);
+                    }
+                }
+            }
+        }
+        k++;
+    }
+}
+
+static void
+sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast)
+{
+    if (program_ast == NULL)
+    {
+        return;
+    }
+
+    // Only the top-level (main) file may set build_ignored. A build-ignored
+    // *import* must not disable compilation of the main file, and nested
+    // import pass1 calls run with import_reg_depth >= 1.
+    if (ctx->import_reg_depth == 0)
+    {
+        ctx->build_ignored = ast_file_has_build_ignore(program_ast);
+    }
+    if (ctx->build_ignored)
+    {
+        return;
+    }
+
+    // Snapshot the pending-bundle list so only bundles deferred while processing
+    // THIS file/package are resolved when this call returns (nested import calls
+    // resolve their own bundles, but not bundles deferred by the outer file).
+    int saved_pending_count = ctx->pending_bundle_count;
+
+    // Phase 1: Track recursion depth so we can mark direct (depth==1) vs
+    // transitive imports when they are registered into ctx->imports[].
+    ctx->import_reg_depth++;
+
+    sem_pass1_auto_import_runtime(ctx);
+    sem_pass1_auto_import_intrinsics(ctx);
 
     // Copy runtime symbols into the current scope (skip if we are core:runtime itself)
     for (int ri = 0; ri < ctx->import_count; ri++)
@@ -1783,6 +2114,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
             break;
         }
     }
+
 
     for (size_t i = 0; i < program_ast->list.count; i++)
     {
@@ -1817,259 +2149,15 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                 }
                 else if (top_decl->type == AST_NODE_IMPORT)
                 {
-                    // ImportSimple children: [StringLiteral("path")]
-                    if (top_decl->list.count < 1 || top_decl->list.children[0] == NULL)
-                        continue;
-                    odin_grammar_node_t * path_node = top_decl->list.children[0];
-                    char * import_path = strip_quotes(path_node->text);
-                    if (import_path == NULL)
-                        continue;
-
-                    char * resolved = resolve_import_path(import_path, ctx->source_dir, ctx->odin_root);
-                    free(import_path);
-                    if (resolved == NULL)
-                    {
-                        sem_error_list_add(&ctx->errors, NULL, path_node, "cannot resolve import path");
-                        continue;
-                    }
-
-                    if (!import_push_path(ctx, resolved))
-                    {
-                        free(resolved);
-                        continue;
-                    }
-
-                    ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
-
-                    // import_push_path strdup'd resolved; stack owns it now
-                    if (pkg == NULL)
-                    {
-                        sem_error_list_add(&ctx->errors, NULL, path_node, "failed to parse imported file");
-                        import_pop_path(ctx);
-                        free(resolved);
-                        continue;
-                    }
-
-                    if (ctx->import_count >= ctx->import_capacity)
-                    {
-                        int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
-                        ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
-                        if (new_arr == NULL)
-                        {
-                            import_pop_path(ctx);
-                            free(resolved);
-                            imported_package_free(pkg);
-                            continue;
-                        }
-                        ctx->imports = new_arr;
-                        ctx->import_capacity = new_cap;
-                    }
-                    ctx->imports[ctx->import_count++] = pkg;
-                    pkg->is_direct_import = (ctx->import_reg_depth == 1);
-
-                    if (!pkg->analysed)
-                    {
-                        scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
-                        pkg->package_scope = pkg_scope;
-
-                        int saved_count = ctx->gen_ctx->count;
-                        ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
-
-                        char * saved_pkg_name = ctx->package_name;
-                        ctx->package_name = NULL;
-
-                        char const * saved_file_path = ctx->source_file_path;
-                        ctx->source_file_path = pkg->source_path;
-
-                        pkg->analysed = true;
-                        sem_pass1_register_top_level_ex(ctx, pkg->ast);
-
-                        sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
-
-                        if (pkg->package_name == NULL && ctx->package_name != NULL)
-                            pkg->package_name = strdup(ctx->package_name);
-
-                        ctx->package_name = saved_pkg_name;
-                        ctx->source_file_path = saved_file_path;
-
-                        ctx->gen_ctx->count = saved_count;
-                    }
-
-                    import_pop_path(ctx);
-                    free(resolved);
+                    sem_pass1_handle_import(ctx, top_decl);
                 }
                 else if (top_decl->type == AST_NODE_IMPORT_NAMED)
                 {
-                    if (top_decl->list.count < 2 || top_decl->list.children[0] == NULL
-                        || top_decl->list.children[0]->text == NULL || top_decl->list.children[1] == NULL)
-                        continue;
-                    char const * alias_name = top_decl->list.children[0]->text;
-                    odin_grammar_node_t * path_node = top_decl->list.children[1];
-                    char * import_path = strip_quotes(path_node->text);
-                    if (import_path == NULL)
-                        continue;
-
-                    char * resolved = resolve_import_path(import_path, ctx->source_dir, ctx->odin_root);
-                    free(import_path);
-                    if (resolved == NULL)
-                    {
-                        sem_error_list_add(&ctx->errors, NULL, path_node, "cannot resolve import path");
-                        continue;
-                    }
-
-                    if (!import_push_path(ctx, resolved))
-                    {
-                        free(resolved);
-                        continue;
-                    }
-
-                    ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
-                    if (pkg == NULL)
-                    {
-                        sem_error_list_add(&ctx->errors, NULL, path_node, "failed to parse imported file");
-                        import_pop_path(ctx);
-                        free(resolved);
-                        continue;
-                    }
-
-                    if (ctx->import_count >= ctx->import_capacity)
-                    {
-                        int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
-                        ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
-                        if (new_arr == NULL)
-                        {
-                            import_pop_path(ctx);
-                            free(resolved);
-                            imported_package_free(pkg);
-                            continue;
-                        }
-                        ctx->imports = new_arr;
-                        ctx->import_capacity = new_cap;
-                    }
-                    ctx->imports[ctx->import_count++] = pkg;
-                    pkg->is_direct_import = (ctx->import_reg_depth == 1);
-
-                    if (!pkg->analysed)
-                    {
-                        scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
-                        pkg->package_scope = pkg_scope;
-
-                        int saved_count = ctx->gen_ctx->count;
-                        ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
-
-                        char * saved_pkg_name = ctx->package_name;
-                        ctx->package_name = NULL;
-
-                        char const * saved_file_path = ctx->source_file_path;
-                        ctx->source_file_path = pkg->source_path;
-
-                        pkg->analysed = true;
-
-                        // Skip semantic analysis for build-ignored packages
-                        if (!pkg->build_ignored)
-                        {
-                            sem_pass1_register_top_level_ex(ctx, pkg->ast);
-
-                            sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
-                        }
-
-                        if (pkg->package_name == NULL && ctx->package_name != NULL)
-                            pkg->package_name = strdup(ctx->package_name);
-
-                        free(pkg->package_name);
-                        pkg->package_name = strdup(alias_name);
-
-                        ctx->package_name = saved_pkg_name;
-                        ctx->source_file_path = saved_file_path;
-
-                        ctx->gen_ctx->count = saved_count;
-                    }
-
-                    import_pop_path(ctx);
-                    free(resolved);
+                    sem_pass1_handle_import_named(ctx, top_decl);
                 }
                 else if (top_decl->type == AST_NODE_IMPORT_USING)
                 {
-                    if (top_decl->list.count < 1 || top_decl->list.children[0] == NULL)
-                        continue;
-                    odin_grammar_node_t * path_node = top_decl->list.children[0];
-                    char * import_path = strip_quotes(path_node->text);
-                    if (import_path == NULL)
-                        continue;
-
-                    char * resolved = resolve_import_path(import_path, ctx->source_dir, ctx->odin_root);
-                    free(import_path);
-                    if (resolved == NULL)
-                    {
-                        sem_error_list_add(&ctx->errors, NULL, path_node, "cannot resolve import path");
-                        continue;
-                    }
-
-                    if (!import_push_path(ctx, resolved))
-                    {
-                        free(resolved);
-                        continue;
-                    }
-
-                    ImportedPackage * pkg = parse_imported_path(resolved, ctx->parser, ctx->hook_registry);
-                    if (pkg == NULL)
-                    {
-                        sem_error_list_add(&ctx->errors, NULL, path_node, "failed to parse imported file");
-                        import_pop_path(ctx);
-                        free(resolved);
-                        continue;
-                    }
-
-                    if (ctx->import_count >= ctx->import_capacity)
-                    {
-                        int new_cap = ctx->import_capacity == 0 ? 8 : ctx->import_capacity * 2;
-                        ImportedPackage ** new_arr = realloc(ctx->imports, (size_t)new_cap * sizeof(ImportedPackage *));
-                        if (new_arr == NULL)
-                        {
-                            import_pop_path(ctx);
-                            free(resolved);
-                            imported_package_free(pkg);
-                            continue;
-                        }
-                        ctx->imports = new_arr;
-                        ctx->import_capacity = new_cap;
-                    }
-                    ctx->imports[ctx->import_count++] = pkg;
-                    pkg->is_using = true;
-                    pkg->is_direct_import = (ctx->import_reg_depth == 1);
-
-                    if (!pkg->analysed)
-                    {
-                        scope_t * pkg_scope = scope_create(NULL, ctx->gen_ctx->context, ctx->gen_ctx->builder);
-                        pkg->package_scope = pkg_scope;
-
-                        int saved_count = ctx->gen_ctx->count;
-                        ctx->gen_ctx->scopes[ctx->gen_ctx->count++] = pkg_scope;
-
-                        char * saved_pkg_name = ctx->package_name;
-                        ctx->package_name = NULL;
-
-                        char const * saved_file_path = ctx->source_file_path;
-                        ctx->source_file_path = pkg->source_path;
-
-                        pkg->analysed = true;
-                        sem_pass1_register_top_level_ex(ctx, pkg->ast);
-                        sem_pass2_analyse_bodies_ast(ctx, pkg->ast);
-
-                        if (pkg->package_name == NULL && ctx->package_name != NULL)
-                            pkg->package_name = strdup(ctx->package_name);
-
-                        ctx->package_name = saved_pkg_name;
-                        ctx->source_file_path = saved_file_path;
-
-                        ctx->gen_ctx->count = saved_count;
-
-                        scope_t * current_scope = generator_current_scope(ctx->gen_ctx);
-                        generic_hash_table_iterate(pkg_scope->symbols.by_name, import_using_copy_symbol, current_scope);
-                    }
-
-                    import_pop_path(ctx);
-                    free(resolved);
+                    sem_pass1_handle_import_using(ctx, top_decl);
                 }
                 else if (top_decl->type == AST_NODE_CONSTANT_DECL)
                 {
@@ -2127,58 +2215,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                 }
                 else if (top_decl->type == AST_NODE_WHEN_DECL)
                 {
-                    size_t k = 0;
-                    bool matched = false;
-                    while (k < top_decl->list.count)
-                    {
-                        odin_grammar_node_t * wc = top_decl->list.children[k];
-                        if (wc == NULL)
-                        {
-                            k++;
-                            continue;
-                        }
-                        if (wc->type == AST_NODE_WHEN_BODY)
-                        {
-                            if (!matched)
-                            {
-                                for (size_t m = 0; m < wc->list.count; m++)
-                                {
-                                    odin_grammar_node_t * inner = wc->list.children[m];
-                                    if (inner == NULL)
-                                        continue;
-                                    if (inner->type == AST_NODE_CONSTANT_DECL)
-                                        sem_register_top_level_declaration(ctx, inner);
-                                    else if (inner->type == AST_NODE_VARIABLE_DECL)
-                                        sem_register_top_level_variable(ctx, inner);
-                                }
-                            }
-                            break;
-                        }
-                        int cond = sem_evaluate_constant_bool(ctx, wc);
-                        k++;
-                        if (cond == 1 && !matched)
-                        {
-                            matched = true;
-                            if (k < top_decl->list.count)
-                            {
-                                odin_grammar_node_t * body = top_decl->list.children[k];
-                                if (body && body->type == AST_NODE_WHEN_BODY)
-                                {
-                                    for (size_t m = 0; m < body->list.count; m++)
-                                    {
-                                        odin_grammar_node_t * inner = body->list.children[m];
-                                        if (inner == NULL)
-                                            continue;
-                                        if (inner->type == AST_NODE_CONSTANT_DECL)
-                                            sem_register_top_level_declaration(ctx, inner);
-                                        else if (inner->type == AST_NODE_VARIABLE_DECL)
-                                            sem_register_top_level_variable(ctx, inner);
-                                    }
-                                }
-                            }
-                        }
-                        k++;
-                    }
+                    sem_pass1_register_when_decl(ctx, top_decl);
                 }
             }
         }

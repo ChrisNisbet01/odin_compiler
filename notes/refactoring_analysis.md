@@ -189,6 +189,20 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       `sem_evaluate_constant_int` (343),
       `sem_resolve_procedure_signature` (339), `ir_generate` (300).
       **246/246 tests pass.**
+- [x] E. `sem_pass1_register_top_level_ex` (`semantic_analyser.c`, was 585
+      lines at 1608-2192): extracted six sub-blocks into named helpers:
+      `sem_pass1_auto_import_runtime` / `sem_pass1_auto_import_intrinsics`
+      (the two prelude auto-imports), `sem_pass1_handle_import` /
+      `sem_pass1_handle_import_named` / `sem_pass1_handle_import_using` (the
+      three import handlers; case-level `continue` → `return`, verified no
+      loop-level `continue`s in those blocks), and
+      `sem_pass1_register_when_decl`. All six helper bodies diff-audited
+      byte-identical to their original case bodies (only dedent +
+      `continue`→`return`). Main function reduced 585 → ~160 lines; helpers
+      placed before it. Remaining large
+      targets: `sem_evaluate_constant_int` (343),
+      `sem_resolve_procedure_signature` (339), `ir_generate` (300).
+      **246/246 tests pass.**
 - [ ] F. Predicate extraction
 
 ## Verification
