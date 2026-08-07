@@ -2533,6 +2533,289 @@ sem_evaluate_postfix_op_call(
     return type;
 }
 
+// Resolve a postfix member access op in a postfix chain (struct field,
+// union member, string/slice/array .len/.data, swizzle, etc). Returns the
+// running type after the access.
+static TypeDescriptor const *
+sem_evaluate_postfix_op_member(SemContext * ctx, odin_grammar_node_t * op, TypeDescriptor const * type)
+{
+    if (type && (type->kind == TD_KIND_STRUCT || type->kind == TD_KIND_SOA) && op->list.count >= 1
+        && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        field_access_path_t path;
+        if (type_descriptor_find_struct_field_path(type, field_name, &path))
+        {
+            TypeDescriptor const * cur_type = type;
+            for (int pi = 0; pi < path.count; pi++)
+            {
+                struct_field_t const * f = type_descriptor_get_struct_field(cur_type, path.indices[pi]);
+                if (f == NULL)
+                    break;
+                if (pi == path.count - 1)
+                    type = f->type_desc;
+                else
+                    cur_type = f->type_desc;
+            }
+            op->resolved_type = type;
+        }
+    }
+    else if (type && type->kind == TD_KIND_UNION && op->list.count >= 1 && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        int field_idx = type_descriptor_find_union_field_index(type, field_name);
+        if (field_idx >= 0)
+        {
+            struct_field_t const * field = type_descriptor_get_union_field(type, field_idx);
+            if (field)
+            {
+                type = field->type_desc;
+                op->resolved_type = type;
+            }
+        }
+    }
+    else if (type && type->kind == TD_KIND_BIT_FIELD && op->list.count >= 1 && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        bit_field_field_info const * bf = type_descriptor_find_bit_field_field(type, field_name);
+        if (bf)
+        {
+            type = bf->type;
+            op->resolved_type = type;
+        }
+    }
+    else if (type && type->kind == TD_KIND_MAYBE && op->list.count >= 1 && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        if (field_name && strcmp(field_name, "value") == 0)
+        {
+            type = type->as.maybe.inner_type;
+            op->resolved_type = type;
+        }
+    }
+    else if (type && type->kind == TD_KIND_VECTOR && op->list.count >= 1 && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        if (field_name && is_valid_swizzle(field_name, type->as.vector.lane_count))
+        {
+            int swizzle_len = (int)strlen(field_name);
+            if (swizzle_len == 1)
+                type = type->element_type;
+            else
+                type = get_or_create_vector_type(ctx->type_registry, type->element_type, swizzle_len);
+            op->resolved_type = type;
+        }
+        else
+        {
+            sem_error_list_add(&ctx->errors, NULL, op, "invalid swizzle or vector has no field named");
+        }
+    }
+    else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
+             && strcmp(type->as.basic.name, "string") == 0 && op->list.count >= 1 && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        if (field_name && strcmp(field_name, "len") == 0)
+        {
+            type = get_basic_type_by_name(ctx->type_registry, "int");
+            op->resolved_type = type;
+        }
+        else if (field_name && strcmp(field_name, "data") == 0)
+        {
+            type = get_or_create_pointer_type(
+                ctx->type_registry, get_basic_type_by_name(ctx->type_registry, "u8")
+            );
+            op->resolved_type = type;
+        }
+        else
+        {
+            sem_error_list_add(&ctx->errors, NULL, op, "string has no field named");
+        }
+    }
+    else if (type && type->kind == TD_KIND_SLICE && op->list.count >= 1 && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        if (field_name && strcmp(field_name, "len") == 0)
+        {
+            type = get_basic_type_by_name(ctx->type_registry, "int");
+            op->resolved_type = type;
+        }
+        else if (field_name && strcmp(field_name, "data") == 0)
+        {
+            type = get_or_create_pointer_type(ctx->type_registry, type->element_type);
+            op->resolved_type = type;
+        }
+        else
+        {
+            sem_error_list_add(&ctx->errors, NULL, op, "slice has no field named");
+        }
+    }
+    else if (type && type->kind == TD_KIND_DYNAMIC_ARRAY && op->list.count >= 1 && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        if (field_name && strcmp(field_name, "len") == 0)
+        {
+            type = get_basic_type_by_name(ctx->type_registry, "int");
+            op->resolved_type = type;
+        }
+        else if (field_name && strcmp(field_name, "cap") == 0)
+        {
+            type = get_basic_type_by_name(ctx->type_registry, "int");
+            op->resolved_type = type;
+        }
+        else if (field_name && strcmp(field_name, "data") == 0)
+        {
+            type = get_or_create_pointer_type(ctx->type_registry, type->element_type);
+            op->resolved_type = type;
+        }
+        else
+        {
+            sem_error_list_add(&ctx->errors, NULL, op, "dynamic array has no field named");
+        }
+    }
+    else if (type && type->kind == TD_KIND_ARRAY && op->list.count >= 1 && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        if (field_name && strcmp(field_name, "len") == 0)
+        {
+            type = get_basic_type_by_name(ctx->type_registry, "int");
+            op->resolved_type = type;
+        }
+        else
+        {
+            sem_error_list_add(&ctx->errors, NULL, op, "array has no field named");
+        }
+    }
+    else if (type && (type->kind == TD_KIND_POINTER || type->kind == TD_KIND_MULTI_POINTER)
+             && op->list.count >= 1 && op->list.children[0])
+    {
+        TypeDescriptor const * pointee = type->pointee;
+        if (pointee)
+        {
+            char const * field_name = op->list.children[0]->text;
+            if (field_name == NULL)
+            {
+                sem_error_list_add(&ctx->errors, NULL, op, "member access: missing field name");
+                return type;
+            }
+            if (pointee->kind == TD_KIND_STRUCT || pointee->kind == TD_KIND_SOA)
+            {
+                field_access_path_t path;
+                if (type_descriptor_find_struct_field_path(pointee, field_name, &path))
+                {
+                    TypeDescriptor const * cur_type = pointee;
+                    for (int pi = 0; pi < path.count; pi++)
+                    {
+                        struct_field_t const * f = type_descriptor_get_struct_field(cur_type, path.indices[pi]);
+                        if (f == NULL)
+                            break;
+                        if (pi == path.count - 1)
+                            type = f->type_desc;
+                        else
+                            cur_type = f->type_desc;
+                    }
+                    op->resolved_type = type;
+                }
+                else
+                {
+                    sem_error_list_add(&ctx->errors, NULL, op, "pointer to struct has no field named");
+                }
+            }
+            else if (pointee->kind == TD_KIND_UNION)
+            {
+                int field_idx = type_descriptor_find_union_field_index(pointee, field_name);
+                if (field_idx >= 0)
+                {
+                    struct_field_t const * field = type_descriptor_get_union_field(pointee, field_idx);
+                    if (field)
+                    {
+                        type = field->type_desc;
+                        op->resolved_type = type;
+                    }
+                }
+                else
+                {
+                    sem_error_list_add(&ctx->errors, NULL, op, "pointer to union has no field named");
+                }
+            }
+            else if (pointee->kind == TD_KIND_MAYBE && strcmp(field_name, "value") == 0)
+            {
+                type = pointee->as.maybe.inner_type;
+                op->resolved_type = type;
+            }
+            else if (pointee->kind == TD_KIND_BASIC && pointee->as.basic.name != NULL
+                     && strcmp(pointee->as.basic.name, "string") == 0)
+            {
+                if (strcmp(field_name, "len") == 0)
+                {
+                    type = get_basic_type_by_name(ctx->type_registry, "int");
+                    op->resolved_type = type;
+                }
+                else if (strcmp(field_name, "data") == 0)
+                {
+                    type = get_or_create_pointer_type(
+                        ctx->type_registry, get_basic_type_by_name(ctx->type_registry, "u8")
+                    );
+                    op->resolved_type = type;
+                }
+                else
+                {
+                    sem_error_list_add(&ctx->errors, NULL, op, "pointer to string has no field named");
+                }
+            }
+            else if (pointee->kind == TD_KIND_SLICE)
+            {
+                if (strcmp(field_name, "len") == 0)
+                {
+                    type = get_basic_type_by_name(ctx->type_registry, "int");
+                    op->resolved_type = type;
+                }
+                else if (strcmp(field_name, "data") == 0)
+                {
+                    type = get_or_create_pointer_type(ctx->type_registry, pointee->element_type);
+                    op->resolved_type = type;
+                }
+                else
+                {
+                    sem_error_list_add(&ctx->errors, NULL, op, "pointer to slice has no field named");
+                }
+            }
+            else
+            {
+                sem_error_list_add(&ctx->errors, NULL, op, "cannot access member through pointer to this type");
+            }
+        }
+    }
+    else if (type && type->kind == TD_KIND_ENUM && op->list.count >= 1 && op->list.children[0])
+    {
+        char const * field_name = op->list.children[0]->text;
+        if (field_name == NULL)
+        {
+            sem_error_list_add(&ctx->errors, NULL, op, "enum member access: missing field name");
+            return type;
+        }
+        bool found = false;
+        for (int ei = 0; ei < type->as.enum_type.enumerator_count; ei++)
+        {
+            if (type->as.enum_type.enumerator_names[ei] != NULL
+                && strcmp(field_name, type->as.enum_type.enumerator_names[ei]) == 0)
+            {
+                found = true;
+                break;
+            }
+        }
+        if (found)
+        {
+            op->resolved_type = type;
+        }
+        else
+        {
+            sem_error_list_add(&ctx->errors, NULL, op, "enum type has no member named");
+            type = NULL;
+        }
+    }
+    return type;
+}
+
 static TypeDescriptor const *
 sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
 {
@@ -2588,280 +2871,7 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
             break;
 
         case AST_NODE_POSTFIX_MEMBER:
-            if (type && (type->kind == TD_KIND_STRUCT || type->kind == TD_KIND_SOA) && op->list.count >= 1
-                && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                field_access_path_t path;
-                if (type_descriptor_find_struct_field_path(type, field_name, &path))
-                {
-                    TypeDescriptor const * cur_type = type;
-                    for (int pi = 0; pi < path.count; pi++)
-                    {
-                        struct_field_t const * f = type_descriptor_get_struct_field(cur_type, path.indices[pi]);
-                        if (f == NULL)
-                            break;
-                        if (pi == path.count - 1)
-                            type = f->type_desc;
-                        else
-                            cur_type = f->type_desc;
-                    }
-                    op->resolved_type = type;
-                }
-            }
-            else if (type && type->kind == TD_KIND_UNION && op->list.count >= 1 && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                int field_idx = type_descriptor_find_union_field_index(type, field_name);
-                if (field_idx >= 0)
-                {
-                    struct_field_t const * field = type_descriptor_get_union_field(type, field_idx);
-                    if (field)
-                    {
-                        type = field->type_desc;
-                        op->resolved_type = type;
-                    }
-                }
-            }
-            else if (type && type->kind == TD_KIND_BIT_FIELD && op->list.count >= 1 && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                bit_field_field_info const * bf = type_descriptor_find_bit_field_field(type, field_name);
-                if (bf)
-                {
-                    type = bf->type;
-                    op->resolved_type = type;
-                }
-            }
-            else if (type && type->kind == TD_KIND_MAYBE && op->list.count >= 1 && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                if (field_name && strcmp(field_name, "value") == 0)
-                {
-                    type = type->as.maybe.inner_type;
-                    op->resolved_type = type;
-                }
-            }
-            else if (type && type->kind == TD_KIND_VECTOR && op->list.count >= 1 && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                if (field_name && is_valid_swizzle(field_name, type->as.vector.lane_count))
-                {
-                    int swizzle_len = (int)strlen(field_name);
-                    if (swizzle_len == 1)
-                        type = type->element_type;
-                    else
-                        type = get_or_create_vector_type(ctx->type_registry, type->element_type, swizzle_len);
-                    op->resolved_type = type;
-                }
-                else
-                {
-                    sem_error_list_add(&ctx->errors, NULL, op, "invalid swizzle or vector has no field named");
-                }
-            }
-            else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
-                     && strcmp(type->as.basic.name, "string") == 0 && op->list.count >= 1 && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                if (field_name && strcmp(field_name, "len") == 0)
-                {
-                    type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = type;
-                }
-                else if (field_name && strcmp(field_name, "data") == 0)
-                {
-                    type = get_or_create_pointer_type(
-                        ctx->type_registry, get_basic_type_by_name(ctx->type_registry, "u8")
-                    );
-                    op->resolved_type = type;
-                }
-                else
-                {
-                    sem_error_list_add(&ctx->errors, NULL, op, "string has no field named");
-                }
-            }
-            else if (type && type->kind == TD_KIND_SLICE && op->list.count >= 1 && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                if (field_name && strcmp(field_name, "len") == 0)
-                {
-                    type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = type;
-                }
-                else if (field_name && strcmp(field_name, "data") == 0)
-                {
-                    type = get_or_create_pointer_type(ctx->type_registry, type->element_type);
-                    op->resolved_type = type;
-                }
-                else
-                {
-                    sem_error_list_add(&ctx->errors, NULL, op, "slice has no field named");
-                }
-            }
-            else if (type && type->kind == TD_KIND_DYNAMIC_ARRAY && op->list.count >= 1 && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                if (field_name && strcmp(field_name, "len") == 0)
-                {
-                    type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = type;
-                }
-                else if (field_name && strcmp(field_name, "cap") == 0)
-                {
-                    type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = type;
-                }
-                else if (field_name && strcmp(field_name, "data") == 0)
-                {
-                    type = get_or_create_pointer_type(ctx->type_registry, type->element_type);
-                    op->resolved_type = type;
-                }
-                else
-                {
-                    sem_error_list_add(&ctx->errors, NULL, op, "dynamic array has no field named");
-                }
-            }
-            else if (type && type->kind == TD_KIND_ARRAY && op->list.count >= 1 && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                if (field_name && strcmp(field_name, "len") == 0)
-                {
-                    type = get_basic_type_by_name(ctx->type_registry, "int");
-                    op->resolved_type = type;
-                }
-                else
-                {
-                    sem_error_list_add(&ctx->errors, NULL, op, "array has no field named");
-                }
-            }
-            else if (type && (type->kind == TD_KIND_POINTER || type->kind == TD_KIND_MULTI_POINTER)
-                     && op->list.count >= 1 && op->list.children[0])
-            {
-                TypeDescriptor const * pointee = type->pointee;
-                if (pointee)
-                {
-                    char const * field_name = op->list.children[0]->text;
-                    if (field_name == NULL)
-                    {
-                        sem_error_list_add(&ctx->errors, NULL, op, "member access: missing field name");
-                        break;
-                    }
-                    if (pointee->kind == TD_KIND_STRUCT || pointee->kind == TD_KIND_SOA)
-                    {
-                        field_access_path_t path;
-                        if (type_descriptor_find_struct_field_path(pointee, field_name, &path))
-                        {
-                            TypeDescriptor const * cur_type = pointee;
-                            for (int pi = 0; pi < path.count; pi++)
-                            {
-                                struct_field_t const * f = type_descriptor_get_struct_field(cur_type, path.indices[pi]);
-                                if (f == NULL)
-                                    break;
-                                if (pi == path.count - 1)
-                                    type = f->type_desc;
-                                else
-                                    cur_type = f->type_desc;
-                            }
-                            op->resolved_type = type;
-                        }
-                        else
-                        {
-                            sem_error_list_add(&ctx->errors, NULL, op, "pointer to struct has no field named");
-                        }
-                    }
-                    else if (pointee->kind == TD_KIND_UNION)
-                    {
-                        int field_idx = type_descriptor_find_union_field_index(pointee, field_name);
-                        if (field_idx >= 0)
-                        {
-                            struct_field_t const * field = type_descriptor_get_union_field(pointee, field_idx);
-                            if (field)
-                            {
-                                type = field->type_desc;
-                                op->resolved_type = type;
-                            }
-                        }
-                        else
-                        {
-                            sem_error_list_add(&ctx->errors, NULL, op, "pointer to union has no field named");
-                        }
-                    }
-                    else if (pointee->kind == TD_KIND_MAYBE && strcmp(field_name, "value") == 0)
-                    {
-                        type = pointee->as.maybe.inner_type;
-                        op->resolved_type = type;
-                    }
-                    else if (pointee->kind == TD_KIND_BASIC && pointee->as.basic.name != NULL
-                             && strcmp(pointee->as.basic.name, "string") == 0)
-                    {
-                        if (strcmp(field_name, "len") == 0)
-                        {
-                            type = get_basic_type_by_name(ctx->type_registry, "int");
-                            op->resolved_type = type;
-                        }
-                        else if (strcmp(field_name, "data") == 0)
-                        {
-                            type = get_or_create_pointer_type(
-                                ctx->type_registry, get_basic_type_by_name(ctx->type_registry, "u8")
-                            );
-                            op->resolved_type = type;
-                        }
-                        else
-                        {
-                            sem_error_list_add(&ctx->errors, NULL, op, "pointer to string has no field named");
-                        }
-                    }
-                    else if (pointee->kind == TD_KIND_SLICE)
-                    {
-                        if (strcmp(field_name, "len") == 0)
-                        {
-                            type = get_basic_type_by_name(ctx->type_registry, "int");
-                            op->resolved_type = type;
-                        }
-                        else if (strcmp(field_name, "data") == 0)
-                        {
-                            type = get_or_create_pointer_type(ctx->type_registry, pointee->element_type);
-                            op->resolved_type = type;
-                        }
-                        else
-                        {
-                            sem_error_list_add(&ctx->errors, NULL, op, "pointer to slice has no field named");
-                        }
-                    }
-                    else
-                    {
-                        sem_error_list_add(&ctx->errors, NULL, op, "cannot access member through pointer to this type");
-                    }
-                }
-            }
-            else if (type && type->kind == TD_KIND_ENUM && op->list.count >= 1 && op->list.children[0])
-            {
-                char const * field_name = op->list.children[0]->text;
-                if (field_name == NULL)
-                {
-                    sem_error_list_add(&ctx->errors, NULL, op, "enum member access: missing field name");
-                    break;
-                }
-                bool found = false;
-                for (int ei = 0; ei < type->as.enum_type.enumerator_count; ei++)
-                {
-                    if (type->as.enum_type.enumerator_names[ei] != NULL
-                        && strcmp(field_name, type->as.enum_type.enumerator_names[ei]) == 0)
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-                if (found)
-                {
-                    op->resolved_type = type;
-                }
-                else
-                {
-                    sem_error_list_add(&ctx->errors, NULL, op, "enum type has no member named");
-                    type = NULL;
-                }
-            }
+            type = sem_evaluate_postfix_op_member(ctx, op, type);
             break;
 
         case AST_NODE_POSTFIX_SUBSCRIPT:
