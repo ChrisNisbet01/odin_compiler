@@ -2816,6 +2816,156 @@ sem_evaluate_postfix_op_member(SemContext * ctx, odin_grammar_node_t * op, TypeD
     return type;
 }
 
+// Resolve a postfix subscript op in a postfix chain (array/slice/map/string/
+// vector element, matrix multi-index). Returns the running type after access.
+static TypeDescriptor const *
+sem_evaluate_postfix_op_subscript(SemContext * ctx, odin_grammar_node_t * op, TypeDescriptor const * type)
+{
+    odin_grammar_node_t * index_node = op->list.children[0];
+    int index_count = 1;
+
+    // Check if this is a multi-index subscript (comma-separated indices)
+    // e.g., m[0, 1] should be treated as m[0][1]
+    if (index_node && index_node->type == AST_NODE_EXPRESSION && index_node->list.count >= 2)
+    {
+        index_count = (int)index_node->list.count;
+    }
+
+    for (int idx = 0; idx < index_count; idx++)
+    {
+        odin_grammar_node_t * single_index_node = index_node;
+        if (index_count > 1 && index_node->type == AST_NODE_EXPRESSION)
+        {
+            single_index_node = index_node->list.children[idx];
+        }
+
+        if (type
+            && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
+                || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
+        {
+            type = type->element_type;
+        }
+        else if (type && type->kind == TD_KIND_MATRIX)
+        {
+            // Matrix indexing requires both row and column indices: m[row, col]
+            if (index_count == 1)
+            {
+                sem_error_list_add(
+                    &ctx->errors,
+                    ctx->source_file_path,
+                    op,
+                    "matrix index requires both a row and column index: use m[row, col]"
+                );
+                type = NULL;
+                break;
+            }
+            // First index selects the element position (row in math terms);
+            // the multi-index subscript consumes both indices → element type
+            type = type->as.matrix.element_type;
+        }
+        else if (type && type->kind == TD_KIND_MAP)
+        {
+            type = type->as.map.value_type;
+        }
+        else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
+                 && strcmp(type->as.basic.name, "string") == 0)
+        {
+            type = get_basic_type_by_name(ctx->type_registry, "u8");
+        }
+    }
+
+    op->resolved_type = type;
+    return type;
+}
+
+// Resolve a postfix deref op (^) in a postfix chain. Returns the running type
+// after dereferencing.
+static TypeDescriptor const *
+sem_evaluate_postfix_op_deref(SemContext * ctx, odin_grammar_node_t * op, TypeDescriptor const * type)
+{
+    if (type && (type->kind == TD_KIND_POINTER || type->kind == TD_KIND_MULTI_POINTER))
+    {
+        type = type->pointee;
+        op->resolved_type = type;
+    }
+    return type;
+}
+
+// Resolve a postfix type assertion op (x.(T)) in a postfix chain. Validates the
+// target against any/union/maybe and returns the asserted type.
+static TypeDescriptor const *
+sem_evaluate_postfix_op_assertion(SemContext * ctx, odin_grammar_node_t * op, TypeDescriptor const * type)
+{
+    if (type && type->kind == TD_KIND_BASIC && type->as.basic.name && strcmp(type->as.basic.name, "any") == 0)
+    {
+        if (op->list.count > 0)
+        {
+            TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, op->list.children[0]);
+            if (target_type)
+            {
+                type = target_type;
+                op->resolved_type = type;
+            }
+        }
+    }
+    else if (type && type->kind == TD_KIND_UNION)
+    {
+        if (op->list.count > 0)
+        {
+            TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, op->list.children[0]);
+            if (target_type)
+            {
+                int field_idx = -1;
+                for (int i = 0; i < type->union_metadata.members.count; i++)
+                {
+                    if (type->union_metadata.members.fields[i].type_desc->type_id == target_type->type_id)
+                    {
+                        field_idx = i;
+                        break;
+                    }
+                }
+                if (field_idx >= 0)
+                {
+                    type = target_type;
+                    op->resolved_type = type;
+                    op->resolved_symbol = (symbol_t *)(intptr_t)field_idx;
+                }
+            }
+        }
+    }
+    else if (type && type->kind == TD_KIND_MAYBE)
+    {
+        if (op->list.count > 0)
+        {
+            TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, op->list.children[0]);
+            if (target_type && target_type->type_id == type->as.maybe.inner_type->type_id)
+            {
+                type = target_type;
+                op->resolved_type = type;
+            }
+        }
+    }
+    return type;
+}
+
+// Resolve a postfix slice op (arr[low..high]) in a postfix chain. Returns the
+// running type (slice, or array→slice conversion).
+static TypeDescriptor const *
+sem_evaluate_postfix_op_slice(SemContext * ctx, odin_grammar_node_t * op, TypeDescriptor const * type)
+{
+    if (type && type->kind == TD_KIND_SLICE)
+    {
+        op->resolved_type = type;
+    }
+    else if (type && type->kind == TD_KIND_ARRAY)
+    {
+        TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, type->element_type);
+        type = slice_type;
+        op->resolved_type = type;
+    }
+    return type;
+}
+
 static TypeDescriptor const *
 sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
 {
@@ -2875,138 +3025,20 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
             break;
 
         case AST_NODE_POSTFIX_SUBSCRIPT:
-        {
-            odin_grammar_node_t * index_node = op->list.children[0];
-            int index_count = 1;
-
-            // Check if this is a multi-index subscript (comma-separated indices)
-            // e.g., m[0, 1] should be treated as m[0][1]
-            if (index_node && index_node->type == AST_NODE_EXPRESSION && index_node->list.count >= 2)
-            {
-                index_count = (int)index_node->list.count;
-            }
-
-            for (int idx = 0; idx < index_count; idx++)
-            {
-                odin_grammar_node_t * single_index_node = index_node;
-                if (index_count > 1 && index_node->type == AST_NODE_EXPRESSION)
-                {
-                    single_index_node = index_node->list.children[idx];
-                }
-
-                if (type
-                    && (type->kind == TD_KIND_ARRAY || type->kind == TD_KIND_SLICE
-                        || type->kind == TD_KIND_MULTI_POINTER || type->kind == TD_KIND_VECTOR))
-                {
-                    type = type->element_type;
-                }
-                else if (type && type->kind == TD_KIND_MATRIX)
-                {
-                    // Matrix indexing requires both row and column indices: m[row, col]
-                    if (index_count == 1)
-                    {
-                        sem_error_list_add(
-                            &ctx->errors,
-                            ctx->source_file_path,
-                            op,
-                            "matrix index requires both a row and column index: use m[row, col]"
-                        );
-                        type = NULL;
-                        break;
-                    }
-                    // First index selects the element position (row in math terms);
-                    // the multi-index subscript consumes both indices → element type
-                    type = type->as.matrix.element_type;
-                }
-                else if (type && type->kind == TD_KIND_MAP)
-                {
-                    type = type->as.map.value_type;
-                }
-                else if (type && type->kind == TD_KIND_BASIC && type->as.basic.name != NULL
-                         && strcmp(type->as.basic.name, "string") == 0)
-                {
-                    type = get_basic_type_by_name(ctx->type_registry, "u8");
-                }
-            }
-
-            op->resolved_type = type;
-        }
-        break;
+            type = sem_evaluate_postfix_op_subscript(ctx, op, type);
+            break;
 
         case AST_NODE_POSTFIX_DEREF:
-            if (type && (type->kind == TD_KIND_POINTER || type->kind == TD_KIND_MULTI_POINTER))
-            {
-                type = type->pointee;
-                op->resolved_type = type;
-            }
+            type = sem_evaluate_postfix_op_deref(ctx, op, type);
             break;
 
         case AST_NODE_POSTFIX_ASSERTION:
-        {
-            if (type && type->kind == TD_KIND_BASIC && type->as.basic.name && strcmp(type->as.basic.name, "any") == 0)
-            {
-                if (op->list.count > 0)
-                {
-                    TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, op->list.children[0]);
-                    if (target_type)
-                    {
-                        type = target_type;
-                        op->resolved_type = type;
-                    }
-                }
-            }
-            else if (type && type->kind == TD_KIND_UNION)
-            {
-                if (op->list.count > 0)
-                {
-                    TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, op->list.children[0]);
-                    if (target_type)
-                    {
-                        int field_idx = -1;
-                        for (int i = 0; i < type->union_metadata.members.count; i++)
-                        {
-                            if (type->union_metadata.members.fields[i].type_desc->type_id == target_type->type_id)
-                            {
-                                field_idx = i;
-                                break;
-                            }
-                        }
-                        if (field_idx >= 0)
-                        {
-                            type = target_type;
-                            op->resolved_type = type;
-                            op->resolved_symbol = (symbol_t *)(intptr_t)field_idx;
-                        }
-                    }
-                }
-            }
-            else if (type && type->kind == TD_KIND_MAYBE)
-            {
-                if (op->list.count > 0)
-                {
-                    TypeDescriptor const * target_type = sem_resolve_type_expr(ctx, op->list.children[0]);
-                    if (target_type && target_type->type_id == type->as.maybe.inner_type->type_id)
-                    {
-                        type = target_type;
-                        op->resolved_type = type;
-                    }
-                }
-            }
+            type = sem_evaluate_postfix_op_assertion(ctx, op, type);
             break;
-        }
 
         case AST_NODE_POSTFIX_SLICE:
         case AST_NODE_POSTFIX_SLICE_LT:
-            if (type && type->kind == TD_KIND_SLICE)
-            {
-                op->resolved_type = type;
-            }
-            else if (type && type->kind == TD_KIND_ARRAY)
-            {
-                TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, type->element_type);
-                type = slice_type;
-                op->resolved_type = type;
-            }
+            type = sem_evaluate_postfix_op_slice(ctx, op, type);
             break;
 
         default:
