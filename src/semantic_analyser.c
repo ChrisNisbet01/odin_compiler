@@ -2210,6 +2210,27 @@ sem_pass1_register_top_level_decl(SemContext * ctx, odin_grammar_node_t * top_de
     }
 }
 
+// Copy core:runtime symbols into the current scope via an implicit `using`.
+// Skips the copy when the current scope IS core:runtime's own package scope.
+static void
+sem_pass1_copy_runtime_symbols(SemContext * ctx)
+{
+    for (int ri = 0; ri < ctx->import_count; ri++)
+    {
+        if (ctx->imports[ri] && ctx->imports[ri]->is_runtime && ctx->imports[ri]->package_scope)
+        {
+            scope_t * cur = generator_current_scope(ctx->gen_ctx);
+            if (cur != ctx->imports[ri]->package_scope)
+            {
+                generic_hash_table_iterate(
+                    ctx->imports[ri]->package_scope->symbols.by_name, import_using_copy_symbol, cur
+                );
+            }
+            break;
+        }
+    }
+}
+
 static void
 sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast)
 {
@@ -2243,20 +2264,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
     sem_pass1_auto_import_intrinsics(ctx);
 
     // Copy runtime symbols into the current scope (skip if we are core:runtime itself)
-    for (int ri = 0; ri < ctx->import_count; ri++)
-    {
-        if (ctx->imports[ri] && ctx->imports[ri]->is_runtime && ctx->imports[ri]->package_scope)
-        {
-            scope_t * cur = generator_current_scope(ctx->gen_ctx);
-            if (cur != ctx->imports[ri]->package_scope)
-            {
-                generic_hash_table_iterate(
-                    ctx->imports[ri]->package_scope->symbols.by_name, import_using_copy_symbol, cur
-                );
-            }
-            break;
-        }
-    }
+    sem_pass1_copy_runtime_symbols(ctx);
 
 
     for (size_t i = 0; i < program_ast->list.count; i++)
