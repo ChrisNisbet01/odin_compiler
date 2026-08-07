@@ -767,6 +767,7 @@ ir_gen_postfix_call(
     TypeDescriptor const * arg_types[128];
     int arg_count = 0;
     char const * func_name = NULL;
+    TypeDescriptor const * proc_type = NULL;
 
     if (op->resolved_symbol)
         func_name = op->resolved_symbol->llvm_name ? op->resolved_symbol->llvm_name : op->resolved_symbol->name;
