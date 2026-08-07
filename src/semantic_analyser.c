@@ -2115,6 +2115,101 @@ sem_pass1_register_when_decl(SemContext * ctx, odin_grammar_node_t * top_decl)
     }
 }
 
+// Register a single top-level declaration during pass 1: package clause,
+// imports, constants, variables, foreign blocks, using decls, #assert and
+// `when` declarations.
+static void
+sem_pass1_register_top_level_decl(SemContext * ctx, odin_grammar_node_t * top_decl)
+{
+    // Handle @require import by unwrapping to the inner import node
+    if (top_decl->type == AST_NODE_IMPORT_REQUIRE)
+    {
+        if (top_decl->list.count < 1 || top_decl->list.children[0] == NULL)
+            return;
+        top_decl = top_decl->list.children[0];
+    }
+
+    if (top_decl->type == AST_NODE_PACKAGE_CLAUSE)
+    {
+        // PackageClause children: [Identifier("name")]
+        if (top_decl->list.count > 0 && top_decl->list.children[0] && top_decl->list.children[0]->text)
+        {
+            free(ctx->package_name);
+            ctx->package_name = strdup(top_decl->list.children[0]->text);
+        }
+    }
+    else if (top_decl->type == AST_NODE_IMPORT)
+    {
+        sem_pass1_handle_import(ctx, top_decl);
+    }
+    else if (top_decl->type == AST_NODE_IMPORT_NAMED)
+    {
+        sem_pass1_handle_import_named(ctx, top_decl);
+    }
+    else if (top_decl->type == AST_NODE_IMPORT_USING)
+    {
+        sem_pass1_handle_import_using(ctx, top_decl);
+    }
+    else if (top_decl->type == AST_NODE_CONSTANT_DECL)
+    {
+        sem_register_top_level_declaration(ctx, top_decl);
+    }
+    else if (top_decl->type == AST_NODE_VARIABLE_DECL)
+    {
+        sem_register_top_level_variable(ctx, top_decl);
+    }
+    else if (top_decl->type == AST_NODE_FOREIGN_IMPORT)
+    {
+    }
+    else if (top_decl->type == AST_NODE_FOREIGN_BLOCK)
+    {
+        for (size_t k = 0; k < top_decl->list.count; k++)
+        {
+            odin_grammar_node_t * fb_child = top_decl->list.children[k];
+            if (fb_child == NULL)
+                continue;
+            if (fb_child->type == AST_NODE_CONSTANT_DECL)
+                sem_register_top_level_declaration(ctx, fb_child);
+        }
+    }
+    else if (top_decl->type == AST_NODE_USING_DECL)
+    {
+        for (size_t k = 0; k < top_decl->list.count; k++)
+        {
+            odin_grammar_node_t * inner = top_decl->list.children[k];
+            if (inner == NULL)
+                continue;
+            if (inner->type == AST_NODE_VARIABLE_DECL)
+                sem_register_top_level_variable(ctx, inner);
+            else if (inner->type == AST_NODE_CONSTANT_DECL)
+                sem_register_top_level_declaration(ctx, inner);
+        }
+    }
+    else if (top_decl->type == AST_NODE_DIRECTIVE_WITH_ARGS)
+    {
+        if (top_decl->text && strncmp(top_decl->text, "#assert", 7) == 0)
+        {
+            for (size_t k = 0; k < top_decl->list.count; k++)
+            {
+                odin_grammar_node_t * ac = top_decl->list.children[k];
+                if (ac == NULL || ac->type == AST_NODE_IDENTIFIER)
+                    continue;
+                sem_evaluate_expr(ctx, ac);
+                if (ac->resolved_type == NULL)
+                    break;
+                int result = sem_evaluate_constant_bool(ctx, ac);
+                if (result == 0)
+                    sem_error_list_add(&ctx->errors, NULL, top_decl, "#assert failed");
+                break;
+            }
+        }
+    }
+    else if (top_decl->type == AST_NODE_WHEN_DECL)
+    {
+        sem_pass1_register_when_decl(ctx, top_decl);
+    }
+}
+
 static void
 sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_ast)
 {
@@ -2178,93 +2273,7 @@ sem_pass1_register_top_level_ex(SemContext * ctx, odin_grammar_node_t * program_
                 if (top_decl == NULL)
                     continue;
 
-                // Handle @require import by unwrapping to the inner import node
-                if (top_decl->type == AST_NODE_IMPORT_REQUIRE)
-                {
-                    if (top_decl->list.count < 1 || top_decl->list.children[0] == NULL)
-                        continue;
-                    top_decl = top_decl->list.children[0];
-                }
-
-                if (top_decl->type == AST_NODE_PACKAGE_CLAUSE)
-                {
-                    // PackageClause children: [Identifier("name")]
-                    if (top_decl->list.count > 0 && top_decl->list.children[0] && top_decl->list.children[0]->text)
-                    {
-                        free(ctx->package_name);
-                        ctx->package_name = strdup(top_decl->list.children[0]->text);
-                    }
-                }
-                else if (top_decl->type == AST_NODE_IMPORT)
-                {
-                    sem_pass1_handle_import(ctx, top_decl);
-                }
-                else if (top_decl->type == AST_NODE_IMPORT_NAMED)
-                {
-                    sem_pass1_handle_import_named(ctx, top_decl);
-                }
-                else if (top_decl->type == AST_NODE_IMPORT_USING)
-                {
-                    sem_pass1_handle_import_using(ctx, top_decl);
-                }
-                else if (top_decl->type == AST_NODE_CONSTANT_DECL)
-                {
-                    sem_register_top_level_declaration(ctx, top_decl);
-                }
-                else if (top_decl->type == AST_NODE_VARIABLE_DECL)
-                {
-                    sem_register_top_level_variable(ctx, top_decl);
-                }
-                else if (top_decl->type == AST_NODE_FOREIGN_IMPORT)
-                {
-                }
-                else if (top_decl->type == AST_NODE_FOREIGN_BLOCK)
-                {
-                    for (size_t k = 0; k < top_decl->list.count; k++)
-                    {
-                        odin_grammar_node_t * fb_child = top_decl->list.children[k];
-                        if (fb_child == NULL)
-                            continue;
-                        if (fb_child->type == AST_NODE_CONSTANT_DECL)
-                            sem_register_top_level_declaration(ctx, fb_child);
-                    }
-                }
-                else if (top_decl->type == AST_NODE_USING_DECL)
-                {
-                    for (size_t k = 0; k < top_decl->list.count; k++)
-                    {
-                        odin_grammar_node_t * inner = top_decl->list.children[k];
-                        if (inner == NULL)
-                            continue;
-                        if (inner->type == AST_NODE_VARIABLE_DECL)
-                            sem_register_top_level_variable(ctx, inner);
-                        else if (inner->type == AST_NODE_CONSTANT_DECL)
-                            sem_register_top_level_declaration(ctx, inner);
-                    }
-                }
-                else if (top_decl->type == AST_NODE_DIRECTIVE_WITH_ARGS)
-                {
-                    if (top_decl->text && strncmp(top_decl->text, "#assert", 7) == 0)
-                    {
-                        for (size_t k = 0; k < top_decl->list.count; k++)
-                        {
-                            odin_grammar_node_t * ac = top_decl->list.children[k];
-                            if (ac == NULL || ac->type == AST_NODE_IDENTIFIER)
-                                continue;
-                            sem_evaluate_expr(ctx, ac);
-                            if (ac->resolved_type == NULL)
-                                break;
-                            int result = sem_evaluate_constant_bool(ctx, ac);
-                            if (result == 0)
-                                sem_error_list_add(&ctx->errors, NULL, top_decl, "#assert failed");
-                            break;
-                        }
-                    }
-                }
-                else if (top_decl->type == AST_NODE_WHEN_DECL)
-                {
-                    sem_pass1_register_when_decl(ctx, top_decl);
-                }
+                sem_pass1_register_top_level_decl(ctx, top_decl);
             }
         }
     }
