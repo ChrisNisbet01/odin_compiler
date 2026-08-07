@@ -597,6 +597,73 @@ ir_gen_postfix_pack_variadic_any(
     return is_any_variadic;
 }
 
+// Coerce integer/float argument values to the declared parameter types, and
+// load aggregate (array/struct/matrix) values from alloca pointers before the
+// call is emitted. is_any_variadic is currently unused by the coercion (it is
+// kept for signature parity with the caller); all params are coerced uniformly.
+static void
+ir_gen_postfix_coerce_args(
+    IrGenContext * ctx,
+    TypeDescriptor const * proc_type,
+    bool is_any_variadic,
+    LLVMValueRef * args,
+    TypeDescriptor const ** arg_types,
+    int arg_count
+)
+{
+    (void)is_any_variadic;
+    int param_count = proc_type->proc_metadata.param_count;
+    int context_offset = (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN) ? 1 : 0;
+    int effective_param_count = param_count;
+
+    for (int pi = 0; pi < effective_param_count && pi + context_offset < arg_count; pi++)
+    {
+        int arg_idx = pi + context_offset;
+        LLVMValueRef arg_val = args[arg_idx];
+        if (arg_val == NULL)
+            continue;
+
+        TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
+        if (param_type == NULL || param_type->llvm_type == NULL)
+            continue;
+
+        LLVMTypeRef arg_llvm_type = LLVMTypeOf(arg_val);
+        if (arg_llvm_type == param_type->llvm_type)
+            continue;
+
+        // Load aggregate values from alloca pointers when param expects value
+        if (LLVMGetTypeKind(arg_llvm_type) == LLVMPointerTypeKind
+            && (param_type->kind == TD_KIND_ARRAY || param_type->kind == TD_KIND_STRUCT
+                || param_type->kind == TD_KIND_MATRIX))
+        {
+            args[arg_idx] = LLVMBuildLoad2(ctx->builder, param_type->llvm_type, arg_val, "arg.load");
+            continue;
+        }
+
+        // Integer/float coercion (basic types only)
+        if (param_type->kind != TD_KIND_BASIC)
+            continue;
+
+        LLVMTypeKind arg_kind = LLVMGetTypeKind(arg_llvm_type);
+        LLVMTypeKind param_kind = LLVMGetTypeKind(param_type->llvm_type);
+        bool arg_is_int = (arg_kind == LLVMIntegerTypeKind);
+        bool param_is_int = (param_kind == LLVMIntegerTypeKind);
+        bool arg_is_float
+            = (arg_kind == LLVMHalfTypeKind || arg_kind == LLVMFloatTypeKind || arg_kind == LLVMDoubleTypeKind);
+        bool param_is_float
+            = (param_kind == LLVMHalfTypeKind || param_kind == LLVMFloatTypeKind || param_kind == LLVMDoubleTypeKind
+            );
+        if (!((arg_is_int && param_is_int) || (arg_is_float && param_is_float)))
+            continue;
+
+        bool src_is_unsigned = false;
+        if (arg_types && arg_types[pi] && arg_types[pi]->kind == TD_KIND_BASIC)
+            src_is_unsigned = arg_types[pi]->as.basic.is_unsigned;
+
+        args[arg_idx] = coerce_value_to_type(ctx, arg_val, param_type->llvm_type, src_is_unsigned, "arg.coerce");
+    }
+}
+
 static bool
 ir_gen_postfix_call(
     IrGenContext * ctx,
@@ -812,60 +879,7 @@ ir_gen_postfix_call(
 
     // Phase 5: Coerce integer/float argument values to the declared
     // parameter types, and load aggregate values from alloca pointers.
-    {
-        int param_count = proc_type->proc_metadata.param_count;
-        int context_offset = (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN) ? 1 : 0;
-        int effective_param_count = param_count;
-        if (is_any_variadic)
-            effective_param_count = param_count;
-
-        for (int pi = 0; pi < effective_param_count && pi + context_offset < arg_count; pi++)
-        {
-            int arg_idx = pi + context_offset;
-            LLVMValueRef arg_val = args[arg_idx];
-            if (arg_val == NULL)
-                continue;
-
-            TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
-            if (param_type == NULL || param_type->llvm_type == NULL)
-                continue;
-
-            LLVMTypeRef arg_llvm_type = LLVMTypeOf(arg_val);
-            if (arg_llvm_type == param_type->llvm_type)
-                continue;
-
-            // Load aggregate values from alloca pointers when param expects value
-            if (LLVMGetTypeKind(arg_llvm_type) == LLVMPointerTypeKind
-                && (param_type->kind == TD_KIND_ARRAY || param_type->kind == TD_KIND_STRUCT
-                    || param_type->kind == TD_KIND_MATRIX))
-            {
-                args[arg_idx] = LLVMBuildLoad2(ctx->builder, param_type->llvm_type, arg_val, "arg.load");
-                continue;
-            }
-
-            // Integer/float coercion (basic types only)
-            if (param_type->kind != TD_KIND_BASIC)
-                continue;
-
-            LLVMTypeKind arg_kind = LLVMGetTypeKind(arg_llvm_type);
-            LLVMTypeKind param_kind = LLVMGetTypeKind(param_type->llvm_type);
-            bool arg_is_int = (arg_kind == LLVMIntegerTypeKind);
-            bool param_is_int = (param_kind == LLVMIntegerTypeKind);
-            bool arg_is_float
-                = (arg_kind == LLVMHalfTypeKind || arg_kind == LLVMFloatTypeKind || arg_kind == LLVMDoubleTypeKind);
-            bool param_is_float
-                = (param_kind == LLVMHalfTypeKind || param_kind == LLVMFloatTypeKind || param_kind == LLVMDoubleTypeKind
-                );
-            if (!((arg_is_int && param_is_int) || (arg_is_float && param_is_float)))
-                continue;
-
-            bool src_is_unsigned = false;
-            if (arg_types && arg_types[pi] && arg_types[pi]->kind == TD_KIND_BASIC)
-                src_is_unsigned = arg_types[pi]->as.basic.is_unsigned;
-
-            args[arg_idx] = coerce_value_to_type(ctx, arg_val, param_type->llvm_type, src_is_unsigned, "arg.coerce");
-        }
-    }
+    ir_gen_postfix_coerce_args(ctx, proc_type, is_any_variadic, args, arg_types, arg_count);
 
     *val = LLVMBuildCall2(
         ctx->builder,
