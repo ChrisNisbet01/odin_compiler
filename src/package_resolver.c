@@ -5,6 +5,7 @@
 #include "odin_grammar_ast_actions.h"
 #include "scope.h"
 
+#include <dirent.h>
 #include <easy_pc/easy_pc.h>
 #include <libgen.h>
 #include <stdarg.h>
@@ -13,7 +14,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <dirent.h>
 
 // --- ParsedFile helpers ---
 
@@ -21,7 +21,8 @@ ParsedFile *
 parsed_file_create(char const * source_path)
 {
     ParsedFile * pf = calloc(1, sizeof(ParsedFile));
-    if (pf == NULL) return NULL;
+    if (pf == NULL)
+        return NULL;
     pf->source_path = source_path ? strdup(source_path) : NULL;
     return pf;
 }
@@ -29,7 +30,8 @@ parsed_file_create(char const * source_path)
 void
 parsed_file_free(ParsedFile * pf)
 {
-    if (pf == NULL) return;
+    if (pf == NULL)
+        return;
     free(pf->source_path);
     free(pf->source_text);
     free(pf->package_name);
@@ -42,7 +44,8 @@ parsed_file_free(ParsedFile * pf)
 static void
 set_node_file_path(odin_grammar_node_t * node, char const * path)
 {
-    if (node == NULL) return;
+    if (node == NULL)
+        return;
     if (node->file_path == NULL && path != NULL)
         node->file_path = strdup(path);
     for (size_t i = 0; i < node->list.count; i++)
@@ -70,7 +73,11 @@ parse_source_file(char const * path, epc_parser_t * parser, epc_ast_hook_registr
     fseek(f, 0, SEEK_SET);
 
     char * src = malloc((size_t)len + 1);
-    if (src == NULL) { fclose(f); return NULL; }
+    if (src == NULL)
+    {
+        fclose(f);
+        return NULL;
+    }
     size_t read = fread(src, 1, (size_t)len, f);
     fclose(f);
     src[read] = '\0';
@@ -162,7 +169,8 @@ merge_program_asts(ParsedFile ** files, int file_count, char ** out_error)
 {
     if (files == NULL || file_count < 1)
     {
-        if (out_error) *out_error = strdup("No files to merge");
+        if (out_error)
+            *out_error = strdup("No files to merge");
         return NULL;
     }
 
@@ -171,7 +179,8 @@ merge_program_asts(ParsedFile ** files, int file_count, char ** out_error)
     size_t total_children = 0;
     for (int fi = 0; fi < file_count; fi++)
     {
-        if (files[fi] == NULL || files[fi]->ast == NULL) continue;
+        if (files[fi] == NULL || files[fi]->ast == NULL)
+            continue;
         for (size_t i = 0; i < files[fi]->ast->list.count; i++)
         {
             odin_grammar_node_t * ext = files[fi]->ast->list.children[i];
@@ -182,13 +191,19 @@ merge_program_asts(ParsedFile ** files, int file_count, char ** out_error)
 
     // Create merged ExternalDeclarations node
     odin_grammar_node_t * merged_ext = calloc(1, sizeof(odin_grammar_node_t));
-    if (merged_ext == NULL) { if (out_error) *out_error = strdup("Out of memory"); return NULL; }
+    if (merged_ext == NULL)
+    {
+        if (out_error)
+            *out_error = strdup("Out of memory");
+        return NULL;
+    }
     merged_ext->type = AST_NODE_EXTERNAL_DECLARATIONS;
     merged_ext->list.children = calloc(total_children, sizeof(odin_grammar_node_t *));
     if (merged_ext->list.children == NULL)
     {
         free(merged_ext);
-        if (out_error) *out_error = strdup("Out of memory");
+        if (out_error)
+            *out_error = strdup("Out of memory");
         return NULL;
     }
     merged_ext->list.count = 0;
@@ -199,7 +214,8 @@ merge_program_asts(ParsedFile ** files, int file_count, char ** out_error)
     for (int fi = 0; fi < file_count; fi++)
     {
         ParsedFile * pf = files[fi];
-        if (pf == NULL || pf->ast == NULL) continue;
+        if (pf == NULL || pf->ast == NULL)
+            continue;
 
         for (size_t i = 0; i < pf->ast->list.count; i++)
         {
@@ -211,17 +227,20 @@ merge_program_asts(ParsedFile ** files, int file_count, char ** out_error)
             for (size_t j = 0; j < ext->list.count; j++)
             {
                 odin_grammar_node_t * child = ext->list.children[j];
-                if (child == NULL) continue;
+                if (child == NULL)
+                    continue;
 
                 if (child->type == AST_NODE_PACKAGE_CLAUSE)
                 {
                     char * pkg_name = (child->list.count > 0 && child->list.children[0])
-                                        ? (char *)child->list.children[0]->text : NULL;
+                                          ? (char *)child->list.children[0]->text
+                                          : NULL;
                     if (!have_package_clause)
                     {
                         // Take the first package clause
                         merged_ext->list.children[merged_ext->list.count++] = child;
-                        if (pkg_name) seen_pkg_name = strdup(pkg_name);
+                        if (pkg_name)
+                            seen_pkg_name = strdup(pkg_name);
                         have_package_clause = true;
                     }
                     else
@@ -230,10 +249,16 @@ merge_program_asts(ParsedFile ** files, int file_count, char ** out_error)
                         if (pkg_name && seen_pkg_name && strcmp(pkg_name, seen_pkg_name) != 0)
                         {
                             char err_buf[512];
-                            snprintf(err_buf, sizeof(err_buf),
-                                     "Package name mismatch: '%s' vs '%s' in '%s'",
-                                     pkg_name, seen_pkg_name, pf->source_path ? pf->source_path : "?");
-                            if (out_error) *out_error = strdup(err_buf);
+                            snprintf(
+                                err_buf,
+                                sizeof(err_buf),
+                                "Package name mismatch: '%s' vs '%s' in '%s'",
+                                pkg_name,
+                                seen_pkg_name,
+                                pf->source_path ? pf->source_path : "?"
+                            );
+                            if (out_error)
+                                *out_error = strdup(err_buf);
                             free(seen_pkg_name);
                             // Don't add this child — just free the merged node later
                             // We need to clean up children already moved
@@ -245,7 +270,7 @@ merge_program_asts(ParsedFile ** files, int file_count, char ** out_error)
                     }
                 }
                 else if (child->type == AST_NODE_IMPORT || child->type == AST_NODE_IMPORT_NAMED
-                      || child->type == AST_NODE_IMPORT_USING)
+                         || child->type == AST_NODE_IMPORT_USING)
                 {
                     // Add all imports (dedup happens in semantic analysis)
                     merged_ext->list.children[merged_ext->list.count++] = child;
@@ -270,7 +295,8 @@ merge_program_asts(ParsedFile ** files, int file_count, char ** out_error)
     if (merged_program == NULL)
     {
         odin_grammar_node_free(merged_ext, NULL);
-        if (out_error) *out_error = strdup("Out of memory");
+        if (out_error)
+            *out_error = strdup("Out of memory");
         return NULL;
     }
     merged_program->type = AST_NODE_PROGRAM;
@@ -279,7 +305,8 @@ merge_program_asts(ParsedFile ** files, int file_count, char ** out_error)
     {
         free(merged_program);
         odin_grammar_node_free(merged_ext, NULL);
-        if (out_error) *out_error = strdup("Out of memory");
+        if (out_error)
+            *out_error = strdup("Out of memory");
         return NULL;
     }
     merged_program->list.children[0] = merged_ext;
@@ -354,7 +381,8 @@ static bool
 dir_has_odin_files(char const * dir_path)
 {
     DIR * d = opendir(dir_path);
-    if (d == NULL) return false;
+    if (d == NULL)
+        return false;
     struct dirent * entry;
     while ((entry = readdir(d)) != NULL)
     {
@@ -373,7 +401,11 @@ static int
 enumerate_odin_files(char const * dir_path, char *** out_files)
 {
     DIR * d = opendir(dir_path);
-    if (d == NULL) { *out_files = NULL; return 0; }
+    if (d == NULL)
+    {
+        *out_files = NULL;
+        return 0;
+    }
 
     int capacity = 16;
     int count = 0;
@@ -410,10 +442,12 @@ try_dir(char const * fmt, ...)
     va_start(args, fmt);
     int needed = vsnprintf(NULL, 0, fmt, args);
     va_end(args);
-    if (needed < 0) return NULL;
+    if (needed < 0)
+        return NULL;
 
     char * path = malloc((size_t)needed + 1);
-    if (path == NULL) return NULL;
+    if (path == NULL)
+        return NULL;
 
     va_start(args, fmt);
     vsnprintf(path, (size_t)needed + 1, fmt, args);
@@ -432,10 +466,12 @@ try_path(char const * fmt, ...)
     va_start(args, fmt);
     int needed = vsnprintf(NULL, 0, fmt, args);
     va_end(args);
-    if (needed < 0) return NULL;
+    if (needed < 0)
+        return NULL;
 
     char * path = malloc((size_t)needed + 1);
-    if (path == NULL) return NULL;
+    if (path == NULL)
+        return NULL;
 
     va_start(args, fmt);
     vsnprintf(path, (size_t)needed + 1, fmt, args);
@@ -448,43 +484,51 @@ try_path(char const * fmt, ...)
 }
 
 static char *
-try_resolve_collection_or_dir(char const * coll_base, int coll_len, char const * import_name,
-                              char const * pkg_name)
+try_resolve_collection_or_dir(char const * coll_base, int coll_len, char const * import_name, char const * pkg_name)
 {
     // Try single-file patterns first
     {
         char * candidate = try_path("%s/%.*s/%s/%s.odin", coll_base, coll_len, import_name, pkg_name, pkg_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
     {
         char * candidate = try_path("%s/%.*s/src/%s/%s.odin", coll_base, coll_len, import_name, pkg_name, pkg_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
     {
         char * candidate = try_path("%s/stubs/%.*s/%s/%s.odin", coll_base, coll_len, import_name, pkg_name, pkg_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
     {
-        char * candidate = try_path("%s/stubs/%.*s/src/%s/%s.odin", coll_base, coll_len, import_name, pkg_name, pkg_name);
-        if (candidate) return candidate;
+        char * candidate
+            = try_path("%s/stubs/%.*s/src/%s/%s.odin", coll_base, coll_len, import_name, pkg_name, pkg_name);
+        if (candidate)
+            return candidate;
     }
 
     // Try directory patterns (multi-file package)
     {
         char * candidate = try_dir("%s/%.*s/%s", coll_base, coll_len, import_name, pkg_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
     {
         char * candidate = try_dir("%s/%.*s/src/%s", coll_base, coll_len, import_name, pkg_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
     {
         char * candidate = try_dir("%s/stubs/%.*s/%s", coll_base, coll_len, import_name, pkg_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
     {
         char * candidate = try_dir("%s/stubs/%.*s/src/%s", coll_base, coll_len, import_name, pkg_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
 
     return NULL;
@@ -496,17 +540,20 @@ try_resolve_local_or_dir(char const * source_dir, char const * import_name)
     // Try single-file patterns first
     {
         char * candidate = try_path("%s/%s/%s.odin", source_dir, import_name, import_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
     {
         char * candidate = try_path("%s/%s.odin", source_dir, import_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
 
     // Try directory pattern
     {
         char * candidate = try_dir("%s/%s", source_dir, import_name);
-        if (candidate) return candidate;
+        if (candidate)
+            return candidate;
     }
 
     return NULL;
@@ -532,23 +579,27 @@ resolve_import_path(char const * import_name, char const * source_dir, char cons
     }
 
     char * local = try_resolve_local_or_dir(source_dir, import_name);
-    if (local) return local;
+    if (local)
+        return local;
 
     if (odin_root != NULL)
     {
         // Try single-file under odin_root/src/
         {
             char * candidate = try_path("%s/src/%s/%s.odin", odin_root, import_name, import_name);
-            if (candidate) return candidate;
+            if (candidate)
+                return candidate;
         }
         {
             char * candidate = try_path("%s/src/%s.odin", odin_root, import_name);
-            if (candidate) return candidate;
+            if (candidate)
+                return candidate;
         }
         // Try directory under odin_root/src/
         {
             char * candidate = try_dir("%s/src/%s", odin_root, import_name);
-            if (candidate) return candidate;
+            if (candidate)
+                return candidate;
         }
     }
 
@@ -584,15 +635,19 @@ parse_imported_file(char const * file_path, epc_parser_t * parser, epc_ast_hook_
     }
 
     // Transfer ownership from ParsedFile to ImportedPackage
-    pkg->source_path = pf->source_path;     pf->source_path = NULL;
+    pkg->source_path = pf->source_path;
+    pf->source_path = NULL;
     pkg->source_dir = source_dir;
-    pkg->source_text = pf->source_text;     pf->source_text = NULL;
-    pkg->ast = pf->ast;                     pf->ast = NULL;
+    pkg->source_text = pf->source_text;
+    pf->source_text = NULL;
+    pkg->ast = pf->ast;
+    pf->ast = NULL;
     // is_used defaults to false (calloc). Phase 1 sets it true when:
     // - non-using import: package-qualified reference detected (sem_evaluate_expr)
     // - using import: any identifier resolves to its symbol (sem_track_using_import_usage)
     // - transitive import: always set to true after main file tracking
-    pkg->package_name = pf->package_name;   pf->package_name = NULL;
+    pkg->package_name = pf->package_name;
+    pf->package_name = NULL;
     pkg->analysed = false;
 
     // Check for a `#+build ignore` directive at start of file.
