@@ -754,6 +754,44 @@ ir_gen_postfix_resolve_callee(
     return proc_type;
 }
 
+// Fill in omitted call arguments with the callee's default parameter values.
+// Default value AST nodes are re-evaluated at each call site (ir_gen_node),
+// supporting non-constant defaults. arg_count is updated as defaults fill.
+static void
+ir_gen_postfix_fill_default_args(
+    IrGenContext * ctx,
+    TypeDescriptor const * proc_type,
+    LLVMValueRef * args,
+    TypeDescriptor const ** arg_types,
+    int * arg_count
+)
+{
+    int param_count = proc_type->proc_metadata.param_count;
+    if (*arg_count < param_count && proc_type->proc_metadata.default_values != NULL)
+    {
+        for (int di = *arg_count; di < param_count; di++)
+        {
+            odin_grammar_node_t * default_node = proc_type->proc_metadata.default_values[di];
+            if (default_node == NULL)
+                break;
+            LLVMValueRef def_val = ir_gen_node(ctx, default_node);
+            if (def_val != NULL)
+            {
+                args[di] = def_val;
+                arg_types[di] = default_node->resolved_type;
+                (*arg_count)++;
+            }
+            else
+            {
+                ir_gen_error_collection_add(
+                    &ctx->errors, NULL, default_node, "failed to generate code for default parameter value"
+                );
+                break;
+            }
+        }
+    }
+}
+
 static bool
 ir_gen_postfix_call(
     IrGenContext * ctx,
@@ -802,32 +840,7 @@ ir_gen_postfix_call(
     LLVMTypeRef func_type = proc_type->proc_metadata.func_type;
 
     // Fill in omitted arguments with default values
-    {
-        int param_count = proc_type->proc_metadata.param_count;
-        if (arg_count < param_count && proc_type->proc_metadata.default_values != NULL)
-        {
-            for (int di = arg_count; di < param_count; di++)
-            {
-                odin_grammar_node_t * default_node = proc_type->proc_metadata.default_values[di];
-                if (default_node == NULL)
-                    break;
-                LLVMValueRef def_val = ir_gen_node(ctx, default_node);
-                if (def_val != NULL)
-                {
-                    args[di] = def_val;
-                    arg_types[di] = default_node->resolved_type;
-                    arg_count++;
-                }
-                else
-                {
-                    ir_gen_error_collection_add(
-                        &ctx->errors, NULL, default_node, "failed to generate code for default parameter value"
-                    );
-                    break;
-                }
-            }
-        }
-    }
+    ir_gen_postfix_fill_default_args(ctx, proc_type, args, arg_types, &arg_count);
 
     // Wrap arguments that match 'any' parameters (non-variadic)
     {
