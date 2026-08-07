@@ -106,6 +106,8 @@ ir_gen_context_destroy(IrGenContext * ctx)
     for (int i = 0; i < ctx->foreign_library_count; i++)
         free(ctx->foreign_libraries[i]);
     free(ctx->foreign_libraries);
+    for (int i = 0; i < ctx->deferred_intrinsic_count; i++)
+        free(ctx->deferred_intrinsics[i].func_name);
     free(ctx);
 }
 
@@ -1061,7 +1063,17 @@ ir_gen_process_proc_sig_directives(IrGenContext * ctx, odin_grammar_node_t * pro
     }
 }
 
-static LLVMValueRef
+static bool
+ir_gen_intrinsic_is_deferred(char const * func_name)
+{
+    if (func_name == NULL)
+        return false;
+    return strcmp(func_name, "type_info_lookup") == 0
+        || strcmp(func_name, "array_element") == 0
+        || strcmp(func_name, "matrix_element") == 0;
+}
+
+LLVMValueRef
 ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
 {
     if (node->list.count < 2)
@@ -1109,6 +1121,21 @@ ir_gen_top_level_decl(IrGenContext * ctx, odin_grammar_node_t * node)
         generator_add_symbol(ctx->gen_ctx, name_node->text, tv);
 
         bool is_builtin = (attrs && attrs->is_builtin);
+
+        // Defer generation of type_info-dependent intrinsic bodies until after
+        // the main AST has been codegen'd (when type_info_globals is fully
+        // populated).  Their bodies are emitted in ir_generate().
+        if (is_builtin && body_node == NULL && ir_gen_intrinsic_is_deferred(func_name))
+        {
+            if (ctx->deferred_intrinsic_count < MAX_DEFERRED_INTRINSICS)
+            {
+                ctx->deferred_intrinsics[ctx->deferred_intrinsic_count].func_name = strdup(func_name);
+                ctx->deferred_intrinsics[ctx->deferred_intrinsic_count].func = func;
+                ctx->deferred_intrinsics[ctx->deferred_intrinsic_count].proc_type = proc_type;
+                ctx->deferred_intrinsic_count++;
+            }
+            return func;
+        }
 
         if (body_node || is_builtin)
         {
@@ -1597,6 +1624,26 @@ ir_gen_get_type_info_global(IrGenContext * ctx, TypeDescriptor const * td)
     if (ctx->type_info_global_count >= MAX_TYPE_INFO_GLOBALS)
         return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
 
+    // Ensure the element type's Type_Info global is registered too, so that
+    // runtime aggregate printing can look up element types via type_info_lookup.
+    TypeDescriptor const * elem_td = NULL;
+    switch (td->kind)
+    {
+    case TD_KIND_ARRAY:
+    case TD_KIND_SLICE:
+    case TD_KIND_DYNAMIC_ARRAY:
+    case TD_KIND_VECTOR:
+        elem_td = td->element_type;
+        break;
+    case TD_KIND_MATRIX:
+        elem_td = td->as.matrix.element_type;
+        break;
+    default:
+        break;
+    }
+    if (elem_td != NULL)
+        ir_gen_get_type_info_global(ctx, elem_td);
+
     // Compute size and alignment
     uint64_t size = LLVMABISizeOfType(ctx->data_layout, td->llvm_type);
     uint64_t align = LLVMABIAlignmentOfType(ctx->data_layout, td->llvm_type);
@@ -1615,27 +1662,47 @@ ir_gen_get_type_info_global(IrGenContext * ctx, TypeDescriptor const * td)
     {
     case TD_KIND_ARRAY:
         elem_count_val = td->as.array.count;
-        elem_size_val = td->element_type ? td->element_type->as.basic.width / 8 : 0;
-        elem_type_id_val = td->element_type ? td->element_type->type_id : 0;
+        if (td->element_type)
+        {
+            elem_size_val = td->element_type->llvm_type
+                                ? LLVMABISizeOfType(ctx->data_layout, td->element_type->llvm_type)
+                                : 0;
+            elem_type_id_val = td->element_type->type_id;
+        }
         break;
     case TD_KIND_SLICE:
     case TD_KIND_DYNAMIC_ARRAY:
         elem_count_val = -1; // string-like
-        elem_size_val = td->element_type ? td->element_type->as.basic.width / 8 : 0;
-        elem_type_id_val = td->element_type ? td->element_type->type_id : 0;
+        if (td->element_type)
+        {
+            elem_size_val = td->element_type->llvm_type
+                                ? LLVMABISizeOfType(ctx->data_layout, td->element_type->llvm_type)
+                                : 0;
+            elem_type_id_val = td->element_type->type_id;
+        }
         break;
     case TD_KIND_MATRIX:
         elem_count_val = td->as.matrix.rows * td->as.matrix.columns;
-        elem_size_val = td->as.matrix.element_type ? td->as.matrix.element_type->as.basic.width / 8 : 0;
-        elem_type_id_val = td->as.matrix.element_type ? td->as.matrix.element_type->type_id : 0;
+        if (td->as.matrix.element_type)
+        {
+            elem_size_val = td->as.matrix.element_type->llvm_type
+                                ? LLVMABISizeOfType(ctx->data_layout, td->as.matrix.element_type->llvm_type)
+                                : 0;
+            elem_type_id_val = td->as.matrix.element_type->type_id;
+        }
         rows_val = td->as.matrix.rows;
         cols_val = td->as.matrix.columns;
         layout_val = td->as.matrix.is_row_major ? 1 : 0;
         break;
     case TD_KIND_VECTOR:
         elem_count_val = td->as.vector.lane_count;
-        elem_size_val = td->as.vector.element_type ? td->as.vector.element_type->as.basic.width / 8 : 0;
-        elem_type_id_val = td->as.vector.element_type ? td->as.vector.element_type->type_id : 0;
+        if (td->as.vector.element_type)
+        {
+            elem_size_val = td->as.vector.element_type->llvm_type
+                                ? LLVMABISizeOfType(ctx->data_layout, td->as.vector.element_type->llvm_type)
+                                : 0;
+            elem_type_id_val = td->as.vector.element_type->type_id;
+        }
         lane_count_val = td->as.vector.lane_count;
         break;
     case TD_KIND_BASIC:
@@ -4350,6 +4417,19 @@ ir_generate(IrGenContext * ctx, odin_grammar_node_t * ast)
     for (int i = 0; i < ctx->pending_spec_count; i++)
     {
         ir_gen_pending_specialization(ctx, ctx->pending_specializations[i]);
+    }
+
+    // Generate deferred intrinsic bodies (type_info_lookup, array_element,
+    // matrix_element).  These must run after the main AST so that
+    // type_info_globals contains every type registered during codegen.
+    for (int i = 0; i < ctx->deferred_intrinsic_count; i++)
+    {
+        DeferredIntrinsic * di = &ctx->deferred_intrinsics[i];
+        LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->context, di->func, "entry");
+        LLVMPositionBuilderAtEnd(ctx->builder, entry);
+        func_push(ctx, di->func, di->proc_type->proc_metadata.return_type, di->proc_type);
+        ir_gen_runtime_intrinsic_body(ctx, di->func_name, di->proc_type);
+        func_pop(ctx);
     }
 
     // Emit foreign library metadata

@@ -1031,6 +1031,11 @@ ir_gen_pack_any(
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
     LLVMValueRef zero_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
 
+    // Register the source type's Type_Info global so type_info_lookup can
+    // find it at runtime (needed for aggregate printing via `..any`).
+    if (source_type != NULL)
+        ir_gen_get_type_info_global(ctx, source_type);
+
     // If the value is already an `any` struct, copy directly
     LLVMTypeRef val_type = LLVMTypeOf(rhs_val);
     if (val_type == any_struct_type)

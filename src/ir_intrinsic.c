@@ -792,6 +792,33 @@ ir_gen_intrinsic_type_info_of(IrGenContext * ctx, char const * func_name, TypeDe
     LLVMBuildRet(ctx->builder, LLVMConstNull(i8ptr));
 }
 
+static LLVMValueRef
+ir_gen_call_type_info_lookup(IrGenContext * ctx, LLVMValueRef type_id)
+{
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "type_info_lookup");
+    if (fn == NULL)
+        return LLVMConstNull(i8ptr);
+    LLVMTypeRef fn_type = LLVMGlobalGetValueType(fn);
+    LLVMValueRef context_param = LLVMGetParam(func_current_function(ctx), 0);
+    LLVMValueRef args[2] = { context_param, type_id };
+    return LLVMBuildCall2(ctx->builder, fn_type, fn, args, 2, "ti.lookup");
+}
+
+static LLVMValueRef
+ir_gen_load_type_info_i64_field(IrGenContext * ctx, LLVMValueRef ti_ptr, unsigned field)
+{
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+    TypeDescriptor const * ti_td = type_descriptor_get_type_info_type(ctx->type_registry);
+    LLVMTypeRef ti_type = (ti_td != NULL) ? ti_td->llvm_type : NULL;
+    if (ti_type == NULL)
+        return LLVMConstInt(i64_type, 0, false);
+    LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    LLVMValueRef fi = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), (unsigned)field, false);
+    LLVMValueRef gep = LLVMBuildInBoundsGEP2(ctx->builder, ti_type, ti_ptr, (LLVMValueRef[]){zero, fi}, 2, "ti.field");
+    return LLVMBuildLoad2(ctx->builder, i64_type, gep, "ti.field.val");
+}
+
 void
 ir_gen_intrinsic_array_element(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type)
 {
@@ -818,18 +845,19 @@ ir_gen_intrinsic_array_element(IrGenContext * ctx, char const * func_name, TypeD
     LLVMValueRef type_id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, any_tmp, (LLVMValueRef[]){idx0, idx1}, 2, "ae.typeid");
     LLVMValueRef type_id = LLVMBuildLoad2(ctx->builder, i64_type, type_id_field, "ae.typeid");
     
-    // Use type_info_of(type_id) to get element size at runtime
-    // For now, compute element offset with fixed 8-byte elements (placeholder)
-    // Will be replaced with proper type_info lookup in Phase 2
-    LLVMValueRef elem_size = LLVMConstInt(i64_type, 8, false);
+    // Resolve element size and type via type_info_lookup
+    LLVMValueRef ti_ptr = ir_gen_call_type_info_lookup(ctx, type_id);
+    LLVMValueRef elem_size = ir_gen_load_type_info_i64_field(ctx, ti_ptr, 5);
+    LLVMValueRef elem_type_id = ir_gen_load_type_info_i64_field(ctx, ti_ptr, 6);
     
     LLVMValueRef elem_offset = LLVMBuildMul(ctx->builder, index, elem_size, "ae.elem.offset");
-    LLVMValueRef elem_ptr = LLVMBuildGEP2(ctx->builder, i8ptr, data_ptr, &elem_offset, 1, "ae.elem.ptr");
+    LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
+    LLVMValueRef elem_ptr = LLVMBuildGEP2(ctx->builder, i8_type, data_ptr, &elem_offset, 1, "ae.elem.ptr");
     
     // Return 2-field any with element data and type_id
     LLVMValueRef result = LLVMGetUndef(any_type);
     result = LLVMBuildInsertValue(ctx->builder, result, elem_ptr, 0, "ae.result.data");
-    result = LLVMBuildInsertValue(ctx->builder, result, type_id, 1, "ae.result.typeid");
+    result = LLVMBuildInsertValue(ctx->builder, result, elem_type_id, 1, "ae.result.typeid");
     
     LLVMBuildRet(ctx->builder, result);
 }
@@ -861,19 +889,31 @@ ir_gen_intrinsic_matrix_element(IrGenContext * ctx, char const * func_name, Type
     LLVMValueRef type_id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, any_tmp, (LLVMValueRef[]){idx0, idx1}, 2, "me.typeid");
     LLVMValueRef type_id = LLVMBuildLoad2(ctx->builder, i64_type, type_id_field, "me.typeid");
     
-    // Use type_info_of(type_id) for element size and column count
-    // For now, hardcode 4 columns, 8-byte elements (placeholder)
-    LLVMValueRef col_count = LLVMConstInt(i64_type, 4, false);
-    LLVMValueRef elem_size = LLVMConstInt(i64_type, 8, false);
-    LLVMValueRef elem_idx = LLVMBuildMul(ctx->builder, row, col_count, "me.row_offset");
-    elem_idx = LLVMBuildAdd(ctx->builder, elem_idx, col, "me.col_offset");
+    // Resolve element size, type, row/col counts, and layout via type_info_lookup
+    LLVMValueRef ti_ptr = ir_gen_call_type_info_lookup(ctx, type_id);
+    LLVMValueRef col_count = ir_gen_load_type_info_i64_field(ctx, ti_ptr, 8);
+    LLVMValueRef row_count = ir_gen_load_type_info_i64_field(ctx, ti_ptr, 7);
+    LLVMValueRef elem_size = ir_gen_load_type_info_i64_field(ctx, ti_ptr, 5);
+    LLVMValueRef elem_type_id = ir_gen_load_type_info_i64_field(ctx, ti_ptr, 6);
+    LLVMValueRef layout = ir_gen_load_type_info_i64_field(ctx, ti_ptr, 9);
+    
+    // row-major:   offset = row*cols + col
+    // column-major (default): offset = col*rows + row
+    LLVMValueRef rm_off = LLVMBuildMul(ctx->builder, row, col_count, "me.rm_row");
+    rm_off = LLVMBuildAdd(ctx->builder, rm_off, col, "me.rm_off");
+    LLVMValueRef cm_off = LLVMBuildMul(ctx->builder, col, row_count, "me.cm_col");
+    cm_off = LLVMBuildAdd(ctx->builder, cm_off, row, "me.cm_off");
+    LLVMValueRef layout_cmp = LLVMBuildICmp(
+        ctx->builder, LLVMIntEQ, layout, LLVMConstInt(i64_type, 1, false), "me.layout_cmp");
+    LLVMValueRef elem_idx = LLVMBuildSelect(ctx->builder, layout_cmp, rm_off, cm_off, "me.flat");
     elem_idx = LLVMBuildMul(ctx->builder, elem_idx, elem_size, "me.bytes.offset");
-    LLVMValueRef elem_ptr = LLVMBuildGEP2(ctx->builder, i8ptr, data_ptr, &elem_idx, 1, "me.elem.ptr");
+    LLVMTypeRef i8_type = LLVMInt8TypeInContext(ctx->context);
+    LLVMValueRef elem_ptr = LLVMBuildGEP2(ctx->builder, i8_type, data_ptr, &elem_idx, 1, "me.elem.ptr");
     
     // Return 2-field any with element data and type_id
     LLVMValueRef result = LLVMGetUndef(any_type);
     result = LLVMBuildInsertValue(ctx->builder, result, elem_ptr, 0, "me.result.data");
-    result = LLVMBuildInsertValue(ctx->builder, result, type_id, 1, "me.result.typeid");
+    result = LLVMBuildInsertValue(ctx->builder, result, elem_type_id, 1, "me.result.typeid");
     
     LLVMBuildRet(ctx->builder, result);
 }

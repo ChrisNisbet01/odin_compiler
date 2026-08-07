@@ -54,9 +54,35 @@ eprintfln :: proc(format: string, args: ..any) {
 }
 
 print_value :: proc(fd: int, v: any) {
-    // For now, use type_of for compile-time type checking
-    // This will be updated to use type_info_of after runtime type info is implemented
-    if type_of(v) == type_of(int) {
+    // Runtime aggregate printing: look up the value's Type_Info and dispatch
+    // on kind.  ARRAY=3, VECTOR=18, MATRIX=19.
+    ti := cast(^type_info) type_info_lookup(any_type_id(v))
+    if ti != nil && (ti.kind == 3 || ti.kind == 18) {
+        print_byte(fd, '[')
+        for i in 0..<ti.elem_count {
+            if i > 0 {
+                print_string(fd, ", ")
+            }
+            print_value(fd, array_element(v, int(i)))
+        }
+        print_byte(fd, ']')
+    } else if ti != nil && ti.kind == 19 {
+        print_byte(fd, '[')
+        for r in 0..<ti.rows {
+            if r > 0 {
+                print_string(fd, ", ")
+            }
+            print_byte(fd, '[')
+            for c in 0..<ti.cols {
+                if c > 0 {
+                    print_string(fd, ", ")
+                }
+                print_value(fd, matrix_element(v, int(r), int(c)))
+            }
+            print_byte(fd, ']')
+        }
+        print_byte(fd, ']')
+    } else if type_of(v) == type_of(int) {
         s := int_to_string(v.(int))
         print_string(fd, s)
     } else if type_of(v) == type_of(i8) {

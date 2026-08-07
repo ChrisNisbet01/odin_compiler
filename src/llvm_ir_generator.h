@@ -16,12 +16,20 @@
 #define MAX_FUNC_DEPTH 64
 #define MAX_DEFERS 128
 #define MAX_TYPE_INFO_GLOBALS 256
+#define MAX_DEFERRED_INTRINSICS 16
 
 typedef struct
 {
     int64_t type_id;
     LLVMValueRef global;
 } TypeInfoGlobalEntry;
+
+typedef struct
+{
+    char * func_name;
+    LLVMValueRef func;
+    TypeDescriptor const * proc_type;
+} DeferredIntrinsic;
 
 typedef struct
 {
@@ -85,6 +93,12 @@ typedef struct
 
     TypeInfoGlobalEntry type_info_globals[MAX_TYPE_INFO_GLOBALS];
     int type_info_global_count;
+
+    // Intrinsics whose bodies depend on type_info_globals being fully
+    // populated (type_info_lookup, array_element, matrix_element).  Their
+    // bodies are deferred until after the main AST is codegen'd.
+    DeferredIntrinsic deferred_intrinsics[MAX_DEFERRED_INTRINSICS];
+    int deferred_intrinsic_count;
 
     bool bounds_checking_enabled;
 
