@@ -849,6 +849,44 @@ ir_gen_postfix_cconv_pointer_extract(
     }
 }
 
+static void
+ir_gen_postfix_prepend_context(
+    IrGenContext * ctx,
+    TypeDescriptor const * proc_type,
+    LLVMValueRef * args,
+    int * arg_count
+)
+{
+    if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
+    {
+        if (*arg_count < 128)
+        {
+            for (int j = *arg_count; j > 0; j--)
+                args[j] = args[j - 1];
+            symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
+            if (ctx_sym)
+            {
+                args[0] = ctx_sym->value.value;
+            }
+            else
+            {
+                TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
+                if (ctx_type)
+                {
+                    LLVMValueRef ctx_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context.temp");
+                    LLVMBuildStore(ctx->builder, LLVMConstNull(ctx_type->llvm_type), ctx_alloca);
+                    args[0] = ctx_alloca;
+                }
+                else
+                {
+                    args[0] = LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
+                }
+            }
+            (*arg_count)++;
+        }
+    }
+}
+
 static bool
 ir_gen_postfix_call(
     IrGenContext * ctx,
@@ -910,34 +948,7 @@ bool is_any_variadic = ir_gen_postfix_pack_variadic_any(ctx, proc_type, args, ar
     ir_gen_postfix_cconv_pointer_extract(ctx, proc_type, args, arg_count);
 
     // Phase 4: Prepend implicit context parameter for ODIN calling convention
-    if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
-    {
-        if (arg_count < 128)
-        {
-            for (int j = arg_count; j > 0; j--)
-                args[j] = args[j - 1];
-            symbol_t * ctx_sym = scope_find_symbol_entry(generator_current_scope(ctx->gen_ctx), "context");
-            if (ctx_sym)
-            {
-                args[0] = ctx_sym->value.value;
-            }
-            else
-            {
-                TypeDescriptor const * ctx_type = type_descriptor_get_context_type(ctx->type_registry);
-                if (ctx_type)
-                {
-                    LLVMValueRef ctx_alloca = LLVMBuildAlloca(ctx->builder, ctx_type->llvm_type, "context.temp");
-                    LLVMBuildStore(ctx->builder, LLVMConstNull(ctx_type->llvm_type), ctx_alloca);
-                    args[0] = ctx_alloca;
-                }
-                else
-                {
-                    args[0] = LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
-                }
-            }
-            arg_count++;
-        }
-    }
+    ir_gen_postfix_prepend_context(ctx, proc_type, args, &arg_count);
 
     // Phase 5: Coerce integer/float argument values to the declared
     // parameter types, and load aggregate values from alloca pointers.
