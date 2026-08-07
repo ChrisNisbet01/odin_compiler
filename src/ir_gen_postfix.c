@@ -828,6 +828,27 @@ ir_gen_postfix_wrap_any_args(
     }
 }
 
+static void
+ir_gen_postfix_cconv_pointer_extract(
+    IrGenContext * ctx,
+    TypeDescriptor const * proc_type,
+    LLVMValueRef * args,
+    int arg_count
+)
+{
+    int param_count = proc_type->proc_metadata.param_count;
+    for (int pi = 0; pi < arg_count && pi < param_count; pi++)
+    {
+        TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
+        if (param_type == NULL || param_type->kind != TD_KIND_POINTER)
+            continue;
+        LLVMTypeRef arg_llvm_type = LLVMTypeOf(args[pi]);
+        if (arg_llvm_type == NULL || LLVMGetTypeKind(arg_llvm_type) != LLVMStructTypeKind)
+            continue;
+        args[pi] = LLVMBuildExtractValue(ctx->builder, args[pi], 0, "str.ptr");
+    }
+}
+
 static bool
 ir_gen_postfix_call(
     IrGenContext * ctx,
@@ -882,21 +903,11 @@ ir_gen_postfix_call(
     ir_gen_postfix_wrap_any_args(ctx, proc_type, args, arg_types, arg_count);
 
     // Variadic ..any packing: build []any slice from extra args (ODIN convention)
-    bool is_any_variadic = ir_gen_postfix_pack_variadic_any(ctx, proc_type, args, arg_types, &arg_count);
-    if (proc_type->proc_metadata.calling_convention == CALLING_CONV_C)
-    {
-        int param_count = proc_type->proc_metadata.param_count;
-        for (int pi = 0; pi < arg_count && pi < param_count; pi++)
-        {
-            TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
-            if (param_type == NULL || param_type->kind != TD_KIND_POINTER)
-                continue;
-            LLVMTypeRef arg_llvm_type = LLVMTypeOf(args[pi]);
-            if (arg_llvm_type == NULL || LLVMGetTypeKind(arg_llvm_type) != LLVMStructTypeKind)
-                continue;
-            args[pi] = LLVMBuildExtractValue(ctx->builder, args[pi], 0, "str.ptr");
-        }
-    }
+bool is_any_variadic = ir_gen_postfix_pack_variadic_any(ctx, proc_type, args, arg_types, &arg_count);
+
+    // For C calling convention: extract pointer from struct pointer params
+    // (e.g., string's backing pointer for `string *`).
+    ir_gen_postfix_cconv_pointer_extract(ctx, proc_type, args, arg_count);
 
     // Phase 4: Prepend implicit context parameter for ODIN calling convention
     if (proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN)
