@@ -2371,6 +2371,168 @@ sem_evaluate_postfix_pkg_access(SemContext * ctx, odin_grammar_node_t * node, Im
     return type;
 }
 
+// Resolve a postfix call op in a postfix chain. Returns the running type
+// after the call (the callee's return type, or the proc type for multi-return).
+static TypeDescriptor const *
+sem_evaluate_postfix_op_call(
+    SemContext * ctx, odin_grammar_node_t * node, odin_grammar_node_t * op, TypeDescriptor const * type
+)
+{
+    // Check if the callee is a polymorphic procedure.
+    // Walk the base expression to find the resolved symbol.
+    symbol_t * callee_sym = NULL;
+    odin_grammar_node_t * base = node->list.children[0];
+    odin_grammar_node_t * inner = NULL;
+    if (base != NULL)
+    {
+        inner = base;
+        while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
+            inner = inner->list.children[0];
+        if (inner->type == AST_NODE_IDENTIFIER)
+            callee_sym = inner->resolved_symbol;
+    }
+
+    // Handle matrix intrinsics specially (transpose, outer_product,
+    // hadamard_product, matrix_flatten) - compute the return type from
+    // the argument types. These are declared with `---` bodies and are
+    // intercepted here + in ir_gen_postfix_call by name.
+    if (callee_sym && inner && inner->text
+        && (strcmp(inner->text, "transpose") == 0 || strcmp(inner->text, "outer_product") == 0
+            || strcmp(inner->text, "hadamard_product") == 0 || strcmp(inner->text, "matrix_flatten") == 0))
+    {
+        odin_grammar_node_t * mat_args[16];
+        int mat_arg_count = sem_collect_call_args_nodes(op, mat_args, 16);
+        for (int ai = 0; ai < mat_arg_count; ai++)
+        {
+            if (mat_args[ai])
+                sem_evaluate_expr(ctx, mat_args[ai]);
+        }
+
+        TypeDescriptor const * result_type
+            = sem_matrix_intrinsic_result_type(ctx, inner->text, mat_args, mat_arg_count);
+        if (result_type)
+        {
+            op->resolved_symbol = callee_sym;
+            op->resolved_type = result_type;
+            type = result_type;                            // Update type for POSTFIX_EXPRESSION
+            node->resolved_type = type;                    // Also set on the node
+            return type;
+        }
+    }
+
+    if (callee_sym && callee_sym->is_polymorphic)
+    {
+        // Evaluate argument expressions first
+        odin_grammar_node_t * arg_list = NULL;
+        if (op->list.count > 0 && op->list.children[0] != NULL)
+        {
+            arg_list = op->list.children[0];
+            if (arg_list->type == AST_NODE_ARGUMENT_LIST)
+            {
+                for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                {
+                    odin_grammar_node_t * raw = arg_list->list.children[ai];
+                    if (raw == NULL)
+                        continue;
+                    odin_grammar_node_t * chain_args[128];
+                    int chain_count = 0;
+                    sem_collect_comma_chain_args(raw, chain_args, 128, &chain_count);
+                    for (int ci = 0; ci < chain_count; ci++)
+                    {
+                        if (chain_args[ci])
+                            sem_evaluate_expr(ctx, chain_args[ci]);
+                    }
+                }
+            }
+        }
+
+        PolySpecialization * spec = poly_resolve_call(ctx, callee_sym, op, arg_list);
+        if (spec && spec->symbol)
+        {
+            op->resolved_symbol = spec->symbol;
+            TypeDescriptor const * proc_type = spec->symbol->value.type_info;
+            if (proc_type && proc_type->kind == TD_KIND_PROC)
+            {
+                if (proc_type->proc_metadata.return_count > 1)
+                {
+                    op->resolved_type = proc_type;
+                    type = proc_type;
+                }
+                else
+                {
+                    type = proc_type->proc_metadata.return_type;
+                    op->resolved_type = type;
+                }
+            }
+        }
+        else
+        {
+            sem_error_list_add(&ctx->errors, NULL, op, "polymorphic procedure call could not be specialized");
+        }
+        return type;
+    }
+
+    if (type && type->kind == TD_KIND_PROC)
+    {
+        if (op->list.count > 0 && op->list.children[0] != NULL)
+        {
+            odin_grammar_node_t * arg_list = op->list.children[0];
+            if (arg_list->type == AST_NODE_ARGUMENT_LIST)
+            {
+                for (size_t ai = 0; ai < arg_list->list.count; ai++)
+                {
+                    if (arg_list->list.children[ai])
+                        sem_evaluate_expr(ctx, arg_list->list.children[ai]);
+                }
+            }
+        }
+        if (type->proc_metadata.return_count > 1)
+        {
+            op->resolved_type = type;
+            return type;
+        }
+        type = type->proc_metadata.return_type;
+        op->resolved_type = type;
+    }
+    else if (type && type->kind == TD_KIND_OVERLOAD_BUNDLE)
+    {
+        char const * callee_name = NULL;
+        odin_grammar_node_t * base = node->list.children[0];
+        if (base != NULL)
+        {
+            odin_grammar_node_t * inner = base;
+            while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
+                inner = inner->list.children[0];
+            if (inner->type == AST_NODE_IDENTIFIER && inner->text)
+                callee_name = inner->text;
+        }
+
+        odin_grammar_node_t * arg_list = NULL;
+        if (op->list.count > 0 && op->list.children[0] != NULL)
+            arg_list = op->list.children[0];
+
+        symbol_t * winner = sem_resolve_overload_bundle_call(ctx, type, arg_list, op, callee_name);
+        if (winner && winner->value.type_info)
+        {
+            op->resolved_symbol = winner;
+            TypeDescriptor const * proc_type = winner->value.type_info;
+            if (proc_type && proc_type->kind == TD_KIND_PROC)
+            {
+                if (proc_type->proc_metadata.return_count > 1)
+                {
+                    op->resolved_type = proc_type;
+                }
+                else
+                {
+                    type = proc_type->proc_metadata.return_type;
+                    op->resolved_type = type;
+                }
+            }
+        }
+    }
+    return type;
+}
+
 static TypeDescriptor const *
 sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
 {
@@ -2422,161 +2584,8 @@ sem_evaluate_postfix_expr(SemContext * ctx, odin_grammar_node_t * node)
         switch (op->type)
         {
         case AST_NODE_POSTFIX_CALL:
-        {
-            // Check if the callee is a polymorphic procedure.
-            // Walk the base expression to find the resolved symbol.
-            symbol_t * callee_sym = NULL;
-            odin_grammar_node_t * base = node->list.children[0];
-            odin_grammar_node_t * inner = NULL;
-            if (base != NULL)
-            {
-                inner = base;
-                while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
-                    inner = inner->list.children[0];
-                if (inner->type == AST_NODE_IDENTIFIER)
-                    callee_sym = inner->resolved_symbol;
-            }
-
-            // Handle matrix intrinsics specially (transpose, outer_product,
-            // hadamard_product, matrix_flatten) - compute the return type from
-            // the argument types. These are declared with `---` bodies and are
-            // intercepted here + in ir_gen_postfix_call by name.
-            if (callee_sym && inner && inner->text
-                && (strcmp(inner->text, "transpose") == 0 || strcmp(inner->text, "outer_product") == 0
-                    || strcmp(inner->text, "hadamard_product") == 0 || strcmp(inner->text, "matrix_flatten") == 0))
-            {
-                odin_grammar_node_t * mat_args[16];
-                int mat_arg_count = sem_collect_call_args_nodes(op, mat_args, 16);
-                for (int ai = 0; ai < mat_arg_count; ai++)
-                {
-                    if (mat_args[ai])
-                        sem_evaluate_expr(ctx, mat_args[ai]);
-                }
-
-                TypeDescriptor const * result_type
-                    = sem_matrix_intrinsic_result_type(ctx, inner->text, mat_args, mat_arg_count);
-                if (result_type)
-                {
-                    op->resolved_symbol = callee_sym;
-                    op->resolved_type = result_type;
-                    type = result_type;                           // Update type for POSTFIX_EXPRESSION
-                    node->resolved_type = type; // Also set on the node
-                    break;
-                }
-            }
-
-            if (callee_sym && callee_sym->is_polymorphic)
-            {
-                // Evaluate argument expressions first
-                odin_grammar_node_t * arg_list = NULL;
-                if (op->list.count > 0 && op->list.children[0] != NULL)
-                {
-                    arg_list = op->list.children[0];
-                    if (arg_list->type == AST_NODE_ARGUMENT_LIST)
-                    {
-                        for (size_t ai = 0; ai < arg_list->list.count; ai++)
-                        {
-                            odin_grammar_node_t * raw = arg_list->list.children[ai];
-                            if (raw == NULL)
-                                continue;
-                            odin_grammar_node_t * chain_args[128];
-                            int chain_count = 0;
-                            sem_collect_comma_chain_args(raw, chain_args, 128, &chain_count);
-                            for (int ci = 0; ci < chain_count; ci++)
-                            {
-                                if (chain_args[ci])
-                                    sem_evaluate_expr(ctx, chain_args[ci]);
-                            }
-                        }
-                    }
-                }
-
-                PolySpecialization * spec = poly_resolve_call(ctx, callee_sym, op, arg_list);
-                if (spec && spec->symbol)
-                {
-                    op->resolved_symbol = spec->symbol;
-                    TypeDescriptor const * proc_type = spec->symbol->value.type_info;
-                    if (proc_type && proc_type->kind == TD_KIND_PROC)
-                    {
-                        if (proc_type->proc_metadata.return_count > 1)
-                        {
-                            op->resolved_type = proc_type;
-                            type = proc_type;
-                        }
-                        else
-                        {
-                            type = proc_type->proc_metadata.return_type;
-                            op->resolved_type = type;
-                        }
-                    }
-                }
-                else
-                {
-                    sem_error_list_add(&ctx->errors, NULL, op, "polymorphic procedure call could not be specialized");
-                }
-                break;
-            }
-
-            if (type && type->kind == TD_KIND_PROC)
-            {
-                if (op->list.count > 0 && op->list.children[0] != NULL)
-                {
-                    odin_grammar_node_t * arg_list = op->list.children[0];
-                    if (arg_list->type == AST_NODE_ARGUMENT_LIST)
-                    {
-                        for (size_t ai = 0; ai < arg_list->list.count; ai++)
-                        {
-                            if (arg_list->list.children[ai])
-                                sem_evaluate_expr(ctx, arg_list->list.children[ai]);
-                        }
-                    }
-                }
-                if (type->proc_metadata.return_count > 1)
-                {
-                    op->resolved_type = type;
-                    break;
-                }
-                type = type->proc_metadata.return_type;
-                op->resolved_type = type;
-            }
-            else if (type && type->kind == TD_KIND_OVERLOAD_BUNDLE)
-            {
-                char const * callee_name = NULL;
-                odin_grammar_node_t * base = node->list.children[0];
-                if (base != NULL)
-                {
-                    odin_grammar_node_t * inner = base;
-                    while (inner->type == AST_NODE_PRIMARY_EXPRESSION && inner->list.count > 0)
-                        inner = inner->list.children[0];
-                    if (inner->type == AST_NODE_IDENTIFIER && inner->text)
-                        callee_name = inner->text;
-                }
-
-                odin_grammar_node_t * arg_list = NULL;
-                if (op->list.count > 0 && op->list.children[0] != NULL)
-                    arg_list = op->list.children[0];
-
-                symbol_t * winner = sem_resolve_overload_bundle_call(ctx, type, arg_list, op, callee_name);
-                if (winner && winner->value.type_info)
-                {
-                    op->resolved_symbol = winner;
-                    TypeDescriptor const * proc_type = winner->value.type_info;
-                    if (proc_type && proc_type->kind == TD_KIND_PROC)
-                    {
-                        if (proc_type->proc_metadata.return_count > 1)
-                        {
-                            op->resolved_type = proc_type;
-                        }
-                        else
-                        {
-                            type = proc_type->proc_metadata.return_type;
-                            op->resolved_type = type;
-                        }
-                    }
-                }
-            }
+            type = sem_evaluate_postfix_op_call(ctx, node, op, type);
             break;
-        }
 
         case AST_NODE_POSTFIX_MEMBER:
             if (type && (type->kind == TD_KIND_STRUCT || type->kind == TD_KIND_SOA) && op->list.count >= 1
