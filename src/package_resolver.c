@@ -80,9 +80,26 @@ parse_source_file(char const * path, epc_parser_t * parser, epc_ast_hook_registr
     if (session.result.is_error)
     {
         epc_parser_error_t * err = session.result.data.error;
-        fprintf(stderr, "Parse Error in '%s': %s\nAt line %zu, col %zu\nExpected: %s\nFound: %s\n",
-                path, err->message, err->view.line_number, err->view.column_number,
-                err->expected, err->found);
+        fprintf(
+            stderr,
+            "Parse Error in '%s': %s\nAt line %zu, col %zu\nExpected: %s\nFound: %s\n",
+            path,
+            err->message,
+            err->view.line_number,
+            err->view.column_number,
+            err->expected,
+            err->found
+        );
+        char const * line = epc_get_line_at_offset(session.internal_parse_ctx, err->view.offset);
+        if (line)
+        {
+            fprintf(stderr, "%s\n", line);
+            size_t col = err->view.column_number;
+            for (size_t i = 1; i < col; i++)
+                fprintf(stderr, " ");
+            fprintf(stderr, "^\n");
+        }
+        free((void *)line);
         epc_parse_session_destroy(&session);
         free(src);
         return NULL;
