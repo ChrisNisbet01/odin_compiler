@@ -941,7 +941,7 @@ ir_gen_postfix_call(
     ir_gen_postfix_wrap_any_args(ctx, proc_type, args, arg_types, arg_count);
 
     // Variadic ..any packing: build []any slice from extra args (ODIN convention)
-bool is_any_variadic = ir_gen_postfix_pack_variadic_any(ctx, proc_type, args, arg_types, &arg_count);
+    bool is_any_variadic = ir_gen_postfix_pack_variadic_any(ctx, proc_type, args, arg_types, &arg_count);
 
     // For C calling convention: extract pointer from struct pointer params
     // (e.g., string's backing pointer for `string *`).
