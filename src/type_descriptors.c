@@ -767,17 +767,25 @@ register_builtin_context_types(TypeDescriptors * registry)
     registry->source_location_type = (TypeDescriptor *)register_struct_type(registry, sl_llvm, true, &sl_members);
     free(sl_members.fields);
 
-    // type_info struct (compiler-internal): { size: i64, align: i64, id: i64, kind: i64 }
-    LLVMTypeRef ti_fields[4];
+    // type_info struct (compiler-internal): { size, align, id, kind, elem_count, elem_size, elem_type_id, rows, cols, layout, lane_count }
+    // Extended from basic 4-field version to support array/slice/matrix/vector printing
+    LLVMTypeRef ti_fields[11];
     ti_fields[0] = registry->i64_type->llvm_type;  // size
     ti_fields[1] = registry->i64_type->llvm_type;  // align
     ti_fields[2] = registry->i64_type->llvm_type;  // id (typeid)
     ti_fields[3] = registry->i64_type->llvm_type;  // kind
-    LLVMTypeRef ti_llvm = LLVMStructTypeInContext(registry->context, ti_fields, 4, false);
+    ti_fields[4] = registry->i64_type->llvm_type;  // elem_count (-1 for string, 0 for non-aggregate, >0 for array/slice)
+    ti_fields[5] = registry->i64_type->llvm_type;  // elem_size
+    ti_fields[6] = registry->i64_type->llvm_type;  // elem_type_id
+    ti_fields[7] = registry->i64_type->llvm_type;  // rows (for matrices)
+    ti_fields[8] = registry->i64_type->llvm_type;  // cols (for matrices)
+    ti_fields[9] = registry->i64_type->llvm_type;  // layout (for matrices)
+    ti_fields[10] = registry->i64_type->llvm_type; // lane_count (for vectors)
+    LLVMTypeRef ti_llvm = LLVMStructTypeInContext(registry->context, ti_fields, 11, false);
 
     struct_or_union_members_st ti_members;
-    ti_members.count = 4;
-    ti_members.fields = malloc(4 * sizeof(struct_field_t));
+    ti_members.count = 11;
+    ti_members.fields = malloc(11 * sizeof(struct_field_t));
     ti_members.fields[0].name = "size";
     ti_members.fields[0].type_desc = registry->i64_type;
     ti_members.fields[0].is_using = false;
@@ -790,6 +798,27 @@ register_builtin_context_types(TypeDescriptors * registry)
     ti_members.fields[3].name = "kind";
     ti_members.fields[3].type_desc = registry->i64_type;
     ti_members.fields[3].is_using = false;
+    ti_members.fields[4].name = "elem_count";
+    ti_members.fields[4].type_desc = registry->i64_type;
+    ti_members.fields[4].is_using = false;
+    ti_members.fields[5].name = "elem_size";
+    ti_members.fields[5].type_desc = registry->i64_type;
+    ti_members.fields[5].is_using = false;
+    ti_members.fields[6].name = "elem_type_id";
+    ti_members.fields[6].type_desc = registry->i64_type;
+    ti_members.fields[6].is_using = false;
+    ti_members.fields[7].name = "rows";
+    ti_members.fields[7].type_desc = registry->i64_type;
+    ti_members.fields[7].is_using = false;
+    ti_members.fields[8].name = "cols";
+    ti_members.fields[8].type_desc = registry->i64_type;
+    ti_members.fields[8].is_using = false;
+    ti_members.fields[9].name = "layout";
+    ti_members.fields[9].type_desc = registry->i64_type;
+    ti_members.fields[9].is_using = false;
+    ti_members.fields[10].name = "lane_count";
+    ti_members.fields[10].type_desc = registry->i64_type;
+    ti_members.fields[10].is_using = false;
 
     registry->type_info_type = (TypeDescriptor *)register_struct_type(registry, ti_llvm, true, &ti_members);
     free(ti_members.fields);

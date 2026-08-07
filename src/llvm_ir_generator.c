@@ -1581,8 +1581,8 @@ type_info_kind_from_td_kind(td_kind_t kind)
     }
 }
 
-static LLVMValueRef
-ir_gen_get_or_create_type_info_global(IrGenContext * ctx, TypeDescriptor const * td)
+LLVMValueRef
+ir_gen_get_type_info_global(IrGenContext * ctx, TypeDescriptor const * td)
 {
     if (td == NULL || td->llvm_type == NULL)
         return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
@@ -1600,21 +1600,78 @@ ir_gen_get_or_create_type_info_global(IrGenContext * ctx, TypeDescriptor const *
     // Compute size and alignment
     uint64_t size = LLVMABISizeOfType(ctx->data_layout, td->llvm_type);
     uint64_t align = LLVMABIAlignmentOfType(ctx->data_layout, td->llvm_type);
-    uint64_t type_id = (uint64_t)td->type_id;
-    uint64_t kind = (uint64_t)type_info_kind_from_td_kind(td->kind);
+    uint64_t type_id_val = (uint64_t)td->type_id;
+    uint64_t kind_val = (uint64_t)type_info_kind_from_td_kind(td->kind);
+    uint64_t elem_count_val = 0;
+    uint64_t elem_size_val = 0;
+    uint64_t elem_type_id_val = 0;
+    uint64_t rows_val = 0;
+    uint64_t cols_val = 0;
+    uint64_t layout_val = 0;
+    uint64_t lane_count_val = 0;
+
+    // Populate element info based on type kind
+    switch (td->kind)
+    {
+    case TD_KIND_ARRAY:
+        elem_count_val = td->as.array.count;
+        elem_size_val = td->element_type ? td->element_type->as.basic.width / 8 : 0;
+        elem_type_id_val = td->element_type ? td->element_type->type_id : 0;
+        break;
+    case TD_KIND_SLICE:
+    case TD_KIND_DYNAMIC_ARRAY:
+        elem_count_val = -1; // string-like
+        elem_size_val = td->element_type ? td->element_type->as.basic.width / 8 : 0;
+        elem_type_id_val = td->element_type ? td->element_type->type_id : 0;
+        break;
+    case TD_KIND_MATRIX:
+        elem_count_val = td->as.matrix.rows * td->as.matrix.columns;
+        elem_size_val = td->as.matrix.element_type ? td->as.matrix.element_type->as.basic.width / 8 : 0;
+        elem_type_id_val = td->as.matrix.element_type ? td->as.matrix.element_type->type_id : 0;
+        rows_val = td->as.matrix.rows;
+        cols_val = td->as.matrix.columns;
+        layout_val = td->as.matrix.is_row_major ? 1 : 0;
+        break;
+    case TD_KIND_VECTOR:
+        elem_count_val = td->as.vector.lane_count;
+        elem_size_val = td->as.vector.element_type ? td->as.vector.element_type->as.basic.width / 8 : 0;
+        elem_type_id_val = td->as.vector.element_type ? td->as.vector.element_type->type_id : 0;
+        lane_count_val = td->as.vector.lane_count;
+        break;
+    case TD_KIND_BASIC:
+        // Check for string type specially
+        if (td->as.basic.name && strcmp(td->as.basic.name, "string") == 0) {
+            // String: elem_count is determined at runtime, but we mark it as string-like
+            // The string struct is {data: rawptr, len: i64}
+            elem_count_val = -1; // indicates string-like
+            elem_size_val = 0; // string element size not applicable
+            elem_type_id_val = 0;
+        }
+        break;
+    default:
+        break;
+    }
 
     TypeDescriptor const * ti_td = type_descriptor_get_type_info_type(ctx->type_registry);
     if (ti_td == NULL)
         return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
     LLVMTypeRef ti_type = ti_td->llvm_type;
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
 
-    LLVMValueRef fields[4];
-    fields[0] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), size, false);
-    fields[1] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), align, false);
-    fields[2] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), type_id, false);
-    fields[3] = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), kind, false);
+    LLVMValueRef fields[11];
+    fields[0] = LLVMConstInt(i64_type, size, false);
+    fields[1] = LLVMConstInt(i64_type, align, false);
+    fields[2] = LLVMConstInt(i64_type, type_id_val, false);
+    fields[3] = LLVMConstInt(i64_type, kind_val, false);
+    fields[4] = LLVMConstInt(i64_type, elem_count_val, false);
+    fields[5] = LLVMConstInt(i64_type, elem_size_val, false);
+    fields[6] = LLVMConstInt(i64_type, elem_type_id_val, false);
+    fields[7] = LLVMConstInt(i64_type, rows_val, false);
+    fields[8] = LLVMConstInt(i64_type, cols_val, false);
+    fields[9] = LLVMConstInt(i64_type, layout_val, false);
+    fields[10] = LLVMConstInt(i64_type, lane_count_val, false);
 
-    LLVMValueRef init_val = LLVMConstNamedStruct(ti_type, fields, 4);
+    LLVMValueRef init_val = LLVMConstNamedStruct(ti_type, fields, 11);
 
     // Create a unique name for the global
     char global_name[128];
@@ -2903,7 +2960,7 @@ ir_gen_type_query_expr(IrGenContext * ctx, odin_grammar_node_t * node)
         if (operand_type == NULL)
             return LLVMConstPointerNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0));
         // Return a pointer to the type_info global for this type
-        return ir_gen_get_or_create_type_info_global(ctx, operand_type);
+        return ir_gen_get_type_info_global(ctx, operand_type);
 
     case AST_NODE_SIZE_OF_EXPR:
         if (operand_type == NULL || operand_type->llvm_type == NULL)

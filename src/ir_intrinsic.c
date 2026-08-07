@@ -1,6 +1,7 @@
 #include "ir_intrinsic.h"
 #include "hash.h"
 #include "type_descriptors.h"
+#include "type_info.h"
 
 #include <string.h>
 #include <stdint.h>
@@ -51,7 +52,7 @@ init_intrinsic_handlers(void)
     generic_hash_table_insert(intrinsic_handlers, "free_all", (void *)ir_gen_intrinsic_free_all);
     generic_hash_table_insert(intrinsic_handlers, "any_type_id", (void *)ir_gen_intrinsic_any_type_id);
     generic_hash_table_insert(intrinsic_handlers, "any_data_ptr", (void *)ir_gen_intrinsic_any_data_ptr);
-    generic_hash_table_insert(intrinsic_handlers, "type_info_find", (void *)ir_gen_intrinsic_type_info_of);
+    generic_hash_table_insert(intrinsic_handlers, "type_info_lookup", (void *)ir_gen_intrinsic_type_info_of);
     // Array/Slice/Matrix element access
     generic_hash_table_insert(intrinsic_handlers, "array_element", (void *)ir_gen_intrinsic_array_element);
     generic_hash_table_insert(intrinsic_handlers, "matrix_element", (void *)ir_gen_intrinsic_matrix_element);
@@ -748,13 +749,14 @@ ir_gen_intrinsic_any_data_ptr(IrGenContext * ctx, char const * func_name, TypeDe
 void
 ir_gen_intrinsic_type_info_of(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type)
 {
+    (void)ctx;
     (void)func_name;
     (void)proc_type;
 
-    // Return pointer to global Type_Info for the given type_id
-    // This is a placeholder - full implementation requires runtime type lookup table
-    // Currently returns null pointer (will be completed in Phase 2)
-    LLVMBuildRet(ctx->builder, LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0)));
+    // Placeholder: return null for now
+    // Full implementation will search type_info_globals table
+    LLVMValueRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMBuildRet(ctx->builder, LLVMConstNull(i8ptr));
 }
 
 void

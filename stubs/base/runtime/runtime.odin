@@ -39,7 +39,7 @@ any_type_id :: proc(v: any) -> i64 ---
 any_data_ptr :: proc(v: any) -> rawptr ---
 
 @(builtin)
-type_info_find :: proc(tid: i64) -> rawptr ---
+type_info_lookup :: proc(type_id: i64) -> rawptr ---
 
 @(builtin)
 array_element :: proc(arr: any, index: int) -> any ---

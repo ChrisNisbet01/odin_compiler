@@ -142,6 +142,9 @@ void ir_gen_collect_comma_chain_args(odin_grammar_node_t * node, odin_grammar_no
 
 bool ir_gen_is_dereferenceable(TypeDescriptor const * td);
 
+// Type_Info global management
+LLVMValueRef ir_gen_get_type_info_global(IrGenContext * ctx, TypeDescriptor const * td);
+
 // Internal helpers used by postfix codegen
 void ir_gen_pack_any(IrGenContext * ctx, LLVMValueRef lhs_ptr, LLVMValueRef rhs_val,
                      LLVMTypeRef any_struct_type, TypeDescriptor const * source_type);
