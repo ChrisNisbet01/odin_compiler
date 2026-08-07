@@ -792,6 +792,42 @@ ir_gen_postfix_fill_default_args(
     }
 }
 
+// Wrap arguments that correspond to non-variadic `any` parameters: values
+// whose static type isn't already `any` are packed into an any struct via
+// ir_gen_pack_any (storing the value in memory, recording its type_id).
+static void
+ir_gen_postfix_wrap_any_args(
+    IrGenContext * ctx,
+    TypeDescriptor const * proc_type,
+    LLVMValueRef * args,
+    TypeDescriptor const ** arg_types,
+    int arg_count
+)
+{
+    TypeDescriptor const * any_type = get_basic_type_by_name(ctx->type_registry, "any");
+    if (any_type != NULL && any_type->llvm_type != NULL)
+    {
+        LLVMTypeRef any_llvm = any_type->llvm_type;
+        int param_count = proc_type->proc_metadata.param_count;
+        for (int pi = 0; pi < param_count && pi < arg_count; pi++)
+        {
+            TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
+            if (param_type && param_type->kind == TD_KIND_BASIC && param_type->as.basic.name
+                && strcmp(param_type->as.basic.name, "any") == 0)
+            {
+                if (arg_types[pi] && arg_types[pi]->kind == TD_KIND_BASIC && arg_types[pi]->as.basic.name
+                    && strcmp(arg_types[pi]->as.basic.name, "any") == 0)
+                    continue;
+                if (args[pi] != NULL && LLVMTypeOf(args[pi]) == any_llvm)
+                    continue;
+                LLVMValueRef any_alloca = LLVMBuildAlloca(ctx->builder, any_llvm, "any.arg");
+                ir_gen_pack_any(ctx, any_alloca, args[pi], any_llvm, arg_types[pi]);
+                args[pi] = LLVMBuildLoad2(ctx->builder, any_llvm, any_alloca, "any.loaded");
+            }
+        }
+    }
+}
+
 static bool
 ir_gen_postfix_call(
     IrGenContext * ctx,
@@ -843,30 +879,7 @@ ir_gen_postfix_call(
     ir_gen_postfix_fill_default_args(ctx, proc_type, args, arg_types, &arg_count);
 
     // Wrap arguments that match 'any' parameters (non-variadic)
-    {
-        TypeDescriptor const * any_type = get_basic_type_by_name(ctx->type_registry, "any");
-        if (any_type != NULL && any_type->llvm_type != NULL)
-        {
-            LLVMTypeRef any_llvm = any_type->llvm_type;
-            int param_count = proc_type->proc_metadata.param_count;
-            for (int pi = 0; pi < param_count && pi < arg_count; pi++)
-            {
-                TypeDescriptor const * param_type = proc_type->proc_metadata.params[pi];
-                if (param_type && param_type->kind == TD_KIND_BASIC && param_type->as.basic.name
-                    && strcmp(param_type->as.basic.name, "any") == 0)
-                {
-                    if (arg_types[pi] && arg_types[pi]->kind == TD_KIND_BASIC && arg_types[pi]->as.basic.name
-                        && strcmp(arg_types[pi]->as.basic.name, "any") == 0)
-                        continue;
-                    if (args[pi] != NULL && LLVMTypeOf(args[pi]) == any_llvm)
-                        continue;
-                    LLVMValueRef any_alloca = LLVMBuildAlloca(ctx->builder, any_llvm, "any.arg");
-                    ir_gen_pack_any(ctx, any_alloca, args[pi], any_llvm, arg_types[pi]);
-                    args[pi] = LLVMBuildLoad2(ctx->builder, any_llvm, any_alloca, "any.loaded");
-                }
-            }
-        }
-    }
+    ir_gen_postfix_wrap_any_args(ctx, proc_type, args, arg_types, arg_count);
 
     // Variadic ..any packing: build []any slice from extra args (ODIN convention)
     bool is_any_variadic = ir_gen_postfix_pack_variadic_any(ctx, proc_type, args, arg_types, &arg_count);
