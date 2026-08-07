@@ -664,8 +664,13 @@ ir_gen_postfix_coerce_args(
     }
 }
 
-static bool
-ir_gen_postfix_call(
+// Resolve the callee procedure type and function value for a call using the
+// three dispatch priorities: (1) semantic-analyser resolved symbol (poly
+// specialization / overload resolution), (2) identifier lookup in the current
+// scope, (3) cur_type fallback (function pointer calls). Returns NULL with an
+// error already reported when no procedure could be resolved.
+static TypeDescriptor const *
+ir_gen_postfix_resolve_callee(
     IrGenContext * ctx,
     odin_grammar_node_t * node,
     odin_grammar_node_t * op,
@@ -674,34 +679,6 @@ ir_gen_postfix_call(
 )
 {
     TypeDescriptor const * proc_type = NULL;
-
-    LLVMValueRef args[128];
-    TypeDescriptor const * arg_types[128];
-    int arg_count = 0;
-    char const * func_name = NULL;
-
-    if (op->resolved_symbol)
-        func_name = op->resolved_symbol->llvm_name ? op->resolved_symbol->llvm_name : op->resolved_symbol->name;
-    if (func_name == NULL && node->list.count > 0 && node->list.children[0] != NULL)
-    {
-        odin_grammar_node_t * base = node->list.children[0];
-        while (base->type == AST_NODE_PRIMARY_EXPRESSION && base->list.count > 0)
-            base = base->list.children[0];
-        if (base && base->type == AST_NODE_IDENTIFIER && base->text)
-            func_name = base->text;
-    }
-
-    if (op->list.count > 0 && op->list.children[0] != NULL)
-    {
-        odin_grammar_node_t * arg_expr = op->list.children[0];
-        if (arg_expr->type == AST_NODE_ARGUMENT_LIST && arg_expr->list.count > 0)
-            arg_expr = arg_expr->list.children[0];
-        arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, arg_types, 128);
-    }
-
-    // Special handling for matrix intrinsics - must happen before 'any' packing
-    if (ir_gen_postfix_matrix_intrinsic(ctx, node, op, func_name, args, arg_types, arg_count, val, cur_type))
-        return false;
 
     // Priority 1: semantic analyser resolved this to a concrete symbol
     // (e.g., polymorphic specialization or overload resolution).
@@ -740,7 +717,7 @@ ir_gen_postfix_call(
                     ir_gen_error_collection_add(
                         &ctx->errors, NULL, node, "call to polymorphic procedure is not yet supported"
                     );
-                    return true;
+                    return NULL;
                 }
                 if (proc_type == NULL)
                     proc_type = sym->value.type_info;
@@ -771,8 +748,55 @@ ir_gen_postfix_call(
     if (proc_type == NULL || proc_type->kind != TD_KIND_PROC)
     {
         ir_gen_error_collection_add(&ctx->errors, NULL, node, "called value is not a procedure");
-        return true;
+        return NULL;
     }
+
+    return proc_type;
+}
+
+static bool
+ir_gen_postfix_call(
+    IrGenContext * ctx,
+    odin_grammar_node_t * node,
+    odin_grammar_node_t * op,
+    LLVMValueRef * val,
+    TypeDescriptor const ** cur_type
+)
+{
+    LLVMValueRef args[128];
+    TypeDescriptor const * arg_types[128];
+    int arg_count = 0;
+    char const * func_name = NULL;
+
+    if (op->resolved_symbol)
+        func_name = op->resolved_symbol->llvm_name ? op->resolved_symbol->llvm_name : op->resolved_symbol->name;
+    if (func_name == NULL && node->list.count > 0 && node->list.children[0] != NULL)
+    {
+        odin_grammar_node_t * base = node->list.children[0];
+        while (base->type == AST_NODE_PRIMARY_EXPRESSION && base->list.count > 0)
+            base = base->list.children[0];
+        if (base && base->type == AST_NODE_IDENTIFIER && base->text)
+            func_name = base->text;
+    }
+
+    if (op->list.count > 0 && op->list.children[0] != NULL)
+    {
+        odin_grammar_node_t * arg_expr = op->list.children[0];
+        if (arg_expr->type == AST_NODE_ARGUMENT_LIST && arg_expr->list.count > 0)
+            arg_expr = arg_expr->list.children[0];
+        arg_count = ir_gen_collect_call_args(ctx, arg_expr, args, arg_types, 128);
+    }
+
+    // Special handling for matrix intrinsics - must happen before 'any' packing
+    if (ir_gen_postfix_matrix_intrinsic(ctx, node, op, func_name, args, arg_types, arg_count, val, cur_type))
+        return false;
+
+    // Resolve the callee procedure type/function value via the three
+    // dispatch priorities (semantic-analyser symbol, scope identifier,
+    // cur_type fallback). Returns NULL with an error already reported.
+    proc_type = ir_gen_postfix_resolve_callee(ctx, node, op, val, cur_type);
+    if (proc_type == NULL)
+        return true;
 
     LLVMTypeRef func_type = proc_type->proc_metadata.func_type;
 
