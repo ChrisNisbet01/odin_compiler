@@ -507,6 +507,96 @@ ir_gen_postfix_matrix_intrinsic(
     return false;
 }
 
+// Pack extra call arguments into a []any slice for ODIN-convention `..any`
+// variadic parameters. Returns true if the callee's last parameter is `[]any`.
+// On the forwarding shortcut (single []any slice arg), the slice is passed
+// through directly; otherwise extra args are packed into a fresh backing array.
+static bool
+ir_gen_postfix_pack_variadic_any(
+    IrGenContext * ctx,
+    TypeDescriptor const * proc_type,
+    LLVMValueRef * args,
+    TypeDescriptor const ** arg_types,
+    int * arg_count
+)
+{
+    bool is_any_variadic = false;
+    TypeDescriptor const * any_type = get_basic_type_by_name(ctx->type_registry, "any");
+    if (proc_type->proc_metadata.is_variadic && proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN
+        && proc_type->proc_metadata.param_count >= 1)
+    {
+        TypeDescriptor const * last_param = proc_type->proc_metadata.params[proc_type->proc_metadata.param_count - 1];
+        if (last_param != NULL && last_param->kind == TD_KIND_SLICE && last_param->element_type != NULL
+            && last_param->element_type->kind == TD_KIND_BASIC && last_param->element_type->as.basic.name != NULL
+            && strcmp(last_param->element_type->as.basic.name, "any") == 0)
+            is_any_variadic = true;
+    }
+    if (is_any_variadic && *arg_count >= proc_type->proc_metadata.param_count - 1)
+    {
+        int param_count = proc_type->proc_metadata.param_count;
+        int fixed_count = param_count - 1;
+        int variadic_count = *arg_count - fixed_count;
+        if (any_type)
+        {
+            TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, any_type);
+            LLVMTypeRef any_llvm = any_type->llvm_type;
+            LLVMTypeRef slice_llvm = slice_type ? slice_type->llvm_type : NULL;
+            if (any_llvm && slice_llvm)
+            {
+                // FORWARD SHORTCUT: when exactly one variadic argument is
+                // passed and it's itself a []any slice (i.e. forwarding
+                // `args` from one ..any-proc to another), pass the slice
+                // through directly instead of re-packing the slice itself
+                // as a lone element of a new []any (which would produce
+                // `[]any { any( []any) }` and break type-of dispatch).
+                if (variadic_count == 1 && arg_types != NULL && arg_types[fixed_count] != NULL
+                    && arg_types[fixed_count]->kind == TD_KIND_SLICE && arg_types[fixed_count]->element_type != NULL
+                    && arg_types[fixed_count]->element_type->kind == TD_KIND_BASIC
+                    && arg_types[fixed_count]->element_type->as.basic.name != NULL
+                    && strcmp(arg_types[fixed_count]->element_type->as.basic.name, "any") == 0)
+                {
+                    // args[fixed_count] already holds the []any slice value.
+                    // Just trim arg_count to include only the fixed + single slice.
+                    *arg_count = fixed_count + 1;
+                }
+                else
+                {
+                    LLVMValueRef backing
+                        = LLVMBuildAlloca(ctx->builder, LLVMArrayType(any_llvm, variadic_count), "variadic.backing");
+                    for (int vi = 0; vi < variadic_count; vi++)
+                    {
+                        LLVMValueRef gep_idx[2]
+                            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
+                               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), vi, false)};
+                        LLVMValueRef slot = LLVMBuildInBoundsGEP2(
+                            ctx->builder, LLVMArrayType(any_llvm, variadic_count), backing, gep_idx, 2, "var.slot"
+                        );
+                        ir_gen_pack_any(ctx, slot, args[fixed_count + vi], any_llvm, arg_types[fixed_count + vi]);
+                    }
+                    LLVMValueRef backing_ptr = LLVMBuildBitCast(
+                        ctx->builder,
+                        backing,
+                        LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0),
+                        "var.backing.cast"
+                    );
+                    LLVMValueRef slice_val = LLVMGetUndef(slice_llvm);
+                    slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, backing_ptr, 0, "var.ptr");
+                    slice_val = LLVMBuildInsertValue(
+                        ctx->builder,
+                        slice_val,
+                        LLVMConstInt(LLVMInt64TypeInContext(ctx->context), variadic_count, false),
+                        1,
+                        "var.len"
+                    );
+                    args[fixed_count] = slice_val;
+                    *arg_count = fixed_count + 1;
+                }
+            }
+        }
+    }
+    return is_any_variadic;
+}
+
 static bool
 ir_gen_postfix_call(
     IrGenContext * ctx,
@@ -674,80 +764,7 @@ ir_gen_postfix_call(
     }
 
     // Variadic ..any packing: build []any slice from extra args (ODIN convention)
-    bool is_any_variadic = false;
-    TypeDescriptor const * any_type = get_basic_type_by_name(ctx->type_registry, "any");
-    if (proc_type->proc_metadata.is_variadic && proc_type->proc_metadata.calling_convention == CALLING_CONV_ODIN
-        && proc_type->proc_metadata.param_count >= 1)
-    {
-        TypeDescriptor const * last_param = proc_type->proc_metadata.params[proc_type->proc_metadata.param_count - 1];
-        if (last_param != NULL && last_param->kind == TD_KIND_SLICE && last_param->element_type != NULL
-            && last_param->element_type->kind == TD_KIND_BASIC && last_param->element_type->as.basic.name != NULL
-            && strcmp(last_param->element_type->as.basic.name, "any") == 0)
-            is_any_variadic = true;
-    }
-    if (is_any_variadic && arg_count >= proc_type->proc_metadata.param_count - 1)
-    {
-        int param_count = proc_type->proc_metadata.param_count;
-        int fixed_count = param_count - 1;
-        int variadic_count = arg_count - fixed_count;
-        if (any_type)
-        {
-            TypeDescriptor const * slice_type = get_or_create_slice_type(ctx->type_registry, any_type);
-            LLVMTypeRef any_llvm = any_type->llvm_type;
-            LLVMTypeRef slice_llvm = slice_type ? slice_type->llvm_type : NULL;
-            if (any_llvm && slice_llvm)
-            {
-                // FORWARD SHORTCUT: when exactly one variadic argument is
-                // passed and it's itself a []any slice (i.e. forwarding
-                // `args` from one ..any-proc to another), pass the slice
-                // through directly instead of re-packing the slice itself
-                // as a lone element of a new []any (which would produce
-                // `[]any { any( []any) }` and break type-of dispatch).
-                if (variadic_count == 1 && arg_types != NULL && arg_types[fixed_count] != NULL
-                    && arg_types[fixed_count]->kind == TD_KIND_SLICE && arg_types[fixed_count]->element_type != NULL
-                    && arg_types[fixed_count]->element_type->kind == TD_KIND_BASIC
-                    && arg_types[fixed_count]->element_type->as.basic.name != NULL
-                    && strcmp(arg_types[fixed_count]->element_type->as.basic.name, "any") == 0)
-                {
-                    // args[fixed_count] already holds the []any slice value.
-                    // Just trim arg_count to include only the fixed + single slice.
-                    arg_count = fixed_count + 1;
-                }
-                else
-                {
-                    LLVMValueRef backing
-                        = LLVMBuildAlloca(ctx->builder, LLVMArrayType(any_llvm, variadic_count), "variadic.backing");
-                    for (int vi = 0; vi < variadic_count; vi++)
-                    {
-                        LLVMValueRef gep_idx[2]
-                            = {LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false),
-                               LLVMConstInt(LLVMInt32TypeInContext(ctx->context), vi, false)};
-                        LLVMValueRef slot = LLVMBuildInBoundsGEP2(
-                            ctx->builder, LLVMArrayType(any_llvm, variadic_count), backing, gep_idx, 2, "var.slot"
-                        );
-                        ir_gen_pack_any(ctx, slot, args[fixed_count + vi], any_llvm, arg_types[fixed_count + vi]);
-                    }
-                    LLVMValueRef backing_ptr = LLVMBuildBitCast(
-                        ctx->builder,
-                        backing,
-                        LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0),
-                        "var.backing.cast"
-                    );
-                    LLVMValueRef slice_val = LLVMGetUndef(slice_llvm);
-                    slice_val = LLVMBuildInsertValue(ctx->builder, slice_val, backing_ptr, 0, "var.ptr");
-                    slice_val = LLVMBuildInsertValue(
-                        ctx->builder,
-                        slice_val,
-                        LLVMConstInt(LLVMInt64TypeInContext(ctx->context), variadic_count, false),
-                        1,
-                        "var.len"
-                    );
-                    args[fixed_count] = slice_val;
-                    arg_count = fixed_count + 1;
-                }
-            }
-        }
-    }
+    bool is_any_variadic = ir_gen_postfix_pack_variadic_any(ctx, proc_type, args, arg_types, &arg_count);
     if (proc_type->proc_metadata.calling_convention == CALLING_CONV_C)
     {
         int param_count = proc_type->proc_metadata.param_count;
