@@ -151,58 +151,7 @@ extract predicates like `contains_directive(children, count, "#partial")`,
       `ir_gen_type_query_expr` (type_of/typeid_of/type_info_of/size_of/
       align_of — merged 5 inline cases into one switch),
       `ir_gen_min_max_expr`, `ir_gen_new_expr`, `ir_gen_expand_values_expr`,
-      `ir_gen_bare_postfix_member`, `ir_gen_context_expr`. **246/246 tests
-      pass.**
-- [x] E. `sem_evaluate_postfix_expr` (`sem_evaluate_expr.c`): extracted the
-      package-qualified branch (pkg.member/pkg.call, was ~310 inline lines)
-      into `sem_evaluate_postfix_pkg_access(ctx, node, access_pkg)` (313
-      lines). Main function reduced 938 → 626 lines. Remaining large
-      targets: `sem_pass2_node` (907), `sem_pass1_register_top_level_ex`
-      (585), `sem_evaluate_constant_int` (343),
-      `sem_resolve_procedure_signature` (339), `ir_generate` (300).
-      **246/246 tests pass.**
-- [x] E. `sem_pass2_node` (`semantic_analyser.c`, was 907 lines at 2203-3109):
-      extracted the two largest case bodies into `sem_pass2_analyse_variable_decl`
-      (214 lines) and `sem_pass2_analyse_constant_decl` (217 lines); case-level
-      `break` → `return` conversion done for all case-level breaks while
-      preserving the single loop-level `break` in each (VARIABLE_DECL's
-      init-node search at 2312, CONSTANT_DECL's value-node search at 2511).
-      Both helpers placed before `sem_pass2_node`; the switch cases now call
-      them. Remaining case bloat: WHEN (52), IF (37), FOR (92), SWITCH (160),
-      plus the small-statement cluster. Remaining large
-      targets: `sem_pass1_register_top_level_ex` (585),
-      `sem_evaluate_constant_int` (343),
-      `sem_resolve_procedure_signature` (339), `ir_generate` (300).
-      **246/246 tests pass.**
-- [x] E. `sem_pass2_node` remaining case bloat → four more named helpers:
-      `sem_pass2_analyse_when_statement`, `sem_pass2_analyse_if_statement`,
-      `sem_pass2_analyse_for_statement`, `sem_pass2_analyse_switch_statement`
-      (all thread `expected_return_type`). Case-level `break` → `return`
-      conversion was loop-aware: preserved loop-level `break`s (WHEN's
-      while-condition loop ×3, IF none, FOR's for-range detection + variable
-      registration + do-form body search ×4, SWITCH's exhaustiveness loop).
-      An initial script pass wrongly converted two of FOR's loop-level
-      `break`s (range-detection and registration loops) to `return`; caught by
-      a diff-audit against the baseline and fixed before commit.
-      `sem_pass2_node` reduced 907 → ~340 lines. Remaining large
-      targets: `sem_pass1_register_top_level_ex` (585),
-      `sem_evaluate_constant_int` (343),
-      `sem_resolve_procedure_signature` (339), `ir_generate` (300).
-      **246/246 tests pass.**
-- [x] E. `sem_evaluate_constant_int` (`semantic_analyser.c`, was 343 lines at
-      66-408): extracted five braced switch-case bodies into named helpers:
-      `sem_eval_const_identifier` (scope/poly-env lookup),
-      `sem_eval_const_postfix` (package-qualified const e.g. `os.O_WRONLY`),
-      `sem_eval_const_integer` (`parse_odin_signed`, drops unused `ctx` param),
-      `sem_eval_const_unary` (neg/pos/xor/not),
-      `sem_eval_const_binary` (the 9-operator arithmetic/comparison/bitwise group).
-      All return-based; main function reduced to ~110 lines. **246/246 tests pass.**
-- [x] E. `sem_resolve_procedure_signature` (`semantic_analyser.c`, 339 lines at 587-925):
-      extracted two blocks: `sem_resolve_proc_returns_clause` (returns clause
-      parsing, 65 lines) and `sem_resolve_proc_params_from_list` (param list
-      + bare `...` detection, 140 lines, returns `bool`, threads 8 out/inout
-      pointers). Main function reduced to ~110 lines. **246/246 tests pass.**
-- [ ] F. Predicate extraction
+      `ir_gen_bare_postfix_member`, `ir_gen_context_expr`. **246/246 tests pass.**
 
 ## Verification
 

@@ -33,3 +33,10 @@ LLVMValueRef ir_gen_call_mem_alloc(IrGenContext * ctx, LLVMValueRef size, LLVMVa
 void ir_gen_call_mem_free(IrGenContext * ctx, LLVMValueRef ptr, LLVMValueRef allocator);
 LLVMValueRef ir_gen_call_allocator_alloc(IrGenContext * ctx, LLVMValueRef allocator, LLVMValueRef size, LLVMValueRef alignment);
 LLVMValueRef ir_gen_get_context_allocator(IrGenContext * ctx);
+
+// Any introspection intrinsics (2-field struct)
+void ir_gen_intrinsic_any_type_id(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type);
+void ir_gen_intrinsic_any_data_ptr(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type);
+void ir_gen_intrinsic_type_info_of(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type);
+void ir_gen_intrinsic_array_element(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type);
+void ir_gen_intrinsic_matrix_element(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type);

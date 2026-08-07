@@ -49,6 +49,12 @@ init_intrinsic_handlers(void)
     generic_hash_table_insert(intrinsic_handlers, "to_bytes", (void *)ir_gen_intrinsic_strings_to_bytes);
     generic_hash_table_insert(intrinsic_handlers, "builder_make_none", (void *)ir_gen_intrinsic_builder_make_none);
     generic_hash_table_insert(intrinsic_handlers, "free_all", (void *)ir_gen_intrinsic_free_all);
+    generic_hash_table_insert(intrinsic_handlers, "any_type_id", (void *)ir_gen_intrinsic_any_type_id);
+    generic_hash_table_insert(intrinsic_handlers, "any_data_ptr", (void *)ir_gen_intrinsic_any_data_ptr);
+    generic_hash_table_insert(intrinsic_handlers, "type_info_find", (void *)ir_gen_intrinsic_type_info_of);
+    // Array/Slice/Matrix element access
+    generic_hash_table_insert(intrinsic_handlers, "array_element", (void *)ir_gen_intrinsic_array_element);
+    generic_hash_table_insert(intrinsic_handlers, "matrix_element", (void *)ir_gen_intrinsic_matrix_element);
 }
 
 LLVMValueRef
@@ -697,3 +703,142 @@ ir_gen_get_context_allocator(IrGenContext * ctx)
     return LLVMBuildLoad2(ctx->builder, allocator_type->llvm_type, allocator_ptr, "allocator");
 }
 
+
+// --- Any introspection intrinsics (2-field struct) ---
+
+void
+ir_gen_intrinsic_any_type_id(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type)
+{
+    (void)func_name;
+    (void)proc_type;
+    
+    LLVMValueRef any_param = LLVMGetParam(func_current_function(ctx), 1);
+    LLVMTypeRef any_type = LLVMTypeOf(any_param);
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+    
+    // Store any to alloca, then GEP to field 1
+    LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, any_type, "any_typeid.tmp");
+    LLVMBuildStore(ctx->builder, any_param, tmp);
+    LLVMValueRef id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, tmp, (LLVMValueRef[]){idx0, idx1}, 2, "any.typeid");
+    LLVMValueRef type_id = LLVMBuildLoad2(ctx->builder, i64_type, id_field, "any.typeid");
+    LLVMBuildRet(ctx->builder, type_id);
+}
+
+void
+ir_gen_intrinsic_any_data_ptr(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type)
+{
+    (void)func_name;
+    (void)proc_type;
+    
+    LLVMValueRef any_param = LLVMGetParam(func_current_function(ctx), 1);
+    LLVMTypeRef any_type = LLVMTypeOf(any_param);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    
+    // Store any to alloca, then GEP to field 0, load
+    LLVMValueRef tmp = LLVMBuildAlloca(ctx->builder, any_type, "any_data.tmp");
+    LLVMBuildStore(ctx->builder, any_param, tmp);
+    LLVMValueRef data_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, tmp, (LLVMValueRef[]){idx0, idx0}, 2, "any.data");
+    LLVMValueRef data = LLVMBuildLoad2(ctx->builder, i8ptr, data_field, "any.data");
+    LLVMBuildRet(ctx->builder, data);
+}
+
+void
+ir_gen_intrinsic_type_info_of(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type)
+{
+    (void)func_name;
+    (void)proc_type;
+
+    // Return pointer to global Type_Info for the given type_id
+    // This is a placeholder - full implementation requires runtime type lookup table
+    // Currently returns null pointer (will be completed in Phase 2)
+    LLVMBuildRet(ctx->builder, LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0)));
+}
+
+void
+ir_gen_intrinsic_array_element(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type)
+{
+    (void)func_name;
+    (void)proc_type;
+    
+    LLVMValueRef any_param = LLVMGetParam(func_current_function(ctx), 1);
+    LLVMValueRef index = LLVMGetParam(func_current_function(ctx), 2);
+    
+    LLVMTypeRef any_type = LLVMTypeOf(any_param);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    
+    LLVMValueRef any_tmp = LLVMBuildAlloca(ctx->builder, any_type, "ae.any.tmp");
+    LLVMBuildStore(ctx->builder, any_param, any_tmp);
+    
+    // Extract data pointer (field 0)
+    LLVMValueRef data_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, any_tmp, (LLVMValueRef[]){idx0, idx0}, 2, "ae.data.ptr");
+    LLVMValueRef data_ptr = LLVMBuildLoad2(ctx->builder, i8ptr, data_field, "ae.data");
+    
+    // Extract type_id (field 1)
+    LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+    LLVMValueRef type_id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, any_tmp, (LLVMValueRef[]){idx0, idx1}, 2, "ae.typeid");
+    LLVMValueRef type_id = LLVMBuildLoad2(ctx->builder, i64_type, type_id_field, "ae.typeid");
+    
+    // Use type_info_of(type_id) to get element size at runtime
+    // For now, compute element offset with fixed 8-byte elements (placeholder)
+    // Will be replaced with proper type_info lookup in Phase 2
+    LLVMValueRef elem_size = LLVMConstInt(i64_type, 8, false);
+    
+    LLVMValueRef elem_offset = LLVMBuildMul(ctx->builder, index, elem_size, "ae.elem.offset");
+    LLVMValueRef elem_ptr = LLVMBuildGEP2(ctx->builder, i8ptr, data_ptr, &elem_offset, 1, "ae.elem.ptr");
+    
+    // Return 2-field any with element data and type_id
+    LLVMValueRef result = LLVMGetUndef(any_type);
+    result = LLVMBuildInsertValue(ctx->builder, result, elem_ptr, 0, "ae.result.data");
+    result = LLVMBuildInsertValue(ctx->builder, result, type_id, 1, "ae.result.typeid");
+    
+    LLVMBuildRet(ctx->builder, result);
+}
+
+void
+ir_gen_intrinsic_matrix_element(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type)
+{
+    (void)func_name;
+    (void)proc_type;
+    
+    LLVMValueRef any_param = LLVMGetParam(func_current_function(ctx), 1);
+    LLVMValueRef row = LLVMGetParam(func_current_function(ctx), 2);
+    LLVMValueRef col = LLVMGetParam(func_current_function(ctx), 3);
+    
+    LLVMTypeRef any_type = LLVMTypeOf(any_param);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    
+    LLVMValueRef any_tmp = LLVMBuildAlloca(ctx->builder, any_type, "me.any.tmp");
+    LLVMBuildStore(ctx->builder, any_param, any_tmp);
+    
+    // Extract data pointer (field 0)
+    LLVMValueRef data_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, any_tmp, (LLVMValueRef[]){idx0, idx0}, 2, "me.data.ptr");
+    LLVMValueRef data_ptr = LLVMBuildLoad2(ctx->builder, i8ptr, data_field, "me.data");
+    
+    // Extract type_id (field 1)
+    LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+    LLVMValueRef type_id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_type, any_tmp, (LLVMValueRef[]){idx0, idx1}, 2, "me.typeid");
+    LLVMValueRef type_id = LLVMBuildLoad2(ctx->builder, i64_type, type_id_field, "me.typeid");
+    
+    // Use type_info_of(type_id) for element size and column count
+    // For now, hardcode 4 columns, 8-byte elements (placeholder)
+    LLVMValueRef col_count = LLVMConstInt(i64_type, 4, false);
+    LLVMValueRef elem_size = LLVMConstInt(i64_type, 8, false);
+    LLVMValueRef elem_idx = LLVMBuildMul(ctx->builder, row, col_count, "me.row_offset");
+    elem_idx = LLVMBuildAdd(ctx->builder, elem_idx, col, "me.col_offset");
+    elem_idx = LLVMBuildMul(ctx->builder, elem_idx, elem_size, "me.bytes.offset");
+    LLVMValueRef elem_ptr = LLVMBuildGEP2(ctx->builder, i8ptr, data_ptr, &elem_idx, 1, "me.elem.ptr");
+    
+    // Return 2-field any with element data and type_id
+    LLVMValueRef result = LLVMGetUndef(any_type);
+    result = LLVMBuildInsertValue(ctx->builder, result, elem_ptr, 0, "me.result.data");
+    result = LLVMBuildInsertValue(ctx->builder, result, type_id, 1, "me.result.typeid");
+    
+    LLVMBuildRet(ctx->builder, result);
+}

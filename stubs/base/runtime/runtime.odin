@@ -30,4 +30,19 @@ copy :: proc(dst: rawptr, src: rawptr, n: int) ---
 align_forward_uint :: proc(x: uint, alignment: uint) -> uint ---
 
 @(builtin)
-mem_zero :: proc(ptr: rawptr, size: uint) ---
+mem_zero :: proc(ptr: rawptr, size: int) ---
+
+@(builtin)
+any_type_id :: proc(v: any) -> i64 ---
+
+@(builtin)
+any_data_ptr :: proc(v: any) -> rawptr ---
+
+@(builtin)
+type_info_find :: proc(tid: i64) -> rawptr ---
+
+@(builtin)
+array_element :: proc(arr: any, index: int) -> any ---
+
+@(builtin)
+matrix_element :: proc(m: any, row: int, col: int) -> any ---

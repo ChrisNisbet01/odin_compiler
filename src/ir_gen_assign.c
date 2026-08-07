@@ -1027,6 +1027,7 @@ ir_gen_pack_any(
     TypeDescriptor const * source_type
 )
 {
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
     LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
     LLVMValueRef zero_idx = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
 
@@ -1050,16 +1051,20 @@ ir_gen_pack_any(
         LLVMBuildStore(ctx->builder, rhs_val, tmp);
         data_ptr = LLVMBuildBitCast(ctx->builder, tmp, i8ptr, "anydata");
     }
+    
     int64_t tid = (source_type != NULL) ? (int64_t)source_type->type_id : 0;
-    LLVMValueRef type_id = LLVMConstInt(LLVMInt64TypeInContext(ctx->context), tid, false);
-    LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
-    LLVMValueRef gep0[2] = {zero_idx, idx1};
+    
+    // Store data field (field 0)
+    LLVMValueRef idx0 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 0, false);
+    LLVMValueRef gep0[2] = {zero_idx, idx0};
     LLVMValueRef data_field = LLVMBuildInBoundsGEP2(ctx->builder, any_struct_type, lhs_ptr, gep0, 2, "any.data");
     LLVMBuildStore(ctx->builder, data_ptr, data_field);
-    LLVMValueRef idx2 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
-    LLVMValueRef gep1[2] = {zero_idx, idx2};
-    LLVMValueRef id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_struct_type, lhs_ptr, gep1, 2, "any.typeid");
-    LLVMBuildStore(ctx->builder, type_id, id_field);
+    
+    // Store type_id field (field 1)
+    LLVMValueRef idx1 = LLVMConstInt(LLVMInt32TypeInContext(ctx->context), 1, false);
+    LLVMValueRef gep1[2] = {zero_idx, idx1};
+    LLVMValueRef type_id_field = LLVMBuildInBoundsGEP2(ctx->builder, any_struct_type, lhs_ptr, gep1, 2, "any.typeid");
+    LLVMBuildStore(ctx->builder, LLVMConstInt(i64_type, tid, false), type_id_field);
 }
 
 static bool

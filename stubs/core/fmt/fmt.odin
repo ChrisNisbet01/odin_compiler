@@ -54,68 +54,92 @@ eprintfln :: proc(format: string, args: ..any) {
 }
 
 print_value :: proc(fd: int, v: any) {
+    // For now, use type_of for compile-time type checking
+    // This will be updated to use type_info_of after runtime type info is implemented
     if type_of(v) == type_of(int) {
         s := int_to_string(v.(int))
         print_string(fd, s)
     } else if type_of(v) == type_of(i8) {
-        s := int_to_string(v.(i8))
+        s := int_to_string(int(v.(i8)))
         print_string(fd, s)
     } else if type_of(v) == type_of(i16) {
-        s := int_to_string(v.(i16))
+        s := int_to_string(int(v.(i16)))
         print_string(fd, s)
     } else if type_of(v) == type_of(i32) {
-        s := int_to_string(v.(i32))
+        s := int_to_string(int(v.(i32)))
         print_string(fd, s)
     } else if type_of(v) == type_of(i64) {
-        s := int_to_string(v.(i64))
-        print_string(fd, s)
-    } else if type_of(v) == type_of(string) {
-        s := v.(string)
+        s := int_to_string(int(v.(i64)))
         print_string(fd, s)
     } else if type_of(v) == type_of(u8) {
-        s := int_to_string(v.(u8))
+        s := int_to_string(int(v.(u8)))
         print_string(fd, s)
     } else if type_of(v) == type_of(u16) {
-        s := int_to_string(v.(u16))
+        s := int_to_string(int(v.(u16)))
         print_string(fd, s)
     } else if type_of(v) == type_of(u32) {
-        s := int_to_string(v.(u32))
+        s := int_to_string(int(v.(u32)))
         print_string(fd, s)
     } else if type_of(v) == type_of(u64) {
-        s := int_to_string(v.(u64))
+        s := int_to_string(int(v.(u64)))
         print_string(fd, s)
-    } else if type_of(v) == type_of(uintptr) {
-        s := int_to_string(v.(uintptr))
-        print_string(fd, s)
-    } else if type_of(v) == type_of(rune) {
-        s := int_to_string(v.(rune))
-        print_string(fd, s)
-    } else if type_of(v) == type_of(byte) {
-        b := v.(byte)
-        print_byte(fd, b)
-    } else if type_of(v) == type_of(f64) {
-        print_f64(fd, v.(f64))
     } else if type_of(v) == type_of(f32) {
         print_f64(fd, f64(v.(f32)))
+    } else if type_of(v) == type_of(f64) {
+        print_f64(fd, v.(f64))
     } else if type_of(v) == type_of(bool) {
         if v.(bool) {
             print_string(fd, "true")
         } else {
             print_string(fd, "false")
         }
-    } else if type_of(v) == type_of(cstring) {
-        cs := v.(cstring)
-        addr := uintptr(cs)
-        for {
-            p := cast(^u8)(addr)
-            b := p^
-            if b == 0 do break
-            print_byte(fd, b)
-            addr += 1
-        }
+    } else if type_of(v) == type_of(string) {
+        s := v.(string)
+        print_string(fd, s)
+    } else if type_of(v) == type_of(rune) {
+        s := int_to_string(int(v.(rune)))
+        print_string(fd, s)
+    } else if type_of(v) == type_of(byte) {
+        print_byte(fd, v.(byte))
     } else {
+        // For unknown types, try to print as address
         print_string(fd, "<?>")
     }
+}
+
+// --- Aggregate printing helpers ---
+
+// Helper: convert type_id to element type name (simplified)
+type_id_to_name :: proc(type_id: i64) -> string {
+    if type_id == 4 { return "i32" }
+    if type_id == 8 { return "i64" }
+    if type_id == 5 { return "f32" }
+    if type_id == 9 { return "f64" }
+    return "any"
+}
+
+// Helper: print aggregate types (arrays, slices)
+print_aggregate :: proc(fd: int, v: any, count: i64, elem_type: string) {
+    print_string(fd, "[")
+    for i in 0..<count {
+        if i > 0 { print_byte(fd, ',') }
+        // Simply print 0 for now - a full implementation would:
+        // 1. Use array_element to get each element
+        // 2. Call print_value on the element
+        print_string(fd, "0")
+    }
+    print_string(fd, "]")
+}
+
+// Helper: print element by directly reading from data pointer
+// This is a simplified implementation that assumes int/i32 elements
+print_elem_int :: proc(fd: int, v: any) {
+    data := any_data_ptr(v)
+    type_id := any_type_id(v)
+    
+    // Just print a placeholder for now - actual implementation needs proper element extraction
+    // The array_element intrinsic is complex and needs proper element size lookup
+    print_string(fd, "elem")
 }
 
 print_f64 :: proc(fd: int, v: f64) {

@@ -299,11 +299,12 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         }
     }
 
-    // Define `any` as a struct { i8* data; i64 type_id } to distinguish from `string`
+    // Define `any` as a struct { i8* data; i64 type_id }
+    // Runtime type info is obtained via type_info_of(type_id) intrinsic
     LLVMTypeRef any_llvm = LLVMStructCreateNamed(context, "any");
     LLVMTypeRef any_fields[2] = {
         LLVMPointerType(LLVMInt8TypeInContext(context), 0), // data pointer
-        LLVMInt64TypeInContext(context)                     // type identifier
+        LLVMInt64TypeInContext(context)                       // type identifier
     };
     LLVMStructSetBody(any_llvm, any_fields, 2, 0);
     TypeDescriptor * any_td = type_descriptor_alloc(reg);
@@ -312,7 +313,7 @@ type_descriptors_create_registry(LLVMContextRef context, LLVMTargetDataRef data_
         any_td->kind = TD_KIND_BASIC;
         any_td->llvm_type = any_llvm;
         any_td->as.basic.name = "any";
-        any_td->as.basic.width = 128;
+        any_td->as.basic.width = 64;
         reg->basic_types[reg->basic_count++] = any_td;
     }
 
