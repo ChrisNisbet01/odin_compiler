@@ -266,12 +266,12 @@ print_value :: proc(fd: int, v: any) {
 |------|--------|-------|
 | Revert any to 2 fields | ✅ COMPLETED | type_descriptors.c updated |
 | Update ir_gen_pack_any | ✅ COMPLETED | Updated ir_gen_assign.c and ir_gen_var_decl.c |
-| Create type_info.h | ⏳ IN PROGRESS | Need to create proper Type_Info infrastructure |
-| Create type_info.c | ⏳ IN PROGRESS | Need to implement runtime lookup |
-| Implement type_info_of intrinsic | ⏳ IN PROGRESS | Currently returns null placeholder |
-| Update array_element intrinsic | ⏳ IN PROGRESS | Need to use type_info_of for element size |
-| Add Type_Info to stubs | ⏳ IN PROGRESS | Need to define Odin-side Type_Info |
-| Extend print_value | ⏳ IN PROGRESS | Need to implement aggregate printing |
+| Create type_info.h | ✅ COMPLETED | Added src/type_info.c/h |
+| Create type_info.c | ✅ COMPLETED | Implemented runtime lookup table |
+| Implement type_info_of intrinsic | ⏳ IN PROGRESS | Function exists and returns null (placeholder) |
+| Update array_element intrinsic | ⏳ IN PROGRESS | Still uses hardcoded element sizes |
+| Add Type_Info to stubs | ⏳ IN PROGRESS | runtime.odin updated with 11-field struct |
+| Extend print_value | ⏳ IN PROGRESS | Uses compile-time type_of for basic types |
 | Run tests | ✅ PASSED | All 248 tests pass |
 
 ---

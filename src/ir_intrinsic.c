@@ -749,13 +749,46 @@ ir_gen_intrinsic_any_data_ptr(IrGenContext * ctx, char const * func_name, TypeDe
 void
 ir_gen_intrinsic_type_info_of(IrGenContext * ctx, char const * func_name, TypeDescriptor const * proc_type)
 {
-    (void)ctx;
     (void)func_name;
     (void)proc_type;
 
-    // Placeholder: return null for now
-    // Full implementation will search type_info_globals table
-    LLVMValueRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    // Get the input type_id parameter
+    LLVMValueRef type_id_param = LLVMGetParam(func_current_function(ctx), 1);
+    LLVMTypeRef i64_type = LLVMInt64TypeInContext(ctx->context);
+    LLVMTypeRef i8ptr = LLVMPointerType(LLVMInt8TypeInContext(ctx->context), 0);
+    
+    int num_globals = ctx->type_info_global_count;
+    if (num_globals == 0)
+    {
+        LLVMBuildRet(ctx->builder, LLVMConstNull(i8ptr));
+        return;
+    }
+    
+    // Create a linear search through all registered type_info globals
+    // Generate a chain of if-else blocks comparing type_id with each registered type
+    for (int i = 0; i < num_globals; i++)
+    {
+        int64_t global_type_id = ctx->type_info_globals[i].type_id;
+        LLVMValueRef global_ptr = ctx->type_info_globals[i].global;
+        
+        // Append blocks for this comparison chain
+        LLVMBasicBlockRef if_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "ti.if");
+        LLVMBasicBlockRef else_bb = LLVMAppendBasicBlockInContext(ctx->context, func_current_function(ctx), "ti.else");
+        
+        // Compare and branch
+        LLVMValueRef cmp = LLVMBuildICmp(ctx->builder, LLVMIntEQ, type_id_param, 
+                                         LLVMConstInt(i64_type, global_type_id, false), "ti.cmp");
+        LLVMBuildCondBr(ctx->builder, cmp, if_bb, else_bb);
+        
+        // If block: return this Type_Info*
+        LLVMPositionBuilderAtEnd(ctx->builder, if_bb);
+        LLVMBuildRet(ctx->builder, global_ptr);
+        
+        // Else block: continue to next iteration (or return null if last)
+        LLVMPositionBuilderAtEnd(ctx->builder, else_bb);
+    }
+    
+    // No match found - return null
     LLVMBuildRet(ctx->builder, LLVMConstNull(i8ptr));
 }
 
